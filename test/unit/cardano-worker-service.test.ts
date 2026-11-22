@@ -1,5 +1,5 @@
 /**
- * CardanoWorkerService handlers: the SubmitWalletJob HSM role gate and validation,
+ * CardanoWorkerService handlers: the SubmitWalletJob role gate and validation,
  * job access control and worker control. Dependencies are mocked at module
  * boundaries; handleRequest passes a fake db straight to the callback.
  */
@@ -20,12 +20,13 @@ const { fakeDb, workerMock, jobStoreMock, serverMock } = vi.hoisted(() => ({
   },
   jobStoreMock: {
     WALLET_JOB_KINDS: ['simpleAda', 'metadata', 'multiAsset', 'mint', 'plutusSpend', 'submitSigned'],
-    findDueJobs: vi.fn(async (): Promise<unknown[]> => []),
+    findNextDueJob: vi.fn(async (): Promise<unknown> => null),
     countPendingJobs: vi.fn(async (): Promise<number> => 0),
     getJobById: vi.fn(async (): Promise<unknown> => null),
     insertJob: vi.fn(async (): Promise<unknown> => ({ jobId: 'job-1', status: 'pending', deduplicated: false })),
     markCancelled: vi.fn(async () => true),
     readWallet: vi.fn(),
+    runWithoutAmbientTx: (fn: () => unknown) => fn(),
   },
   serverMock: {
     getCardanoClient: vi.fn(() => ({ network: 'preview' })),
@@ -38,6 +39,7 @@ const { fakeDb, workerMock, jobStoreMock, serverMock } = vi.hoisted(() => ({
 vi.mock('@sap/cds', () => {
   const cdsMock = {
     log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
+    tx: (fn: (db: unknown) => unknown) => fn(fakeDb),
   };
   return { default: cdsMock, ...cdsMock };
 });
@@ -49,6 +51,10 @@ vi.mock('../../srv/utils/backend-request-handler', () => ({
 vi.mock('../../srv/blockchain/wallet-worker', () => workerMock);
 vi.mock('../../srv/blockchain/wallet-worker/job-store', () => jobStoreMock);
 vi.mock('../../srv/server', () => serverMock);
+vi.mock('../../srv/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../srv/config')>()),
+  loadWalletWorkerConfigFromEnv: serverMock.loadWalletWorkerConfigFromEnv,
+}));
 
 type Handler = (req: Record<string, unknown>) => Promise<unknown>;
 
@@ -60,7 +66,7 @@ beforeAll(async () => {
 
 function boot(): Record<string, Handler> {
   const handlers: Record<string, Handler> = {};
-  const srv = { on: (event: string, handler: Handler) => { handlers[event] = handler; } };
+  const srv = { on: (event: string, handler: Handler) => { handlers[event] = handler; }, after: () => undefined };
   registerHandlers(srv);
   return handlers;
 }
@@ -94,7 +100,7 @@ beforeEach(() => {
   jobStoreMock.readWallet.mockResolvedValue({ walletId: 'treasury', signerType: 'hsm', enabled: true });
 });
 
-describe('CardanoWorkerService.SubmitWalletJob HSM role gate', () => {
+describe('CardanoWorkerService.SubmitWalletJob role gate', () => {
   it('rejects with 403 and queues nothing when the caller lacks hsm.requiresRole', async () => {
     const req = makeReq([], JOB_DATA);
     const handlers = boot();
@@ -114,7 +120,7 @@ describe('CardanoWorkerService.SubmitWalletJob HSM role gate', () => {
 
     await expect(handlers.SubmitWalletJob(makeReq([], JOB_DATA))).rejects.toMatchObject({
       statusCode: 403,
-      message: expect.stringContaining('HSM-backed'),
+      message: expect.stringContaining("requires role 'HsmSigner'"),
     });
     expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
   });
@@ -128,7 +134,7 @@ describe('CardanoWorkerService.SubmitWalletJob HSM role gate', () => {
     expect(jobStoreMock.insertJob).toHaveBeenCalledTimes(1);
   });
 
-  it('leaves software wallets on the authenticated-user gate', async () => {
+  it('lets any authenticated user queue on a software wallet without requiresRole', async () => {
     serverMock.loadWalletWorkerConfigFromEnv.mockReturnValue({
       enabled: true,
       wallets: [{ walletId: 'treasury', signerType: 'software' }],
@@ -149,6 +155,79 @@ describe('CardanoWorkerService.SubmitWalletJob HSM role gate', () => {
     await handlers.SubmitWalletJob(makeReq([], JOB_DATA));
 
     expect(jobStoreMock.insertJob).toHaveBeenCalledTimes(1);
+  });
+
+  describe('wallet requiresRole', () => {
+    function softwareWallet(requiresRole?: string) {
+      serverMock.loadWalletWorkerConfigFromEnv.mockReturnValue({
+        enabled: true,
+        wallets: [{ walletId: 'treasury', signerType: 'software', ...(requiresRole ? { requiresRole } : {}) }],
+        defaultMaxAttempts: 3,
+      });
+      jobStoreMock.readWallet.mockResolvedValue({
+        walletId: 'treasury', signerType: 'software', enabled: true, requiresRole: requiresRole ?? null,
+      });
+    }
+
+    it('rejects with 403 and queues nothing when the caller lacks it', async () => {
+      softwareWallet('Treasurer');
+      const req = makeReq([], JOB_DATA);
+      const handlers = boot();
+
+      await expect(handlers.SubmitWalletJob(req)).rejects.toThrow(/requires role 'Treasurer'/);
+      expect(req.reject).toHaveBeenCalledWith(403, expect.stringContaining('wallet "treasury"'));
+      expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+    });
+
+    it('does not let Admin stand in for it', async () => {
+      softwareWallet('Treasurer');
+      const handlers = boot();
+
+      await expect(handlers.SubmitWalletJob(makeReq(['Admin'], JOB_DATA))).rejects.toThrow(/requires role 'Treasurer'/);
+      expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+    });
+
+    it('queues the job when the caller holds it', async () => {
+      softwareWallet('Treasurer');
+      const handlers = boot();
+
+      await handlers.SubmitWalletJob(makeReq(['Treasurer'], JOB_DATA));
+
+      expect(jobStoreMock.insertJob).toHaveBeenCalledTimes(1);
+    });
+
+    it('applies the role of the registered row when this instance has no config entry for the wallet', async () => {
+      softwareWallet('Treasurer');
+      serverMock.loadWalletWorkerConfigFromEnv.mockReturnValue({
+        enabled: true,
+        wallets: [{ walletId: 'other', signerType: 'software' }],
+        defaultMaxAttempts: 3,
+      });
+      const handlers = boot();
+
+      await expect(handlers.SubmitWalletJob(makeReq([], JOB_DATA))).rejects.toMatchObject({
+        statusCode: 403,
+        message: expect.stringContaining("requires role 'Treasurer'"),
+      });
+      expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+    });
+
+    it('needs both roles on an HSM wallet that has its own', async () => {
+      serverMock.loadWalletWorkerConfigFromEnv.mockReturnValue({
+        enabled: true,
+        wallets: [{ walletId: 'treasury', signerType: 'hsm', requiresRole: 'Treasurer' }],
+        defaultMaxAttempts: 3,
+      });
+      jobStoreMock.readWallet.mockResolvedValue({ walletId: 'treasury', signerType: 'hsm', enabled: true, requiresRole: 'Treasurer' });
+      const handlers = boot();
+
+      await expect(handlers.SubmitWalletJob(makeReq(['HsmSigner'], JOB_DATA))).rejects.toThrow(/requires role 'Treasurer'/);
+      await expect(handlers.SubmitWalletJob(makeReq(['Treasurer'], JOB_DATA))).rejects.toThrow(/requires role 'HsmSigner'/);
+      expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+
+      await handlers.SubmitWalletJob(makeReq(['HsmSigner', 'Treasurer'], JOB_DATA));
+      expect(jobStoreMock.insertJob).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
@@ -262,6 +341,57 @@ describe('CardanoWorkerService job access control', () => {
 
     const status = await handlers.GetJobStatus(makeReq(['Admin'], { jobId: 'job-1' })) as { jobId: string };
     expect(status.jobId).toBe('job-1');
+  });
+
+  describe('GetJobStatus with waitMs', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
+    it('answers at once when the job is already terminal', async () => {
+      jobStoreMock.getJobById.mockResolvedValue({ ...OWN_JOB, status: 'confirmed' });
+
+      const status = await boot().GetJobStatus(makeReq([], { jobId: 'job-1', waitMs: 20_000 })) as { status: string };
+
+      expect(status.status).toBe('confirmed');
+      expect(jobStoreMock.getJobById).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads again every second and answers when the job becomes terminal', async () => {
+      jobStoreMock.getJobById
+        .mockResolvedValueOnce(OWN_JOB)
+        .mockResolvedValueOnce(OWN_JOB)
+        .mockResolvedValue({ ...OWN_JOB, status: 'failed', errorCode: 'TX_DROPPED' });
+
+      const pending = boot().GetJobStatus(makeReq([], { jobId: 'job-1', waitMs: 20_000 })) as Promise<{ status: string; errorCode: string }>;
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await expect(pending).resolves.toMatchObject({ status: 'failed', errorCode: 'TX_DROPPED' });
+      expect(jobStoreMock.getJobById).toHaveBeenCalledTimes(3);
+    });
+
+    it('answers with the open state when the time is up', async () => {
+      jobStoreMock.getJobById.mockResolvedValue(OWN_JOB);
+
+      const pending = boot().GetJobStatus(makeReq([], { jobId: 'job-1', waitMs: 2500 })) as Promise<{ status: string }>;
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await expect(pending).resolves.toMatchObject({ status: 'submitted' });
+      expect(jobStoreMock.getJobById).toHaveBeenCalledTimes(3);
+    });
+
+    it('stops waiting when the client has gone', async () => {
+      jobStoreMock.getJobById.mockResolvedValue(OWN_JOB);
+      const req = { ...makeReq([], { jobId: 'job-1', waitMs: 20_000 }), http: { res: { destroyed: true } } };
+
+      await expect(boot().GetJobStatus(req)).resolves.toMatchObject({ status: 'submitted' });
+      expect(jobStoreMock.getJobById).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not wait for a foreign job', async () => {
+      jobStoreMock.getJobById.mockResolvedValue({ ...OWN_JOB, createdBy: 'bob' });
+
+      await expect(boot().GetJobStatus(makeReq([], { jobId: 'job-1', waitMs: 20_000 }))).rejects.toMatchObject({ statusCode: 404 });
+    });
   });
 
   it('GetJobStatus and CancelJob require a jobId', async () => {

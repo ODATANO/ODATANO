@@ -8,7 +8,7 @@ const logger = cds.log('ODATANO');
 
 // Re-export key types and classes for programmatic consumers
 export { CardanoClient } from '../srv/blockchain/cardano-client';
-export type { CardanoClientConfig, Network, BackendName, TransactionBuilderName } from '../srv/blockchain/cardano-client';
+export type { CardanoClientConfig, Network, BackendName } from '../srv/blockchain/cardano-client';
 export { CardanoIndexer } from '../srv/blockchain/cardano-indexer';
 export { CardanoTransactionBuilder } from '../srv/blockchain/cardano-tx-builder';
 
@@ -18,14 +18,18 @@ export {
   getCardanoIndexer,
   getCardanoClient,
   getCardanoTxBuilder,
-  loadConfigFromEnv,
-  loadHsmConfigFromEnv,
-  loadCrawlerConfigFromEnv,
   startCrawlerIfConfigured,
-  loadWalletWorkerConfigFromEnv,
   startWalletWorkerIfConfigured,
   shutdownAppContext,
 } from '../srv/server';
+export {
+  loadConfigFromEnv,
+  loadHsmConfigFromEnv,
+  loadCrawlerConfigFromEnv,
+  loadWalletWorkerConfigFromEnv,
+  loadAgentGrantsConfig,
+} from '../srv/config';
+export type { AgentGrantsConfig } from '../srv/config';
 
 // Re-export HSM signer for programmatic access
 export { getHsmSigner } from '../srv/blockchain/signing/hsm-signer';
@@ -42,9 +46,9 @@ export {
   AGENT_TOKEN_HEADER,
   AGENT_TOKEN_PREFIX,
   AGENT_ROLE,
-  AGENT_ALLOWLISTABLE_ACTIONS,
-  AGENT_ALWAYS_ALLOWED_EVENTS,
 } from '../srv/utils/agent-grants';
+export { agentAccessOf, agentGrantableActions } from '../srv/utils/agent-access';
+export type { AgentAccess } from '../srv/utils/agent-access';
 export type {
   IssueAgentGrantInput,
   IssuedAgentGrant,
@@ -58,8 +62,6 @@ export type {
 } from '../srv/utils/agent-grants';
 export { registerTransportLane } from '@odatano/cap-auth';
 export type { TransportLane, LaneOutcome } from '@odatano/cap-auth';
-export { loadAgentGrantsConfig } from '../srv/utils/agent-grants-config';
-export type { AgentGrantsConfig } from '../srv/utils/agent-grants-config';
 export type { HsmConfig, HsmSignResult } from '../srv/utils/types';
 
 // Re-export pure CBOR utilities (no CAP round-trip needed)
@@ -83,7 +85,8 @@ export { applyScriptParameters, plutusScriptHash } from '../srv/utils/tx-build-h
 // Reads config from cds.env.requires["odatano-core"] or env vars.
 // Starts all blockchain components plus the optional crawler and wallet worker.
 export async function initialize(): Promise<void> {
-  const { loadConfigFromEnv, loadHsmConfigFromEnv, initializeFromConfig, getAppContext } = await import('../srv/server');
+  const { initializeFromConfig, getAppContext } = await import('../srv/server');
+  const { loadConfigFromEnv, loadHsmConfigFromEnv } = await import('../srv/config');
   let alreadyInitialized = false;
   try {
     getAppContext();

@@ -19,7 +19,7 @@ describe('docker/cds-config.mjs', () => {
     expect(r.code).toBe(0);
     const cfg = JSON.parse(r.out);
     expect(cfg.requires.db).toEqual({ kind: 'sqlite', credentials: { url: '/data/db.sqlite' }, client: { timeout: 5000 } });
-    expect(cfg.requires.auth).toEqual({ kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { odatano: { password: 'pw', roles: ['Admin'] } } });
+    expect(cfg.requires.auth).toEqual({ kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { odatano: { password: 'pw', roles: ['Read', 'Transact', 'Sign', 'Admin'] } } });
     expect(cfg.requires.kinds).toBeUndefined();
   });
 

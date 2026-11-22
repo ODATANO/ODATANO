@@ -10,6 +10,8 @@ import {
   TransactionAlreadySubmittedError,
   TransactionValidationError,
   ScriptValidationError,
+  SubmitOutcomeUnknownError,
+  isSubmitRejection,
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError,
@@ -808,6 +810,40 @@ describe('Error Classes', () => {
         expect(error.target).toBe('requiredField');
       }
     });
+  });
+});
+
+describe('isSubmitRejection', () => {
+  const refusal = new TransactionValidationError('ValueNotConserved', undefined);
+  const outage = new ProviderUnavailableError('node down', 'ogmios');
+
+  it('is true for a refusal by the node', () => {
+    expect(isSubmitRejection(refusal)).toBe(true);
+    expect(isSubmitRejection(new ScriptValidationError('PlutusFailure'))).toBe(true);
+    expect(isSubmitRejection(new AllBackendsFailedError([refusal, refusal]))).toBe(true);
+  });
+
+  it('is false for an outage, a rate limit and anything that is no backend answer', () => {
+    expect(isSubmitRejection(outage)).toBe(false);
+    expect(isSubmitRejection(new RateLimitError('slow down', 'koios'))).toBe(false);
+    expect(isSubmitRejection(new BackendError('boom'))).toBe(false);
+    expect(isSubmitRejection(new Error('socket hang up'))).toBe(false);
+  });
+
+  it('is false as soon as one asked backend gave no verdict, and when none was asked', () => {
+    expect(isSubmitRejection(new AllBackendsFailedError([outage, refusal]))).toBe(false);
+    expect(isSubmitRejection(new AllBackendsFailedError([], undefined, ['koios: circuit open']))).toBe(false);
+  });
+});
+
+describe('SubmitOutcomeUnknownError', () => {
+  it('is a 503 with its own code and carries the hash and the cause', () => {
+    const cause = new ProviderUnavailableError('node down', 'ogmios');
+    const err = new SubmitOutcomeUnknownError('ab'.repeat(32), cause);
+
+    expect(err).toMatchObject({ statusCode: 503, code: ERROR_CODES.SUBMIT_OUTCOME_UNKNOWN, txHash: 'ab'.repeat(32) });
+    expect(err.message).toContain('ab'.repeat(32));
+    expect(err.originalError).toBe(cause);
   });
 });
 

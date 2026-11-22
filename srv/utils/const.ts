@@ -106,6 +106,12 @@ export const HEX_64_REGEX = /^[a-f0-9]{64}$/;
 /** Generic 56-character hex string: 28-byte hashes (Blake2b-224, payment credential, script hash, pool key hash) */
 export const HEX_56_REGEX = /^[a-f0-9]{56}$/;
 
+/** How long a stored address, account, pool, DRep or asset answers before it is read again. */
+export const DEFAULT_INDEX_TTL_MS = 3_600_000;
+
+/** How long protocol parameters answer before the backend is asked again. */
+export const PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000;
+
 /** Transaction hash: 64-character hex string */
 export const TX_HASH_REGEX = /^[a-f0-9]{64}$/;
 

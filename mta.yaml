@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 2.0.0-rc.49
+version: 2.0.0-rc.50
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
@@ -26,7 +26,6 @@ modules:
       BACKENDS: koios
       # Keys are not set here, since they would be committed. KOIOS_API_KEY is optional; with blockfrost
       # in BACKENDS, set BLOCKFROST_API_KEY at deploy time via `cf set-env` or an mtaext file.
-      TX_BUILDERS: buildooor
       HSM_ENABLED: false
     build-parameters:
       builder: custom
@@ -83,8 +82,8 @@ modules:
   - name: odatanoviewwallet
     type: html5
     path: app/wallet
-    # npm audit reports GHSA-jfc7-64v2-mr8c in @sigstore/core, pinned by the @ui5/cli shrinkwrap.
-    # Accepted: build-time tooling only, nothing from that tree ships. Revisit after @ui5/cli 4.0.61.
+    # Build-time tooling only, nothing from that tree ships. Its audit exceptions carry a date
+    # in scripts/audit-exceptions.json.
     build-parameters:
       build-result: dist
       builder: custom

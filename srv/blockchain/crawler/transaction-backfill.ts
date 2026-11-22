@@ -6,14 +6,15 @@ import type { Transaction, TxInputLine } from '../../utils/types';
 import { mapTransactionInputAssets, mapTransactionRedeemers, mapTransactionDatums, txSeqOf } from '../../utils/mappers';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { streamCrawledBlocks } from './certificate-backfill';
+import { fillOutputFields } from './output-datum-backfill';
 import type { LedgerLookup } from '../ledger-state';
-import { TransactionInputs, TransactionInputAssets, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums, type TransactionInput } from '#cds-models/odatano/cardano';
+import { TransactionInputs, TransactionInputAssets, TransactionInputAssetCopies, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums, type TransactionInput } from '#cds-models/odatano/cardano';
 
 const { SELECT, UPDATE, UPSERT, DELETE } = cds.ql;
 const logger = cds.log('TransactionBackfill');
 
-// Complete crawled transactions from a second chain-sync stream: spent outputs, input fields,
-// redeemers and witness datums. Only empty fields are filled. Mismatching transactions stay as they are.
+// Complete crawled transactions from a second chain-sync stream: spent outputs, input and output
+// fields, redeemers and witness datums. Only empty fields are filled. Mismatching transactions stay.
 
 export class TransactionBackfillError extends Error {
   constructor(message: string) {
@@ -29,6 +30,8 @@ export interface TransactionBackfillProgress {
   transactions: number;
   /** Input rows that got at least one field. */
   inputs: number;
+  /** Output rows that got a datum or reference-script field. */
+  outputs: number;
   redeemers: number;
   datums: number;
   /** Transactions whose stored rows differed from the ledger view (order, inputs or outputs the ledger did not apply) and were rewritten. */
@@ -182,17 +185,17 @@ async function writeInputFills(tx: CapTransaction, fills: InputFill[]): Promise<
 
 // Rewrite one transaction's inputs in ledger order. Rows left out are dropped, empty fields filled.
 async function rewriteInOrder(tx: CapTransaction, seq: number, ordered: StoredInputRow[], fresh: TxInputLine[]): Promise<void> {
-  const assets = (await tx.run(SELECT.from(TransactionInputAssets).where({ input_txSeq: seq }))) as Array<Record<string, unknown>> ?? [];
+  const assets = (await tx.run(SELECT.from(TransactionInputAssetCopies).where({ input_txSeq: seq }))) as Array<Record<string, unknown>> ?? [];
   const newIndex = new Map(ordered.map((r, i) => [Number(r.inputIndex), i]));
   const rows = ordered.map((r, i) => ({ ...r, ...missingFields(r, fresh[i]), txSeq: seq, inputIndex: i }));
   // assets of rows the ledger view drops go with them
   const movedAssets = assets
     .filter((a) => newIndex.has(Number(a.input_inputIndex)))
     .map((a) => ({ ...a, input_txSeq: seq, input_inputIndex: newIndex.get(Number(a.input_inputIndex)) }));
-  await tx.run(DELETE.from(TransactionInputAssets).where({ input_txSeq: seq }));
+  await tx.run(DELETE.from(TransactionInputAssetCopies).where({ input_txSeq: seq }));
   await tx.run(DELETE.from(TransactionInputs).where({ txSeq: seq }));
   await tx.run(UPSERT.into(TransactionInputs).entries(rows));
-  if (movedAssets.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(movedAssets));
+  if (movedAssets.length) await tx.run(UPSERT.into(TransactionInputAssetCopies).entries(movedAssets));
 }
 
 // Delete outputs the ledger never produced, which some providers list for phase-2 results.
@@ -218,7 +221,7 @@ async function dropUnappliedOutputs(tx: CapTransaction, txs: Transaction[]): Pro
 
 export async function backfillTransactions(opts: TransactionBackfillOptions): Promise<TransactionBackfillResult> {
   const { fromSlot, toSlot, indexer } = opts;
-  const progress: TransactionBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0 };
+  const progress: TransactionBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, inputs: 0, outputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0 };
   let started = false;
 
   const intersection = await streamCrawledBlocks(
@@ -229,6 +232,10 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
       progress.blocks += blocks.length;
       progress.transactions += txs.length;
       if (!txs.length) return;
+
+      // outputs first, so the inputs resolved below read the filled rows
+      const filled = await fillOutputFields(tx, txs.map((t) => ({ hash: t.hash, txSeq: txSeqOf(t.slot, t.index), outputs: t.outputs ?? [] })));
+      progress.outputs += filled.outputs;
 
       // the UTxO set rows answer too: they keep spent outputs, also those from before the crawl
       await indexer.resolveInputs(tx, txs, { hashes: new Set(), rows: new Map(), assets: new Map() });
@@ -286,7 +293,7 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
       }
       await writeInputFills(tx, fills);
       progress.inputs += fills.length;
-      if (assetRows.length) await tx.run(UPSERT.into(TransactionInputAssets).entries(assetRows));
+      if (assetRows.length) await tx.run(UPSERT.into(TransactionInputAssetCopies).entries(assetRows));
       for (const r of reorders) await rewriteInOrder(tx, r.seq, r.rows, r.inputs);
       for (const seq of await dropUnappliedOutputs(tx, txs)) rewritten.add(seq);
       progress.rewritten += rewritten.size;
@@ -306,7 +313,7 @@ export async function backfillTransactions(opts: TransactionBackfillOptions): Pr
   );
   if (!started) progress.atSlot = intersection === 'origin' ? 0 : intersection.slot;
   logger.info(
-    `Transaction backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.inputs} inputs, ` +
+    `Transaction backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.inputs} inputs, ${progress.outputs} outputs, ` +
     `${progress.redeemers} redeemers, ${progress.datums} datums, ${progress.rewritten} transactions rewritten, ${progress.skipped} skipped`
   );
   return { ...progress, fromSlot, toSlot, intersection };

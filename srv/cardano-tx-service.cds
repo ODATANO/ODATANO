@@ -7,7 +7,7 @@ using {
 
 
 // Transaction building and submission, separate from the read service.
-@requires: 'authenticated-user'
+@requires: 'Transact'
 service CardanoTransactionService @(impl: './cardano-tx-service') {
     // ---------------------------------------------------------------------------
     // Entity Projections - Transaction Building & Submission
@@ -50,6 +50,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
         actions {
             @title      : 'Check Submission Status'
             @description: 'Mark a submitted transaction confirmed once it is 3 blocks deep (its own block included); otherwise it stays submitted'
+            @odatano.agent: 'grant'
             action CheckSubmissionStatus() returns TransactionSubmissions;
         };
 
@@ -75,6 +76,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Simple ADA Transaction'
     @description: 'Build a simple ADA transfer transaction from sender to recipient with specified amount and change address'
+    @odatano.agent: 'grant'
     action BuildSimpleAdaTransaction(
                                      @title: 'Sender Address'
                                      @description: 'The Bech32 encoded address of the sender'
@@ -127,6 +129,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Transaction with Metadata'
     @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
+    @odatano.agent: 'grant'
     action BuildTransactionWithMetadata(
                                         @title: 'Sender Address'
                                         @description: 'The Bech32 encoded address of the sender'
@@ -146,6 +149,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Multi-Asset Transaction'
     @description: 'Build a transaction to send native assets (tokens) along with ADA'
+    @odatano.agent: 'grant'
     action BuildMultiAssetTransaction(
                                       @title: 'Sender Address'
                                       @description: 'The Bech32 encoded address of the sender'
@@ -183,6 +187,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Minting Transaction'
     @description: 'Build a transaction to mint or burn native assets'
+    @odatano.agent: 'grant'
     action BuildMintTransaction(
                                 @title: 'Sender Address'
                                 @description: 'The Bech32 encoded address of the sender (pays fees)'
@@ -244,6 +249,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Get Build Details'
     @description: 'Retrieve transaction build details using the Build Id'
+    @odatano.agent: 'read'
     action GetBuildDetails(
                            @title: 'Build Id'
                            @description: 'The unique identifier of the transaction build'
@@ -251,6 +257,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Submit Transaction'
     @description: 'Submit a transaction to the Cardano network using a build ID and signed CBOR'
+    @odatano.agent: 'grant'
     action SubmitTransaction(
                              @title: 'Build Id'
                              @description: 'The unique identifier of the transaction build'
@@ -261,6 +268,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Submit Signed Transaction'
     @description: 'Submit a signed transaction to the Cardano network'
+    @odatano.agent: 'grant'
     action SubmitSignedTransaction(
                                    @title: 'Signed Transaction CBOR'
                                    @description: 'The CBOR of the signed transaction'
@@ -272,6 +280,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Plutus Spend Transaction'
     @description: 'Build a transaction to spend a UTxO locked at a Plutus script address'
+    @odatano.agent: 'grant'
     action BuildPlutusSpendTransaction(
                                        @title: 'Sender Address'
                                        @description: 'The Bech32 encoded address of the sender (pays fees)'
@@ -345,6 +354,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Build Plutus Transaction'
     @description: 'Spend script UTxOs, each with its own redeemer (inline validator or a reference-script UTxO), mint, withdraw and certify in one transaction; script inputs are optional, so a mint or a withdraw-zero alone works. Collateral is added only when a script runs. The outputs are built exactly in the given order, change comes after them. The execution units of every redeemer are returned under redeemers.'
+    @odatano.agent: 'grant'
     action BuildPlutusTransaction(
                                   @title: 'Sender Address'
                                   @description: 'Pays the fee, funds the rest and provides the ADA-only collateral'
@@ -388,6 +398,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Set Collateral'
     @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
+    @odatano.agent: 'grant'
     action SetCollateral(
                          @title: 'Address'
                          @description: 'The Bech32 encoded address to check and set up collateral for'
@@ -395,6 +406,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Address Transaction Builds'
     @description: 'Projection for retrieving transaction builds by address'
+    @odatano.agent: 'read'
     action GetTransactionBuildsByAddress(
                                          @title: 'Bech32 Address'
                                          @description: 'The Bech32 encoded address to retrieve transaction builds for'
@@ -410,6 +422,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Derive Script Address'
     @description: 'Utility: Apply optional PlutusData parameters to a validator script and return its enterprise script address (bech32) and script hash (28-byte hex). Pure derivation, no transaction built, no blockchain call.'
+    @odatano.agent: 'read'
     action DeriveScriptAddress(
                                @title: 'Validator Script'
                                @description: 'The Plutus validator script in CBOR hex format'
@@ -427,6 +440,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
 
     @title      : 'Extract Payment Key Hash'
     @description: 'Utility: Decode a Bech32 Cardano address and return its 28-byte payment credential hash (hex). Pure bech32 decoding, no blockchain call. Use to obtain the key hash for requiredSignersJson on Plutus actions.'
+    @odatano.agent: 'read'
     action ExtractPaymentKeyHash(
                                  @title: 'Address'
                                  @description: 'The Bech32 encoded Cardano address (addr / addr_test)'

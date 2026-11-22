@@ -1,5 +1,5 @@
 using {temporal, } from '@sap/cds/common';
-using {Lovelace, Blake2b224, Blake2b256, HexBytes, Bech32, AssetUnit, AssetSlice, AssetSumSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
+using {Lovelace, Blake2b224, Blake2b256, Bech32, AssetUnit, AssetSlice, AssetSumSlice, SigningStatus,SubmissionStatus, UTxODataSlice, MetadataLabel, CrawlSyncStatus, ReorgStatus, WalletJobStatus, WalletJobKind, WorkerSignerType} from '../db/types';
 
 namespace odatano.cardano;
 
@@ -54,8 +54,8 @@ entity Blocks {
     key hash        : String(64);
 
         @title      : 'Block Time'
-        @description: 'Block time as ISO 8601 string'
-        time        : String;
+        @description: 'Block time'
+        time        : Timestamp;
 
         @title      : 'Block Height'
         @description: 'Block height as integer'
@@ -200,6 +200,30 @@ entity Pools : temporal {
         @title      : 'Reward Account'
         @description: 'Pool reward account in bech32 format'
         rewardAccount  : String;
+
+        @title      : 'Metadata URL'
+        @description: 'URL of the pool metadata file as registered on chain. Null without one'
+        metadataUrl    : String(128);
+
+        @title      : 'Metadata Hash'
+        @description: 'blake2b-256 the registration names for the metadata file, as hex'
+        metadataHash   : Blake2b256;
+
+        @title      : 'Name'
+        @description: 'Pool name from the metadata file. Null while the file is unknown or failed its checks'
+        name           : String(50);
+
+        @title      : 'Ticker'
+        @description: 'Pool ticker from the metadata file, 3 to 5 characters'
+        ticker         : String(5);
+
+        @title      : 'Homepage'
+        @description: 'Pool homepage from the metadata file'
+        homepage       : String(512);
+
+        @title      : 'Description'
+        @description: 'Pool description from the metadata file'
+        description    : String(255);
 }
 
 @title      : 'Pool Epoch Snapshot Entity'
@@ -395,6 +419,47 @@ entity EpochLedgerSnapshots {
         @title      : 'Always-No-Confidence Stake'
         @description: 'Stake delegated to the predefined always-no-confidence DRep; null when not reported'
         drepNoConfidenceStake : Lovelace;
+
+        @title      : 'Account Count'
+        @description: 'Rows in AccountEpochSnapshots for the epoch; null when no account snapshot was taken'
+        accountCount          : Integer;
+
+        @title      : 'Account Snapshot Slot'
+        @description: 'Absolute slot of the block the account snapshot was read at'
+        accountSnapshotSlot   : Integer64;
+}
+
+@title      : 'Account Epoch Snapshot Entity'
+@description: 'Reward accounts as the node reported them once per epoch (crawler.accountSnapshots, off by default). The node lists an account while it is delegated to a stake pool or a DRep, so an account without a row had no delegation at the snapshot block or is unknown to the crawl. The block is EpochLedgerSnapshots.accountSnapshotSlot of the epoch. Non-temporal.'
+entity AccountEpochSnapshots {
+
+        @title      : 'Stake Address (Key)'
+        @description: 'Reward account (bech32)'
+    key stakeAddress       : Bech32;
+
+        @title      : 'Epoch (Key)'
+        @description: 'Epoch the observation belongs to'
+    key epoch              : Integer;
+
+        @title      : 'Withdrawable Amount'
+        @description: 'Balance of the reward account at the snapshot block. Null for an account without a pool delegation: Ogmios 7.0 does not report that balance.'
+        withdrawableAmount : Lovelace;
+
+        @title      : 'Credited Amount'
+        @description: 'What the ledger added to the reward account since the snapshot of the previous epoch: the balance difference plus the withdrawals in between. Staking rewards, and also treasury withdrawals and refunded proposal deposits. Null without a balance in this or the previous epoch, or without crawled withdrawals (crawler.certificates).'
+        creditedAmount     : Lovelace;
+
+        @title      : 'Deposit'
+        @description: 'Key deposit held for the registration'
+        deposit            : Lovelace;
+
+        @title      : 'Pool Id'
+        @description: 'Stake pool the account is delegated to (bech32); null without a pool delegation'
+        poolId             : Bech32;
+
+        @title      : 'DRep Id'
+        @description: 'DRep the account delegates its vote to (CIP-129 bech32); drep_always_abstain / drep_always_no_confidence for the predefined ones; null without a vote delegation'
+        drepId             : Bech32;
 }
 
 @title      : 'Asset Entity'
@@ -411,7 +476,7 @@ entity Assets : temporal {
 
         @title      : 'Asset Name Hex'
         @description: 'Asset name as hex string (0-32 bytes / 0-64 hex chars)'
-        assetNameHex      : String(64); // 32-byte ledger cap = 64 hex (was HexBytes=String(5000))
+        assetNameHex      : String(64); // 32-byte ledger cap = 64 hex
 
         @title      : 'Asset Name'
         @description: 'Asset name as UTF-8 string when decodable'
@@ -758,7 +823,7 @@ entity Transactions {
         fee         : Lovelace;
 
         @title      : 'Transaction Deposit'
-        @description: 'The deposit change in lovelace'
+        @description: 'Deposits locked minus deposits refunded, in lovelace. Null when the source could not tell: a transaction with certificates or proposals crawled over Ogmios whose spent inputs are not all indexed'
         deposit     : Lovelace;
 
         @title      : 'Transaction Size'
@@ -841,6 +906,10 @@ entity TransactionInputs {
         @description: 'Output index of the consumed UTxO within spentTxHash (outpoint). Null on rows indexed before the column existed.'
         spentOutputIndex : Integer;
 
+        @title      : 'Spent Transaction Sequence'
+        @description: 'txSeq of the transaction that created the consumed UTxO. Set on an input that keeps no copy of its assets: it reads them from that output.'
+        spentTxSeq   : Integer64;
+
         @title      : 'Input Lovelace Amount'
         @description: 'The lovelace amount of the input utxo'
         isCollateral : Boolean;
@@ -850,9 +919,9 @@ entity TransactionInputs {
         isReference  : Boolean;
 
         @title      : 'Input Assets'
-        @description: 'Composed assets associated with the input utxo'
-        assets       : Composition of many TransactionInputAssets
-                           on assets.input = $self;
+        @description: 'Assets of the input utxo'
+        assets       : Association to many TransactionInputAssets
+                           on assets.input_txSeq = txSeq and assets.input_inputIndex = inputIndex;
 
         @title      : 'Input Has Addresses'
         @description: 'Indicates if input has associated addresses'
@@ -863,10 +932,10 @@ entity TransactionInputs {
         hasAssets    : Boolean;
 }
 
-@title      : 'Transaction Input Assets'
-@description: 'Projection for Transaction Input Assets'
+@title      : 'Transaction Input Asset Copies'
+@description: 'Stored copy of the assets of an input. An input has either copies or TransactionInputs.spentTxSeq, which points at the output that holds them.'
 @readonly
-entity TransactionInputAssets {
+entity TransactionInputAssetCopies {
 
         @title      : 'Transaction Input (key)'
         @description: 'The associated transaction input'
@@ -880,6 +949,30 @@ entity TransactionInputAssets {
         @description: 'Structural slice for asset details'
         asset : AssetSlice;
 }
+
+// Assets of every input: its stored copy, or the assets of the output it points at.
+// An input has one of the two, never both, so no asset shows twice.
+@title      : 'Transaction Input Assets'
+@description: 'Assets of a transaction input'
+@readonly
+entity TransactionInputAssets as
+        select from TransactionInputAssetCopies as copy {
+            key copy.input.txSeq      as input_txSeq,
+            key copy.input.inputIndex as input_inputIndex,
+            key copy.unit,
+                copy.asset
+        }
+    union all
+        select from TransactionInputs as spender
+        join TransactionOutputAssets as spent
+            on  spent.output.txSeq       = spender.spentTxSeq
+            and spent.output.outputIndex = spender.spentOutputIndex
+        {
+            spender.txSeq      as input_txSeq,
+            spender.inputIndex as input_inputIndex,
+            spent.unit,
+            spent.asset
+        };
 
 // -----------------------------------------------------
 // Crawler-fed ledger state. Separate from the lazy Addresses tables, so their TTL logic stays untouched.
@@ -1256,6 +1349,10 @@ entity TransactionMetadata {
         @title      : 'Metadata Payload'
         @description: 'The metadata payload as JSON string'
         payload : LargeString;
+
+        @title      : 'Chain Position'
+        @description: 'txSeq of the transaction (slot * 65536 + txIndex), ascending along the chain. Null on rows written before the column existed and on rows read by hash alone.'
+        txSeq   : Integer64;
 }
 
 //-----------------------------------------------------
@@ -1829,7 +1926,7 @@ entity SigningRequests {
         expiresAt        : Timestamp;
 
         @title      : 'Signed At'
-        @description: 'Timestamp when the transaction was signed'
+        @description: 'Timestamp when the signed transaction was claimed for submission'
         signedAt         : Timestamp;
 
         @title      : 'Submitted At'
@@ -1845,7 +1942,7 @@ entity SigningRequests {
         cip30TxCbor      : LargeString;
 
         @title      : 'Signed Transaction CBOR'
-        @description: 'The full signed transaction CBOR, persisted at claim time on the deferred-submit path so an interrupted submission can be re-driven after a restart (see SUBMIT_DETACH_DESIGN.md)'
+        @description: 'The full signed transaction CBOR, stored when the request is claimed for submission, so an interrupted or unresolved submit can be resolved later'
         signedTxCbor     : LargeString;
 
         @title      : 'Signer Type'
@@ -1870,7 +1967,7 @@ entity SigningRequests {
         submission       : Association to TransactionSubmissions;
 
         @title      : 'Error Message'
-        @description: 'Error message if signing or verification failed'
+        @description: 'Error message if signing, verification or the submit failed'
         errorMessage     : LargeString;
 }
 
@@ -2083,6 +2180,10 @@ entity CardanoWorkerWallets {
         @description: 'Blake2b-224 hash of the wallet verification key'
         publicKeyHash : Blake2b224;
 
+        @title      : 'Required Role'
+        @description: 'Role a caller needs to queue jobs for this wallet, from the wallet config; null = any authenticated user'
+        requiresRole  : String(100);
+
         @title      : 'Enabled'
         @description: 'Disabled wallets accept no new jobs and are skipped by the dispatch loop'
         enabled       : Boolean default true;
@@ -2128,7 +2229,7 @@ entity CardanoWalletJobs {
         walletId       : String(50);
 
         @title      : 'Job Kind'
-        @description: 'Transaction kind (simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned)'
+        @description: 'Transaction kind (simpleAda | metadata | multiAsset | mint | plutusSpend | payout | submitSigned)'
         kind           : WalletJobKind;
 
         @title      : 'Status'
@@ -2238,16 +2339,8 @@ entity CardanoAgentGrants {
         tokenHash       : String(64) not null;
 
         @title      : 'Allowed Actions'
-        @description: 'JSON array of allow-listed action names (builds, signing-request lifecycle, submits, wallet jobs)'
+        @description: 'JSON array of allow-listed action names (builds, signing-request lifecycle, submits)'
         allowedActions  : LargeString not null;
-
-        @title      : 'Wallet Id'
-        @description: 'Worker wallet this grant is pinned to; required for SubmitWalletJob / CancelJob, injected into those requests'
-        walletId        : String(50);
-
-        @title      : 'Allowed Job Kinds'
-        @description: 'JSON array of WalletJobKind values the grant may queue; null = every kind'
-        allowedJobKinds : LargeString;
 
         @title      : 'Max Jobs Per Day'
         @description: 'Daily budget of allow-listed action calls (UTC day); null = unlimited'

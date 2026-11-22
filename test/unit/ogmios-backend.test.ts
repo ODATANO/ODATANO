@@ -17,7 +17,8 @@ vi.mock('@cardano-ogmios/client', () => ({
   Method: vi.fn()
 }));
 
-import { Method } from '@cardano-ogmios/client';
+import { Method, createInteractionContext, createLedgerStateQueryClient } from '@cardano-ogmios/client';
+import { credentialToStakeAddress } from '../../srv/utils/mappers';
 import { blake2b_224 } from '@harmoniclabs/crypto';
 import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId, mapOgmiosEpochState } from '../../srv/blockchain/backends/ogmios-backend';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, ScriptValidationError, TransactionValidationError } from '../../srv/utils/errors';
@@ -264,22 +265,28 @@ describe('OgmiosBackend', () => {
       ).rejects.toThrow('Failed to initialize backend: ogmios');
     });
 
-    it('should handle account with no delegation or drep', async () => {
-      const mockStateQueryClient = {
-        rewardAccountSummaries: vi.fn().mockResolvedValue([{
-          rewards: 0,
-          deposit: 2000000
-        }])
-      };
-
+    // Ogmios 7.0 writes rewards 0 into a summary without a pool, whatever the account holds
+    it('reports the balance of an account without a pool delegation as unknown', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      (backend as any).stateQueryClient = mockStateQueryClient;
+      (backend as any).stateQueryClient = {
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{
+          from: 'verificationKey', credential: '0c'.repeat(28),
+          delegateRepresentative: { type: 'abstain' }, rewards: { ada: { lovelace: 0 } }, deposit: { ada: { lovelace: 2000000 } },
+        }]),
+      };
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
 
-      expect(result.poolId).toBe(null);
-      expect(result.drepId).toBe(null);
-      expect(result.rewardsSum).toBe('0');
+      expect(result).toMatchObject({ active: true, poolId: null, drepId: 'drep_always_abstain', rewardsSum: null, withdrawableAmount: null });
+    });
+
+    it('reports the balance of an account with a pool delegation, zero included', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = {
+        rewardAccountSummaries: vi.fn().mockResolvedValue([{ stakePool: { id: 'pool1x' }, rewards: { ada: { lovelace: 0 } } }]),
+      };
+      expect(await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr'))
+        .toMatchObject({ poolId: 'pool1x', rewardsSum: '0', withdrawableAmount: '0' });
     });
 
     it('maps the predefined DReps (abstain / no confidence)', async () => {
@@ -913,6 +920,20 @@ describe('OgmiosBackend', () => {
       expect(result.rewardAccount).toBe('stake1u8reward');
       // one pool's stake gives no live share; unavailable, not 0
       expect(result.liveSize).toBeNull();
+      // registered without a metadata file
+      expect(result).toMatchObject({ metadataUrl: null, metadataHash: null });
+      expect(result.name).toBeUndefined();
+    });
+
+    it('reports where the metadata file is, not what it says', async () => {
+      const metadata = { url: 'https://pool.example/p.json', hash: 'ab'.repeat(32) };
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      (backend as any).stateQueryClient = { stakePools: vi.fn().mockResolvedValue({ pool1abc: { vrfVerificationKeyHash: 'vrf123', metadata } }) };
+      (backend as any).isShutdown = false;
+
+      const result = await backend.getPool('pool1abc');
+      expect(result).toMatchObject({ metadataUrl: metadata.url, metadataHash: metadata.hash });
+      expect(result.name).toBeUndefined();
     });
 
     it('should map Ogmios v6 value shapes (ValueAdaOnly pledge/cost, Ratio margin) without fabricating activeStake', async () => {
@@ -1532,6 +1553,87 @@ describe('OgmiosBackend', () => {
 
     it('should return 0 for origin (genesis block)', () => {
       expect(resolveOgmiosHeight('origin')).toBe(0);
+    });
+  });
+
+  describe('rewardAccountsAt', () => {
+    const point = { slot: 100, hash: 'a'.repeat(64) };
+    const KEY_HEX = '0008704b7444d9ffb4aaa314862a567a5c70c6316c28d34142eb1968';
+    const SCRIPT_HEX = '5251b10396decb9ee019e00e6bc5c5b468da4d8b95e04afcc7f32b92';
+    const KEY = credentialToStakeAddress(KEY_HEX, false, 'preview');
+    const SCRIPT = credentialToStakeAddress(SCRIPT_HEX, true, 'preview');
+    const UNDELEGATED = credentialToStakeAddress('ab'.repeat(28), false, 'preview');
+    const terminate = vi.fn();
+
+    function session(rewardAccountSummaries: ReturnType<typeof vi.fn>) {
+      const shutdown = vi.fn(async () => undefined);
+      vi.mocked(createInteractionContext).mockResolvedValue({ socket: { terminate } } as never);
+      vi.mocked(createLedgerStateQueryClient).mockResolvedValue({ rewardAccountSummaries, shutdown } as never);
+      return shutdown;
+    }
+
+    beforeEach(() => {
+      terminate.mockReset();
+      vi.mocked(createInteractionContext).mockReset();
+      vi.mocked(createLedgerStateQueryClient).mockReset();
+    });
+
+    it('asks keys and scripts in their own lists at the block and maps what the node reports', async () => {
+      // the two entries as a v7 node answers them; the third account is not delegated and absent
+      const rewardAccountSummaries = vi.fn(async () => [
+        { from: 'verificationKey', credential: KEY_HEX, stakePool: { id: 'pool1x' }, rewards: { ada: { lovelace: 51978764146 } }, deposit: { ada: { lovelace: 2000000 } } },
+        { from: 'script', credential: SCRIPT_HEX, stakePool: { id: 'pool1y' }, delegateRepresentative: { type: 'abstain' }, rewards: { ada: { lovelace: 0 } }, deposit: { ada: { lovelace: 2000000 } } },
+      ]);
+      const shutdown = session(rewardAccountSummaries);
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+
+      const pages = await backend.rewardAccountsAt(point, async (ask) => [await ask([KEY, SCRIPT, UNDELEGATED]), await ask([])]);
+
+      expect(vi.mocked(createLedgerStateQueryClient).mock.calls[0][1]).toEqual({ point: { slot: 100, id: 'a'.repeat(64) } });
+      // an empty page costs no request
+      expect(rewardAccountSummaries).toHaveBeenCalledTimes(1);
+      expect(rewardAccountSummaries).toHaveBeenCalledWith({ keys: [KEY, UNDELEGATED], scripts: [SCRIPT] });
+      expect(pages).toEqual([[
+        { stakeAddress: KEY, withdrawableAmount: '51978764146', deposit: '2000000', poolId: 'pool1x', drepId: null },
+        { stakeAddress: SCRIPT, withdrawableAmount: '0', deposit: '2000000', poolId: 'pool1y', drepId: 'drep_always_abstain' },
+      ], []]);
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it('leaves the balance of an account without a pool delegation open', async () => {
+      session(vi.fn(async () => [
+        { from: 'verificationKey', credential: KEY_HEX, delegateRepresentative: { type: 'noConfidence' }, rewards: { ada: { lovelace: 0 } }, deposit: { ada: { lovelace: 2000000 } } },
+      ]));
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      expect(await backend.rewardAccountsAt(point, (ask) => ask([KEY]))).toEqual([
+        { stakeAddress: KEY, withdrawableAmount: null, deposit: '2000000', poolId: null, drepId: 'drep_always_no_confidence' },
+      ]);
+    });
+
+    it('sends only the list that has entries', async () => {
+      const rewardAccountSummaries = vi.fn(async () => []);
+      session(rewardAccountSummaries);
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      await backend.rewardAccountsAt(point, async (ask) => { await ask([KEY]); await ask([SCRIPT]); });
+      expect(rewardAccountSummaries.mock.calls).toEqual([[{ keys: [KEY] }], [{ scripts: [SCRIPT] }]]);
+    });
+
+    it('closes the connection and passes an error of the caller on unchanged', async () => {
+      const shutdown = session(vi.fn(async () => []));
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const own = new Error('database write failed');
+      await expect(backend.rewardAccountsAt(point, async () => { throw own; })).rejects.toBe(own);
+      expect(shutdown).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a block the node cannot acquire as a backend error and closes the socket', async () => {
+      vi.mocked(createInteractionContext).mockResolvedValue({ socket: { terminate } } as never);
+      vi.mocked(createLedgerStateQueryClient).mockRejectedValue(new Error('point not on chain'));
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const read = vi.fn();
+      await expect(backend.rewardAccountsAt(point, read)).rejects.toMatchObject({ backendName: 'ogmios' });
+      expect(read).not.toHaveBeenCalled();
+      expect(terminate).toHaveBeenCalledTimes(1);
     });
   });
 });

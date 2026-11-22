@@ -19,9 +19,11 @@ const fakeTx = {
   }),
 };
 
+const logger = vi.hoisted(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+
 vi.mock('@sap/cds', () => {
   const cdsMock = {
-    log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
+    log: vi.fn(() => logger),
     tx: async (fn: (tx: typeof fakeTx) => unknown) => fn(fakeTx),
     ql: {
       UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', entity, set, where }) }) }) },
@@ -68,6 +70,7 @@ function setup(units: string[], failing: Record<string, Error> = {}) {
 beforeEach(() => {
   assets.length = 0;
   fakeTx.run.mockClear();
+  logger.warn.mockClear();
 });
 
 describe('backfillAssetRegistry', () => {
@@ -83,7 +86,7 @@ describe('backfillAssetRegistry', () => {
 
     const result = await run((p) => seen.push(p));
 
-    expect(result).toEqual({ units: 2, processed: 2, filled: 2, failed: 0 });
+    expect(result).toEqual({ units: 2, processed: 2, filled: 2, failed: 0, absent: 0, skipped: 0 });
     expect(seen).toHaveLength(2);
     expect(indexer.indexAssetFromBackend).toHaveBeenCalledTimes(2);
     const min = assets.filter((r) => r.unit === MIN);
@@ -98,7 +101,27 @@ describe('backfillAssetRegistry', () => {
   it('counts a unit the backend does not know and carries on', async () => {
     const { run } = setup([MIN, NIGHT], { [MIN]: new NotFoundError('Asset', 'koios') });
 
-    expect(await run()).toEqual({ units: 2, processed: 2, filled: 1, failed: 1 });
+    expect(await run()).toEqual({ units: 2, processed: 2, filled: 1, failed: 1, absent: 0, skipped: 0 });
+  });
+
+  it('reports the units it could not fill by error at warn level', async () => {
+    const { run } = setup([MIN, NIGHT, `${POLICY}00`], {
+      [MIN]: new NotFoundError('Asset', 'koios'),
+      [`${POLICY}00`]: new NotFoundError('Asset', 'koios'),
+    });
+
+    await run();
+
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('NotFoundError 2'));
+  });
+
+  it('stays quiet at warn level when every unit is filled', async () => {
+    const { run } = setup([MIN, NIGHT]);
+
+    await run();
+
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
   it('stops after 25 consecutive backend failures', async () => {

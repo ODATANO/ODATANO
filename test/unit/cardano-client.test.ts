@@ -18,8 +18,7 @@ function createTestConfig(overrides: Partial<CardanoClientConfig> = {}): Cardano
     blockfrostApiKey: 'test-blockfrost-key',
     koiosApiKey: 'test-koios-key',
     ogmiosUrl: 'ws://localhost:1337',
-    transactionBuilders: ['buildooor'],
-    primaryTimeoutMs: TIMEOUT_MS,
+      primaryTimeoutMs: TIMEOUT_MS,
     fallbackTimeoutMs: TIMEOUT_MS * 2,
     indexTtlMs: 3600000,
     ...overrides,
@@ -100,9 +99,9 @@ describe('CardanoClient Configuration', () => {
       expect(client.max_age_ms).toBe(3_600_000);
     });
 
-    it('keeps the 60s default when indexTtlMs is zero/invalid', () => {
+    it('keeps the default of one hour when indexTtlMs is zero/invalid', () => {
       const client = new CardanoClient(createTestConfig({ backends: ['koios'], indexTtlMs: 0 }));
-      expect(client.max_age_ms).toBe(60_000);
+      expect(client.max_age_ms).toBe(3_600_000);
     });
 
     it('should accept blockfrost backend', () => {
@@ -336,6 +335,19 @@ describe('CardanoClient Configuration', () => {
       const config = createTestConfig({ backends: ['ogmios', 'koios'] });
       const client = new CardanoClient(config);
       expect(client.hasOgmiosBackend()).toBe(true);
+    });
+  });
+
+  describe('supports', () => {
+    it('is true when a configured backend serves the method', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['ogmios', 'koios'] }));
+      expect(client.supports('getTransaction')).toBe(true);
+    });
+
+    it('is false when no configured backend serves it', () => {
+      const client = new CardanoClient(createTestConfig({ backends: ['ogmios'] }));
+      expect(client.supports('getTransaction')).toBe(false);
+      expect(client.supports('submitTransaction')).toBe(true);
     });
   });
 
@@ -1094,6 +1106,32 @@ describe('CardanoClient Configuration', () => {
       });
       return client;
     };
+
+    describe('getAccount', () => {
+      const partial = { stakeaddress: STAKE, active: true, withdrawableAmount: null, rewardsSum: null, poolId: null, drepId: 'drep_always_abstain' };
+      const full = { stakeaddress: STAKE, active: true, withdrawableAmount: '9588137566', rewardsSum: '16511651303', poolId: null, drepId: 'drep_always_abstain' };
+
+      it('takes the node\'s answer when it carries the balance', async () => {
+        const live = vi.fn().mockResolvedValue({ ...full, poolId: 'pool1x' });
+        const hist = vi.fn();
+        expect(await clientWith(live, hist).getAccount(STAKE)).toMatchObject({ withdrawableAmount: '9588137566', poolId: 'pool1x' });
+        expect(hist).not.toHaveBeenCalled();
+      });
+
+      it('takes a provider\'s answer when the node reports no balance', async () => {
+        const live = vi.fn().mockResolvedValue(partial);
+        const hist = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'blockfrost'));
+        const hist2 = vi.fn().mockResolvedValue(full);
+        expect(await clientWith(live, hist, hist2).getAccount(STAKE)).toEqual(full);
+      });
+
+      it('keeps the node\'s answer, balance unknown, when no provider answers', async () => {
+        const live = vi.fn().mockResolvedValue(partial);
+        expect(await clientWith(live).getAccount(STAKE)).toEqual(partial);
+        const hist = vi.fn().mockRejectedValue(new NotFoundError('Account', 'koios'));
+        expect(await clientWith(live, hist).getAccount(STAKE)).toEqual(partial);
+      });
+    });
 
     // the node's summary lists only credentials delegated to a pool or a DRep
     it('asks a provider when the node has no summary and takes its answer', async () => {

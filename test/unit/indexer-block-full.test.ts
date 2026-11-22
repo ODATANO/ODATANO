@@ -113,6 +113,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   Assets: 'AssetsTable',
   // transaction-rows (hash -> txSeq lookup, stale-seq delete)
   Transactions: 'Transactions', TransactionInputs: 'TransactionInputs', TransactionInputAssets: 'TransactionInputAssets',
+  TransactionInputAssetCopies: 'TransactionInputAssetCopies',
   TransactionOutputs: 'TransactionOutputs', TransactionOutputAssets: 'TransactionOutputAssets',
   TransactionMetadata_: 'TransactionMetadata', TransactionCertificates: 'TransactionCertificates',
   TransactionWithdrawals: 'TransactionWithdrawals',
@@ -444,8 +445,37 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
     expect(inputRows[0].address_address).toBe('addrPrev');
     // the spent output's datum and reference-script hash come along
     expect(inputRows[0]).toMatchObject({ utxoData_inlineDatum: 'd87b80', utxoData_referenceScriptHash: 'ab'.repeat(28), utxoData_dataHash: null });
-    const assetRows = upsertsFor('TransactionInputAssets')[0].entries as Array<Record<string, unknown>>;
-    expect(assetRows[0]).toMatchObject({ unit: 'lovelace', asset_quantity: '7000000' });
+    // the spent output is stored: the input points at it and gets no copy of its assets
+    expect(inputRows[0].spentTxSeq).toBe(Number(PREV_SEQ));
+    expect(upsertsFor('TransactionInputAssetCopies')).toHaveLength(0);
+  });
+
+  it('points an input at an output of the same block', async () => {
+    const { indexer } = makeIndexer();
+    const creator = tx('t1'.padEnd(64, '0'), {
+      outputs: [{ address: 'addrNew', amount: [{ unit: 'lovelace', quantity: '3000000' }], txHash: 't1'.padEnd(64, '0'), outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false }],
+    });
+    const spender = { ...tx('t2'.padEnd(64, '0'), { inputs: [{ address: '', amount: [], txHash: 't1'.padEnd(64, '0'), outputIndex: 0 }] }), index: 1 };
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [creator, spender]);
+
+    const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
+    const creatorSeq = (upsertsFor('Transactions')[0].entries as Array<Record<string, unknown>>)[0].txSeq;
+    expect(inputRows[0]).toMatchObject({ address_address: 'addrNew', spentTxSeq: creatorSeq });
+    expect(upsertsFor('TransactionInputAssetCopies')).toHaveLength(0);
+  });
+
+  it('keeps a copy of the assets of an input whose spent output is not stored', async () => {
+    const { indexer } = makeIndexer();
+    const resolved = tx('t6'.padEnd(64, '0'), {
+      inputs: [{ address: 'addrKnown', amount: [{ unit: 'lovelace', quantity: '9' }], txHash: 'unknown'.padEnd(64, '0'), outputIndex: 2 }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [resolved]);
+
+    const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
+    expect(inputRows[0].spentTxSeq).toBeNull();
+    expect(upsertsFor('TransactionInputAssetCopies')[0].entries).toMatchObject([{ unit: 'lovelace', asset_quantity: '9' }]);
   });
 
   it('leaves an unresolvable pre-start-point input with a NULL address FK (not empty string)', async () => {
@@ -461,7 +491,7 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
     expect(inputRows[0].hasAddresses).toBe(false);
   });
 
-  it('skips inputs that already carry an address (Blockfrost/Koios path — zero overhead)', async () => {
+  it('reads no output data for inputs that already carry an address (Blockfrost/Koios path)', async () => {
     const { indexer } = makeIndexer();
     const resolved = tx('t5'.padEnd(64, '0'), {
       inputs: [{ address: 'addrKnown', amount: [{ unit: 'lovelace', quantity: '1' }], txHash: 'x'.padEnd(64, '0'), outputIndex: 0 }],
@@ -469,11 +499,69 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
 
     await indexer.indexBlockFull(mockTx as never, blockData(), [resolved]);
 
-    // no resolution reads at all (the Blocks and txSeq range checks run for every block)
+    // only the lookup whether the spent output is stored: one key read, no output or asset rows
     expect(runs.filter(q => q._op === 'SELECT.many' && ['TransactionOutputs', 'TransactionOutputAssets'].includes(q.entity))).toHaveLength(0);
-    expect(runs.some(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { hash?: unknown }).hash)).toBe(false);
+    expect(runs.filter(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { hash?: unknown }).hash)).toHaveLength(1);
     const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
     expect(inputRows[0].address_address).toBe('addrKnown');
+  });
+});
+
+describe('CardanoIndexer.applyDeposits (via indexBlockFull)', () => {
+  /** Resolvable from the DB mock: prev#0 = addrPrev holding 7 ADA. */
+  const spentIn = { address: '', amount: [], txHash: 'prev'.padEnd(64, '0'), outputIndex: 0 };
+  const output = (quantity: string, hash: string) => ({
+    address: 'addrOut', amount: [{ unit: 'lovelace', quantity }], txHash: hash, outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false,
+  });
+  const depositOf = (hash: string) =>
+    (upsertsFor('Transactions')[0].entries as Array<Record<string, unknown>>).find(r => r.hash === hash)!.deposit;
+
+  it('derives an open deposit from inputs, withdrawals, outputs, fee and donation', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd1'.padEnd(64, '0');
+    // 7 ADA in + 1 ADA withdrawn = 4.33 ADA out + 0.17 fee + 0.5 donated + 3 ADA deposit
+    const registering = tx(hash, {
+      deposit: null, treasuryDonation: '500000', inputs: [{ ...spentIn }], outputs: [output('4330000', hash)],
+      withdrawals: [{ stakeAddress: 'stake_test1x', amount: '1000000' }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [registering]);
+
+    expect(depositOf(hash)).toBe('3000000');
+  });
+
+  it('reports a refund as a negative deposit', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd2'.padEnd(64, '0');
+    // 7 ADA in = 8.83 ADA out + 0.17 fee - 2 ADA refunded
+    const deregistering = tx(hash, { deposit: null, inputs: [{ ...spentIn }], outputs: [output('8830000', hash)] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [deregistering]);
+
+    expect(depositOf(hash)).toBe('-2000000');
+  });
+
+  it('leaves the deposit open while a spent input is not indexed', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd3'.padEnd(64, '0');
+    const open = tx(hash, {
+      deposit: null, outputs: [output('1000000', hash)],
+      inputs: [{ ...spentIn }, { address: '', amount: [], txHash: 'unknown'.padEnd(64, '0'), outputIndex: 5 }],
+    });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [open]);
+
+    expect(depositOf(hash)).toBeNull();
+  });
+
+  it('keeps a deposit the source reported', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd4'.padEnd(64, '0');
+    const reported = tx(hash, { deposit: '2000000', inputs: [{ ...spentIn }], outputs: [output('1000000', hash)] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [reported]);
+
+    expect(depositOf(hash)).toBe('2000000');
   });
 });
 

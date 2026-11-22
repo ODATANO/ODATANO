@@ -6,9 +6,9 @@ This repository contains comprehensive **integration tests** and **unit tests** 
 
 ## Test Statistics
 
-- **Unit Tests**: 69 files (`npm run test:unit`) — hermetic, no network.
-- **Integration Tests**: 18 files; how many cases actually execute depends on backend reachability (the Ogmios-dependent suites self-skip).
-- **Total Test Suites**: 97 test files (77 unit + 20 integration)
+- **Unit Tests**: 97 files (`npm run test:unit`) — hermetic, no network.
+- **Integration Tests**: 20 files; how many cases actually execute depends on backend reachability (the Ogmios-dependent suites self-skip).
+- **Total Test Suites**: 117 test files (97 unit + 20 integration)
 - Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
 - **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
 - **Branch Coverage**: 88.31%
@@ -33,6 +33,7 @@ test/
 │   ├── blockfrost-custom-backend.test.ts  # Custom Blockfrost endpoint configuration
 │   ├── defer-submit.test.ts               # Deferred submit path
 │   ├── nested-tx-guard.test.ts            # detachedTx deadlock guard
+│   ├── provider-read-outside-tx.test.ts   # No database connection held during a backend call
 │   ├── error-handling-service.test.ts     # Service-level error validation (96 tests)
 │   ├── error-handling.backend.ts          # Backend-level error handling (11 tests)
 │   ├── odata_features.test.ts             # OData query feature tests (41 tests)
@@ -66,7 +67,8 @@ test/
 │   ├── cardano-service-readonly.test.ts   # @readonly projection enforcement tests
 │   ├── signing.test.ts                    # External signing unit tests
 │   ├── hsm-signer.test.ts                 # HSM signer unit tests
-│   ├── server.test.ts                     # Server initialization & config tests
+│   ├── server.test.ts                     # App context, start and shutdown
+│   ├── config.test.ts                     # Configuration loaders (CDS section, environment, defaults)
 │   ├── plugin.test.ts                     # CAP plugin bootstrap tests
 │   ├── mappers.test.ts                    # Data mappers & address utilities
 │   ├── cip14-fingerprint.test.ts          # CIP-14 asset fingerprint tests (11 tests)
@@ -83,7 +85,12 @@ test/
 │   │                                      # --- v2.0 chain crawler ---
 │   ├── crawler-engine.test.ts             # Reorg handling, intersection ladder, source semantics
 │   ├── crawler-lifecycle.test.ts          # Start/stop, cursor resume, chain-sync wiring
-│   ├── crawler-epoch-snapshot.test.ts     # Pool/DRep snapshots at epoch boundaries (analytics coverage)
+│   ├── crawler-epoch-snapshot.test.ts     # Pool/DRep and account snapshots at epoch boundaries
+│   ├── account-snapshots.test.ts          # Account snapshot walk on an in-memory SQLite: pages, credited amount, marker, reorg
+│   ├── input-asset-copies.test.ts         # Prune and restore of input asset copies, statements on SQLite
+│   ├── asset-registry-files.test.ts       # Token registry import from entry files, on an in-memory SQLite
+│   ├── migrate-schema.test.ts             # Schema migration steps on SQLite files
+│   ├── result-numbers.test.ts             # Int64 and Decimal as text in read and operation results
 │   ├── crawler-sync-state.test.ts         # Cursor, DB lease, latch semantics
 │   ├── crawler-backend-pagination.test.ts # Pagination source + parent-hash reorg detection
 │   ├── ogmios-chain-sync.test.ts          # Ogmios chain-sync mapping + intersection points
@@ -430,12 +437,18 @@ Koios backend unit tests:
 - Basic API operation handling
 - Error scenarios
 
-### server.test.ts (23 tests)
+### config.test.ts (37 tests)
 
-Server initialization and configuration tests:
+Configuration loaders in `srv/config.ts`:
+
+- `loadConfigFromEnv()`: the CDS section wins over the environment, which wins over the default
+- Crawler, wallet worker, HSM and pool metadata settings, with the values each one refuses
+
+### server.test.ts (15 tests)
+
+App context and lifecycle tests:
 
 - AppContext creation and lifecycle
-- `loadConfigFromEnv()` — Dual config: `cds.env.requires` + environment variables
 - `initializeFromConfig()` — Backend and builder initialization sequencing
 - Shutdown procedures and cleanup
 - Guard logic (`if (appContext) return;`)

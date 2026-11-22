@@ -18,7 +18,6 @@ vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'buildooor';
 
 const SVC = '/odata/v4/cardano';
 

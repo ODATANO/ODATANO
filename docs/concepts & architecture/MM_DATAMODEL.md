@@ -84,6 +84,12 @@ erDiagram
         decimal margin
         decimal fixedCost
         string rewardAccount
+        string metadataUrl
+        string metadataHash
+        string name
+        string ticker
+        string homepage
+        string description
     }
 
     Dreps {
@@ -433,7 +439,7 @@ erDiagram
     CardanoWalletJobs {
         uuid ID PK "🔑"
         string walletId FK "🔗"
-        string kind "simpleAda|metadata|multiAsset|mint|plutusSpend|submitSigned"
+        string kind "simpleAda|metadata|multiAsset|mint|plutusSpend|payout|submitSigned"
         string status "pending|building|submitting|submitted|confirmed|failed|cancelled"
         string idempotencyKey "caller-supplied, kept for audit"
         string dedupKey "UNIQUE(walletId,kind,dedupKey) — the key while owned, else the job ID"

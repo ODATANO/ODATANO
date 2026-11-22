@@ -3,7 +3,7 @@ using { Blake2b256, Bech32, AssetUnit, ParsedTransaction, TransactionConfirmatio
 
 // Read queries for Cardano chain data. Every operation needs an authenticated user;
 // per-address ownership is not checked (docs/guides/SECURITY_GUIDE.md).
-@requires: 'authenticated-user'
+@requires: 'Read'
 @path: '/odata/v4/cardano'
 service CardanoODataService @(impl: './cardano-service') {
 
@@ -52,6 +52,11 @@ service CardanoODataService @(impl: './cardano-service') {
     entity EpochLedgerSnapshots     as projection on db.EpochLedgerSnapshots;
 
     @readonly
+    @title      : 'Account Epoch Snapshots'
+    @description: 'Projection for per-epoch reward account snapshots written by the chain crawler'
+    entity AccountEpochSnapshots    as projection on db.AccountEpochSnapshots;
+
+    @readonly
     @title      : 'Assets'
     @description: 'Projection for Native-Asset Information'
     entity Assets                   as projection on db.Assets;
@@ -79,7 +84,17 @@ service CardanoODataService @(impl: './cardano-service') {
     @readonly
     @title      : 'Transaction Input Assets'
     @description: 'Projection for Transaction Input Assets'
-    entity TransactionInputAssets   as projection on db.TransactionInputAssets;
+    entity TransactionInputAssets   as
+        select from db.TransactionInputAssets
+        mixin {
+            input : Association to TransactionInputs
+                        on  input.txSeq      = $projection.input_txSeq
+                        and input.inputIndex = $projection.input_inputIndex;
+        }
+        into {
+            *,
+            input
+        };
 
     @readonly
     @title      : 'Transaction Output Assets'
@@ -176,10 +191,12 @@ service CardanoODataService @(impl: './cardano-service') {
     // ---------------------------------------------------------------------------
     @title      : 'Get Network Information'
     @description: 'Retrieve current network information including network type and genesis hash'
+    @odatano.agent: 'read'
     action GetNetworkInformation()                           returns NetworkInformation;
 
     @title      : 'Get Blocks by Block Hash'
     @description: 'Retrieve block information using the Block Hash'
+    @odatano.agent: 'read'
     action GetBlockByHash(
                           @title: 'Block Hash'
                           @description: 'The unique identifier of the block'
@@ -187,6 +204,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Epochs by Epoch Number'
     @description: 'Retrieve epoch information using the Epoch Number'
+    @odatano.agent: 'read'
     action GetEpochByNumber(
                             @title: 'Epoch Number'
                             @description: 'The sequential number of the epoch'
@@ -195,6 +213,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Pools by Pool Id'
     @description: 'Retrieve pool information using the Pool Id'
+    @odatano.agent: 'read'
     action GetPoolById(
                        @title: 'Pool Id'
                        @description: 'The unique identifier of the stake pool'
@@ -202,6 +221,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Dreps by Drep Id'
     @description: 'Retrieve drep information using the Drep Id'
+    @odatano.agent: 'read'
     action GetDrepById(
                        @title: 'Drep Id'
                        @description: 'The unique identifier of the drep'
@@ -209,6 +229,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Asset Info'
     @description: 'Retrieve native-asset information (supply, mint history, CIP-25 + CIP-26 metadata) by unit. Multi-backend (Blockfrost, Koios). Field availability differs slightly per backend; see entity description.'
+    @odatano.agent: 'read'
     action GetAssetInfo(
                         @title: 'Asset Unit'
                         @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
@@ -216,6 +237,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Asset Mint/Burn History'
     @description: 'Retrieve recent mint/burn events for a native asset, newest first. Koios is preferred (provides block timestamps); Blockfrost is the fallback (timestamps null). Always-fresh fetch, UPSERTs entries by (unit, txHash). skip + limit covers at most the newest 100 events; older events are read from the AssetHistory entity with $top/$skip.'
+    @odatano.agent: 'read'
     action GetAssetHistory(
                            @title: 'Asset Unit'
                            @description: 'Concatenation of policyId (56 hex) and assetNameHex (0-64 hex; ledger caps asset names at 32 bytes)'
@@ -231,6 +253,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Accounts by Stake Address'
     @description: 'Retrieve account information using the Bech32 Stake Address'
+    @odatano.agent: 'read'
     action GetAccountByStakeAddress(
                                     @title: 'Stake Address'
                                     @description: 'The Bech32 encoded stake address'
@@ -238,6 +261,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Transactions by Tx Hash'
     @description: 'Retrieve transaction information using the Transaction Hash'
+    @odatano.agent: 'read'
     action GetTransactionByHash(
                                 @title: 'Transaction Hash'
                                 @description: 'The unique identifier of the transaction'
@@ -245,6 +269,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Transaction Confirmations'
     @description: 'Number of blocks on top of a transaction, its own block included; 0 while it is not on chain. Uses the crawled chain when the crawler is synced, else the backends.'
+    @odatano.agent: 'read'
     action GetTransactionConfirmations(
                                        @title: 'Transaction Hash'
                                        @description: 'The unique identifier of the transaction'
@@ -252,6 +277,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Transaction Metadata by Tx Hash'
     @description: 'Retrieve transaction metadata using the Transaction Hash'
+    @odatano.agent: 'read'
     action GetMetadataByTxHash(
                                @title: 'Transaction Hash'
                                @description: 'The unique identifier of the transaction'
@@ -265,8 +291,29 @@ service CardanoODataService @(impl: './cardano-service') {
                                @assert.range: [0, _]
                                skip: Integer)        returns many TransactionMetadata;
 
+    @title      : 'Get Transaction Metadata by Label'
+    @description: 'Stored transaction metadata of one label in chain order, oldest first: the metadata of crawled transactions and of transactions read earlier. No backend is asked. Each row carries txSeq (slot * 65536 + txIndex); read on from a slot with fromSlot, or page with skip.'
+    @odatano.agent: 'read'
+    action GetMetadataByLabel(
+                              @title: 'Label'
+                              @description: 'The metadata label, an unsigned 64-bit integer as string'
+                              label: String(20),
+                              @title: 'From Slot'
+                              @description: 'Only transactions in this slot or later (default 0)'
+                              @assert.range: [0, _]
+                              fromSlot: Integer64,
+                              @title: 'Limit'
+                              @description: 'Maximum number of rows (default 100, at most 1000)'
+                              @assert.range: [1, 1000]
+                              limit: Integer,
+                              @title: 'Skip'
+                              @description: 'Number of rows to skip (default 0)'
+                              @assert.range: [0, _]
+                              skip: Integer)         returns many TransactionMetadata;
+
     @title      : 'Get Addresses by Bech32 Address'
     @description: 'Retrieve address information using the Bech32 Address'
+    @odatano.agent: 'read'
     action GetAddressByBech32(
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
@@ -274,6 +321,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get UTxOs by Bech32 Address'
     @description: 'Retrieve UTxO information using the Bech32 Address'
+    @odatano.agent: 'read'
     action GetUTxOsByAddress(
                              @title: 'Bech32 Address'
                              @description: 'The Bech32 encoded address'
@@ -289,6 +337,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get UTxOs by Payment Credential'
     @description: 'Retrieve UTxOs across all bech32 addresses sharing the given 28-byte payment credential (key hash or script hash). Useful for protocols that write to multiple bech32 forms of the same script (e.g. Indigo CDPs, Liqwid positions). Served from the crawled UTxO set (crawler.utxoSet active and synced) with outputs read from the node at the tip, else from Koios; throws ProviderUnavailableError when neither is available. Always fresh, no cache check.'
+    @odatano.agent: 'read'
     action GetUTxOsByCredential(
                                 @title: 'Payment Credential'
                                 @description: '28-byte payment credential hash as 56-char lowercase hex string'
@@ -304,6 +353,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Get Assets by Bech32 Address'
     @description: 'Retrieve asset information using the Bech32 Address'
+    @odatano.agent: 'read'
     action GetAssetsByAddress(
                               @title: 'Bech32 Address'
                               @description: 'The Bech32 encoded address'
@@ -319,6 +369,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title : 'Get latest Transactions by Bech32 Address'
     @description: 'Retrieve the latest transactions of the Bech32 Address, newest first. skip + limit covers at most the newest 100 transactions.'
+    @odatano.agent: 'read'
     action GetLatestTransactionsByAddress(
                                     @title: 'Bech32 Address'
                                     @description: 'The Bech32 encoded address'
@@ -330,22 +381,34 @@ service CardanoODataService @(impl: './cardano-service') {
                                     @title: 'Skip'
                                     @description: 'Number of rows to skip (default 0)'
                                     @assert.range: [0, 99]
-                                    skip: Integer)            returns many AddressTransactions;
+                                    skip: Integer,
+                                    @title: 'Since Time'
+                                    @description: 'Only transactions with a block time after this unix time in seconds'
+                                    @assert.range: [0, _]
+                                    sinceTime: Integer64,
+                                    @title: 'Wait (ms)'
+                                    @description: 'With sinceTime: when no newer transaction is known, read again every 5 seconds until one appears or this time is up (at most 30000)'
+                                    @assert.range: [0, 30000]
+                                    waitMs: Integer)          returns many AddressTransactions;
 
     @title      : 'Get Latest Block'
     @description: 'Retrieve the latest block information'
+    @odatano.agent: 'read'
     action GetLatestBlock()                                  returns Blocks;
 
     @title      : 'Get Latest Epoch'
     @description: 'Retrieve the latest epoch information'
+    @odatano.agent: 'read'
     action GetLatestEpoch()                                  returns Epochs;
 
     @title      : 'Get Ledger Protocol Parameters'
     @description: 'Retrieve the current ledger protocol parameters'
+    @odatano.agent: 'read'
     action GetLedgerProtocolParameters()                     returns LedgerProtocolParameters;
 
     @title      : 'Parse Transaction CBOR'
     @description: 'Parse hex-encoded transaction CBOR (signed or unsigned) into structured fields. Pure function, no network call, no DB write.'
+    @odatano.agent: 'read'
     action ParseTransactionCbor(
                                 @title: 'Transaction CBOR'
                                 @description: 'Hex-encoded transaction CBOR; signed or unsigned. Capped at 128 KiB of hex.'
@@ -353,6 +416,7 @@ service CardanoODataService @(impl: './cardano-service') {
 
     @title      : 'Decode Plutus Data'
     @description: 'Decode PlutusData CBOR hex (an inline datum, a witness datum, a redeemer) into the JSON the build actions accept as outputDatumJson (DetailedSchema: constructor/fields, int, bytes, list, map). Integers beyond 2^53 are decimal strings. Pure function, no network call, no DB write.'
+    @odatano.agent: 'read'
     action DecodePlutusData(
                                 @title: 'PlutusData CBOR'
                                 @description: 'Hex-encoded PlutusData CBOR. Capped at 128 KiB of hex.'

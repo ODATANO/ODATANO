@@ -74,6 +74,26 @@ describe('mappers', () => {
 
   // mapTransactionInputAssets — amount guard
   describe('mapTransactionInputAssets', () => {
+    it('by reference: an input with a stored output points at it and gets no copy', () => {
+      const amount = [{ unit: 'lovelace', quantity: '5' }];
+      const inputs = [
+        { address: 'a', amount, txHash: 'h1', outputIndex: 0, spentTxSeq: 7 },
+        { address: 'b', amount, txHash: 'h2', outputIndex: 1, spentTxSeq: null },
+      ] as never;
+      expect(mapTransactionInputs(42, inputs, true).map(r => r.spentTxSeq)).toEqual([7, null]);
+      expect(mapTransactionInputAssets(42, inputs, true).map(r => r.input_inputIndex)).toEqual([1]);
+    });
+
+    it('with copies: every input gets a copy and none points at an output', () => {
+      const amount = [{ unit: 'lovelace', quantity: '5' }];
+      const inputs = [
+        { address: 'a', amount, txHash: 'h1', outputIndex: 0, spentTxSeq: 7 },
+        { address: 'b', amount, txHash: 'h2', outputIndex: 1, spentTxSeq: null },
+      ] as never;
+      expect(mapTransactionInputs(42, inputs).map(r => r.spentTxSeq)).toEqual([null, null]);
+      expect(mapTransactionInputAssets(42, inputs).map(r => r.input_inputIndex)).toEqual([0, 1]);
+    });
+
     it('should return empty array when input.amount is undefined', () => {
       const result = mapTransactionInputAssets(42, [
         { txHash: 'def456', outputIndex: 0, address: 'addr_test1...', amount: undefined as any },
@@ -231,7 +251,8 @@ describe('mappers', () => {
       expect(result.slot).toBeNull();
       expect(result.txIndex).toBeNull();
       expect(result.fee).toBe('0');
-      expect(result.deposit).toBe('0');
+      // unknown stays unknown: a 0 would read as "no deposit"
+      expect(result.deposit).toBeNull();
       expect(result.size).toBeNull();
       expect(result.hasInputs).toBe(false);
       expect(result.hasOutputs).toBe(false);
@@ -252,6 +273,14 @@ describe('mappers', () => {
         `{"int":${huge},"nested":[1,{"negative":${-huge}}]}`
       );
       expect(row.payload).not.toContain(`"${huge}"`);
+    });
+
+    it('carries the chain position when given and leaves the column out otherwise', () => {
+      const labels = [{ txHash: 'abc123', label: '674', json: { msg: ['hi'] } as never }];
+
+      expect(mapTransactionMetadata(labels, 7 * 65536 + 3)[0]).toMatchObject({ tx_hash: 'abc123', label: '674', txSeq: 7 * 65536 + 3 });
+      expect(mapTransactionMetadata(labels)[0]).not.toHaveProperty('txSeq');
+      expect(mapTransactionMetadata(labels, null)[0]).not.toHaveProperty('txSeq');
     });
   });
 
@@ -815,6 +844,21 @@ describe('ledgerView — the same transaction rows whichever source reported it'
       expect(t.outputs).toEqual(chainSync.outputs);
       expect(t.mint).toBeUndefined();
     }
+  });
+
+  it('keeps certificates and withdrawals of a valid transaction and none of a failed one', () => {
+    const declared = {
+      certificates: [{ certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake1', poolId: 'pool1' }],
+      withdrawals: [{ stakeAddress: 'stake1', amount: '5' }],
+    };
+    const collateral = { inputs: [inp('c', 0, { isCollateral: true })], outputs: [out(2, true)] };
+    const valid = ledgerView({ ...base, ...declared, spendsCollaterals: false, inputs: [inp('a', 0)], outputs: [out(0, false)] });
+    expect(valid).toMatchObject(declared);
+    expect(ledgerView({ ...base, ...declared, ...collateral, spendsCollaterals: true })).toMatchObject({ certificates: [], withdrawals: [] });
+    // a source that reports neither stays recognisable as such
+    const unreported: Transaction = ledgerView({ ...base, ...collateral, spendsCollaterals: true });
+    expect(unreported.certificates).toBeUndefined();
+    expect(unreported.withdrawals).toBeUndefined();
   });
 
   it('drops the collateral return of a valid transaction and sorts every input class', () => {

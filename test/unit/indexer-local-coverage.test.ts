@@ -112,6 +112,9 @@ vi.mock('#cds-models/CardanoSignService', () => ({
 
 let cursor: Record<string, unknown> | null = null;
 let leaseActive = true;
+const fetchPoolMetadata = vi.fn();
+vi.mock('../../srv/blockchain/pool-metadata', () => ({ fetchPoolMetadata: (...args: unknown[]) => fetchPoolMetadata(...args) }));
+
 vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   setUtxoSetState: vi.fn(async () => undefined),
   readCursor: vi.fn(async () => cursor),
@@ -159,7 +162,8 @@ const upserted = (entity: string) => runs.find(q => q._op === 'UPSERT' && q.enti
 beforeEach(() => {
   runs.length = 0;
   dbRuns.length = 0;
-  epochTotals = { blockCount: 4, txCount: '9', fees: '1700000', firstBlockTime: '1790380806', lastBlockTime: '1790467100' };
+  // first and last crawled slot of the epoch; preview time = 1666656000 + slot
+  epochTotals = { blockCount: 4, txCount: '9', fees: '1700000', firstSlot: '123638406', lastSlot: 123_724_700 };
   mockTx.run.mockClear();
   cursor = synced();
   leaseActive = true;
@@ -206,6 +210,60 @@ describe('pool block counts from crawled blocks', () => {
     const { indexer } = makeIndexer();
     await indexer.indexPool(mockTx as never, POOL);
     expect(upserted('Pools')).toMatchObject({ blocksEpoch: null, blocksMinted: 5 });
+  });
+});
+
+describe('pool metadata from the registered file', () => {
+  const FILE = { name: 'Stake Nuts', ticker: 'NUTS', homepage: 'https://stakenuts.example', description: 'The best pool ever' };
+  const registered = { metadataUrl: 'https://pool.example/p.json', metadataHash: 'ab'.repeat(32) };
+  const withPool = (extra: Record<string, unknown>) => {
+    const made = makeIndexer();
+    const base = made.client.getPool;
+    made.client.getPool = vi.fn(async () => ({ ...(await base()), ...extra }));
+    return made;
+  };
+
+  beforeEach(() => fetchPoolMetadata.mockReset());
+
+  it('loads the file once per hash when the switch is on', async () => {
+    fetchPoolMetadata.mockResolvedValue(FILE);
+    const { indexer } = withPool(registered);
+    indexer.setPoolMetadataFetch(true);
+
+    await indexer.indexPool(mockTx as never, POOL);
+    expect(fetchPoolMetadata).toHaveBeenCalledWith(registered.metadataUrl, registered.metadataHash);
+    expect(upserted('Pools')).toMatchObject({ ...registered, ...FILE });
+
+    await indexer.indexPool(mockTx as never, POOL);
+    expect(fetchPoolMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it('stores the pool without the fields when the file cannot be used, and asks again next time', async () => {
+    fetchPoolMetadata.mockResolvedValue(null);
+    const { indexer } = withPool(registered);
+    indexer.setPoolMetadataFetch(true);
+
+    await indexer.indexPool(mockTx as never, POOL);
+    expect(upserted('Pools')).toMatchObject({ ...registered, name: null, ticker: null });
+    await indexer.indexPool(mockTx as never, POOL);
+    expect(fetchPoolMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it('loads nothing while the switch is off, for a pool the backend already named, or without a registered file', async () => {
+    const off = withPool(registered);
+    await off.indexer.indexPool(mockTx as never, POOL);
+
+    runs.length = 0;
+    const named = withPool({ ...registered, ...FILE });
+    named.indexer.setPoolMetadataFetch(true);
+    await named.indexer.indexPool(mockTx as never, POOL);
+    expect(upserted('Pools')).toMatchObject(FILE);
+
+    const bare = withPool({ metadataUrl: null, metadataHash: null });
+    bare.indexer.setPoolMetadataFetch(true);
+    await bare.indexer.indexPool(mockTx as never, POOL);
+
+    expect(fetchPoolMetadata).not.toHaveBeenCalled();
   });
 });
 
@@ -265,7 +323,7 @@ describe('crawl epoch rows from crawled blocks', () => {
 
     expect(dbRuns[0].where).toEqual({ epochNumber: EPOCH });
     expect(epochRow(indexer)).toEqual({
-      epoch: EPOCH, startTime: 1, endTime: 2, firstBlockTime: 1790380806, lastBlockTime: 1790467100,
+      epoch: EPOCH, startTime: 1, endTime: 2, firstBlockTime: 1790294406, lastBlockTime: 1790380700,
       blockCount: 4, txCount: 9, output: '555', fees: '1700000', activeStake: '777',
     });
   });
@@ -279,7 +337,7 @@ describe('crawl epoch rows from crawled blocks', () => {
     expect(epochRow(indexer)).toEqual({
       epoch: EPOCH, startTime: 1666656000 + 123_638_400, endTime: 1666656000 + 123_724_800,
       output: null, activeStake: null,
-      blockCount: 4, txCount: 9, fees: '1700000', firstBlockTime: 1790380806, lastBlockTime: 1790467100,
+      blockCount: 4, txCount: 9, fees: '1700000', firstBlockTime: 1790294406, lastBlockTime: 1790380700,
     });
   });
 
@@ -614,6 +672,35 @@ describe('crawled chain as the authority (crawler.authoritative)', () => {
   });
 });
 
+describe('backfillEpochs', () => {
+  it('writes the totals of every fully crawled epoch, into the row it has or into a new one', async () => {
+    // the crawl starts ten slots before epoch 1430: 1429 is not covered in full, 1430 to 1432 are
+    cursor = synced({ startSlot: 1430 * 86_400 - 10 });
+    answer = (q) => (q._op === 'SELECT.one' && q.entity === 'Epoch' ? ((q.where as { epoch: number }).epoch === 1430 ? { epoch: 1430 } : null) : undefined);
+    const { indexer } = makeIndexer();
+    const seen: number[] = [];
+
+    const r = await indexer.backfillEpochs((p) => seen.push(p.atEpoch));
+
+    expect(r).toEqual({ atEpoch: 1432, toEpoch: 1432, updated: 1, created: 2 });
+    expect(seen).toEqual([1429, 1430, 1431, 1432]);
+    expect(runs.filter(q => q._op === 'UPDATE' && q.entity === 'Epoch')).toHaveLength(1);
+    const created = runs.filter(q => q._op === 'INSERT' && q.entity === 'Epoch').map(q => q.entries as Record<string, unknown>);
+    expect(created.map(e => e.epoch)).toEqual([1431, 1432]);
+    // a new row carries the slot-derived bounds and the totals of the crawled blocks
+    expect(created[0]).toMatchObject({
+      startTime: 1666656000 + 1431 * 86_400, endTime: 1666656000 + 1432 * 86_400, output: null, activeStake: null,
+      blockCount: 4, txCount: 9, fees: '1700000', firstBlockTime: 1790294406, lastBlockTime: 1790380700,
+    });
+  });
+
+  it('does nothing without a crawl', async () => {
+    cursor = null;
+    const { indexer } = makeIndexer();
+    expect(await indexer.backfillEpochs()).toEqual({ atEpoch: 0, toEpoch: 0, updated: 0, created: 0 });
+  });
+});
+
 describe('transaction confirmations', () => {
   const TX = 'c'.repeat(64);
   const BLOCK = 'd'.repeat(64);
@@ -630,26 +717,27 @@ describe('transaction confirmations', () => {
     const made = makeIndexer();
     const getLatestBlock = vi.fn(async () => ({ height }));
     Object.assign(made.client, { getLatestBlock });
-    const indexTransaction = vi.spyOn(made.indexer, 'indexTransaction');
-    return { ...made, getLatestBlock, indexTransaction };
+    const fetchTransaction = vi.spyOn(made.indexer, 'fetchTransaction');
+    const storeTransaction = vi.spyOn(made.indexer, 'storeTransaction').mockResolvedValue({} as never);
+    return { ...made, getLatestBlock, fetchTransaction, storeTransaction };
   };
 
   it('counts a crawled transaction against the crawler tip without a provider call', async () => {
     stored(100);
     cursor = synced({ tipHeight: 104 });
-    const { indexer, getLatestBlock, indexTransaction } = withTip(999);
+    const { indexer, getLatestBlock, fetchTransaction } = withTip(999);
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toEqual({ txHash: TX, blockHeight: 100, tipHeight: 104, confirmations: 5 });
     expect(getLatestBlock).not.toHaveBeenCalled();
-    expect(indexTransaction).not.toHaveBeenCalled();
+    expect(fetchTransaction).not.toHaveBeenCalled();
   });
 
   it('asks the backends for a stored row whose block the crawler does not hold', async () => {
     stored(100, TIP_SLOT - 100, false);
     cursor = synced({ tipHeight: 104 });
-    const { indexer, indexTransaction } = withTip(103);
-    indexTransaction.mockResolvedValue({ blockHeight: 102 } as never);
+    const { indexer, fetchTransaction } = withTip(103);
+    fetchTransaction.mockResolvedValue({ blockHeight: 102 } as never);
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toEqual({ txHash: TX, blockHeight: 102, tipHeight: 103, confirmations: 2 });
@@ -658,8 +746,8 @@ describe('transaction confirmations', () => {
   it('answers 0 when a stored row was rolled back and no backend knows the tx any more', async () => {
     stored(100, TIP_SLOT - 100, false);
     cursor = null;
-    const { indexer, indexTransaction } = withTip(110);
-    indexTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
+    const { indexer, fetchTransaction } = withTip(110);
+    fetchTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toEqual({ txHash: TX, blockHeight: null, tipHeight: null, confirmations: 0 });
@@ -668,8 +756,8 @@ describe('transaction confirmations', () => {
   it('takes height and tip from the backends for a tx newer than the crawled range', async () => {
     stored(104, TIP_SLOT + 60);
     cursor = synced({ tipHeight: 103 });
-    const { indexer, indexTransaction } = withTip(106);
-    indexTransaction.mockResolvedValue({ blockHeight: 104 } as never);
+    const { indexer, fetchTransaction } = withTip(106);
+    fetchTransaction.mockResolvedValue({ blockHeight: 104 } as never);
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toMatchObject({ tipHeight: 106, confirmations: 3 });
@@ -678,16 +766,16 @@ describe('transaction confirmations', () => {
   it('takes height and tip from the backends while the crawler is not synced', async () => {
     stored(100);
     cursor = synced({ syncStatus: 'syncing', tipHeight: 104 });
-    const { indexer, indexTransaction } = withTip(101);
-    indexTransaction.mockResolvedValue({ blockHeight: 100 } as never);
+    const { indexer, fetchTransaction } = withTip(101);
+    fetchTransaction.mockResolvedValue({ blockHeight: 100 } as never);
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toMatchObject({ tipHeight: 101, confirmations: 2 });
   });
 
   it('answers 0 for a transaction no source knows', async () => {
-    const { indexer, getLatestBlock, indexTransaction } = withTip(100);
-    indexTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
+    const { indexer, getLatestBlock, fetchTransaction } = withTip(100);
+    fetchTransaction.mockRejectedValue(new NotFoundError(`Transaction ${TX}`));
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX))
       .resolves.toEqual({ txHash: TX, blockHeight: null, tipHeight: null, confirmations: 0 });
@@ -695,9 +783,19 @@ describe('transaction confirmations', () => {
   });
 
   it('passes a provider failure on instead of answering 0', async () => {
-    const { indexer, indexTransaction } = withTip(100);
-    indexTransaction.mockRejectedValue(new ProviderUnavailableError('down'));
+    const { indexer, fetchTransaction } = withTip(100);
+    fetchTransaction.mockRejectedValue(new ProviderUnavailableError('down'));
 
     await expect(indexer.resolveTransactionConfirmations(mockTx as never, TX)).rejects.toBeInstanceOf(ProviderUnavailableError);
+  });
+
+  it('reads the tip before it stores the transaction', async () => {
+    const { indexer, getLatestBlock, fetchTransaction, storeTransaction } = withTip(103);
+    fetchTransaction.mockResolvedValue({ blockHeight: 102 } as never);
+
+    await indexer.resolveTransactionConfirmations(mockTx as never, TX);
+
+    expect(storeTransaction).toHaveBeenCalledTimes(1);
+    expect(getLatestBlock.mock.invocationCallOrder[0]).toBeLessThan(storeTransaction.mock.invocationCallOrder[0]);
   });
 });

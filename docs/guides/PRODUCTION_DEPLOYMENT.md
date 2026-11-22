@@ -18,12 +18,12 @@
 
 ## Pre-Deployment Checklist
 
-- [ ] **Node >= 22.5** and **@sap/cds >= 10** on the target runtime (hard requirements)
+- [ ] **Node >= 22.5** and **@sap/cds 10** on the target runtime (hard requirements)
 - [ ] **`cds deploy` run** when upgrading from 1.x — 2.0 adds `CardanoSyncState`, `CardanoReorgLog`,
       `CardanoWorkerWallets`, `CardanoWalletJobs` plus a `dedupKey` column with a unique constraint
 - [ ] `HSM_REQUIRES_ROLE` set whenever `HSM_ENABLED=true` — startup throws `ConfigError` without it
-- [ ] `CardanoAdmin` role collection assigned to operators who control the crawler / worker
-      (`$XSAPPNAME.Admin` is deliberately NOT part of `CardanoUser`)
+- [ ] Role collections assigned: `CardanoReader` reads, `CardanoUser` also builds, submits and signs,
+      `CardanoAdmin` also operates the crawler, the worker and agent grants. A user without a role gets 403
 - [ ] `NETWORK` set to target network (`mainnet`, `preview`, `preprod`)
 - [ ] `BACKENDS` specifies at least one provider
 - [ ] `KOIOS_API_KEY` set if the Koios public-tier rate limit is too low (optional)
@@ -52,7 +52,6 @@
 | `NETWORK` | Yes | `preview` | `mainnet` | Target Cardano network |
 | `BACKENDS` | Yes | `koios` | `ogmios,koios` | Comma-separated backend providers (order = priority) |
 | `NODE_ENV` | Yes | `development` | `production` | Activates HANA + XSUAA profiles |
-| `TX_BUILDERS` | No | `buildooor` | — | Deprecated/ignored — Buildooor is the sole builder |
 | `PORT` | No | `4004` | `4004` | HTTP server port |
 | `DEBUG` | No | – | – | Comma-separated `cds.log` module names logged at debug level |
 
@@ -118,8 +117,6 @@ WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
 
 Both subsystems run continuously once enabled and consume backend requests on their own
 schedule — factor that into rate-limit and cost planning, and prefer Ogmios for the crawler.
-`TX_BUILDERS` is intentionally absent: Buildooor has been the only builder since 1.8.0 and the
-variable is ignored.
 
 ---
 ## SAP BTP Cloud Foundry Deployment
@@ -223,7 +220,7 @@ resources:
   "role-templates": [
     { "name": "CardanoReader", "description": "Read Cardano blockchain data", "scope-references": ["$XSAPPNAME.Read"] },
     { "name": "CardanoUser", "description": "Read, build/submit and sign Cardano transactions (no operational admin)", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"] },
-    { "name": "CardanoAdmin", "description": "Operate the ODATANO chain crawler and wallet worker", "scope-references": ["$XSAPPNAME.Admin"] }
+    { "name": "CardanoAdmin", "description": "Everything a CardanoUser may, and operate the chain crawler, the wallet worker and agent grants", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign", "$XSAPPNAME.Admin"] }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
@@ -285,7 +282,7 @@ cf deploy mta_archives/odatano_2.0.0.mtar -e prod.mtaext
 ### Environment Variables (`odatano-srv`)
 
 `mta.yaml` declares the blockchain env vars as module `properties:` (`NETWORK`,
-`BACKENDS` = `koios`, `TX_BUILDERS`, `HSM_ENABLED`). API keys are not in `mta.yaml` and
+`BACKENDS` = `koios`, `HSM_ENABLED`). API keys are not in `mta.yaml` and
 never belong there, since it is committed to git. `KOIOS_API_KEY` is optional; with
 `blockfrost` in `BACKENDS`, `BLOCKFROST_API_KEY` is required. There are two ways to supply values:
 
@@ -341,6 +338,14 @@ cf html5-list -di odatano-destination-service -u  # List HTML5 apps
 ---
 
 ## Database Configuration
+
+### Which database for what
+
+| Database | Use | State |
+|---|---|---|
+| SQLite | Development, and a single instance without the crawler | The default. One connection, so one transaction at a time; a read that waits for a backend holds none. `Decimal` values above 2^53 lose precision (see "SQLite precision" in the User Guide). |
+| PostgreSQL | The crawler, the crawler-fed UTxO set, the backfills, the wallet worker, several instances | The database the crawler and the UTxO set are operated on, on preview, preprod and mainnet. |
+| SAP HANA | The BTP deployment (`NODE_ENV=production`): reads with lazy indexing, transaction building, signing | The crawler, the UTxO set, the backfills, the wallet worker and agent grants have not been tested on HANA. The secondary indexes ODATANO creates at start are skipped there. |
 
 ### SQLite (Development / Docker)
 

@@ -89,6 +89,13 @@ Transaction with same hash already exists on chain or in mempool.
 - **Example**: Duplicate submission of same transaction
 - **Result**: Idempotent - transaction already processed
 
+#### 11a. `SubmitOutcomeUnknownError` (503)
+
+A submit failed without a verdict from the node: timeout, outage, rate limit, or a refusal whose chain lookup failed.
+- **Error Code**: `ODATANO_SUBMIT_OUTCOME_UNKNOWN`
+- **Result**: The transaction may still reach the chain. The signing request stays `submitting`, the submission `pending`, and the server resolves it
+- **Fix**: Read the status before sending a replacement
+
 #### 12. `MixedAssetsError` (400)
 
 UTxO contains non-ADA assets when ADA-only transaction was requested.
@@ -133,7 +140,7 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | Code | HTTP | Description |
 |------|------|-------------|
 | `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid transaction hash, missing fields |
-| `ODATANO_FORBIDDEN` | 403 | Authenticated, but missing the required role — HSM signing paths and `SubmitWalletJob` against an HSM-backed wallet enforce `hsm.requiresRole` |
+| `ODATANO_FORBIDDEN` | 403 | Authenticated, but missing the required role — HSM signing paths enforce `hsm.requiresRole`; `SubmitWalletJob` enforces the wallet's `requiresRole` and, on an HSM-backed wallet, `hsm.requiresRole` |
 | `ODATANO_NOT_FOUND` | 404 | Resource not found on blockchain |
 | `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds/assets for transaction |
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | Transaction failed protocol validation |
@@ -141,13 +148,14 @@ All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATAN
 | `ODATANO_CHAIN_POINT_MISMATCH` | 409 | `GetNextBlocks`: the cursor block is not on this instance's chain (orphaned by a reorg); message starts with `CHAIN_POINT_MISMATCH:` |
 | `ODATANO_PROVIDER_RATE_LIMITED` | 429 | Backend rate limit exceeded |
 | `ODATANO_PROVIDER_UNAVAILABLE` | 503 | Backend temporarily unavailable |
+| `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | A submit got no verdict from the node; the record stays open (`submitting` / `pending`) and the server resolves it |
 | `ODATANO_INTERNAL_ERROR` | 500 | Unexpected internal error (fallback) |
 | `ODATANO_HSM_UNAVAILABLE` | 503 | HSM device or session not available |
 | `ODATANO_HSM_SIGNING_FAILED` | 500 | HSM signing operation failed |
 | `ODATANO_HSM_NOT_CONFIGURED` | 400 | HSM signing requested but not configured |
 | `ODATANO_TX_PARSE_FAILED` | 400 | Transaction CBOR could not be decoded (malformed/truncated) |
 | `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | Ledger rejected the tx in phase-2 script evaluation |
-| `ODATANO_NESTED_TX_TIMEOUT` | 503 | A detached bookkeeping transaction could not acquire a pooled connection (see KNOWN_ISSUES #11) |
+| `ODATANO_NESTED_TX_TIMEOUT` | 503 | A submit action called from a handler whose own transaction holds the database connection got none of its own within 10 seconds (see "From your own CAP handler: `deferSubmit`" in the User Guide) |
 
 ### Failures that are deliberately NOT surfaced as errors
 

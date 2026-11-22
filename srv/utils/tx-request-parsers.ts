@@ -111,7 +111,8 @@ export function parseExtraOutputs(
 /** Entries keep their order. `outputsJson` also accepts `datumHash`. */
 export function parseOutputList(
   json: string | undefined,
-  fieldName: 'extraOutputsJson' | 'outputsJson'
+  fieldName: 'extraOutputsJson' | 'outputsJson',
+  maxEntries = MAX_EXTRA_OUTPUTS
 ): { parsed?: ParsedExtraOutput[]; error?: string } {
   if (!json) return { parsed: undefined };
   const name = fieldName.replace(/Json$/, '');
@@ -119,8 +120,8 @@ export function parseOutputList(
   if (!jsonResult.valid) return { error: jsonResult.error! };
   if (!Array.isArray(jsonResult.parsed)) return { error: `${fieldName} must be a JSON array` };
   if (jsonResult.parsed.length === 0) return { parsed: undefined };
-  if (jsonResult.parsed.length > MAX_EXTRA_OUTPUTS) {
-    return { error: `${fieldName} exceeds maximum of ${MAX_EXTRA_OUTPUTS} entries` };
+  if (jsonResult.parsed.length > maxEntries) {
+    return { error: `${fieldName} exceeds maximum of ${maxEntries} entries` };
   }
 
   const out: ParsedExtraOutput[] = [];

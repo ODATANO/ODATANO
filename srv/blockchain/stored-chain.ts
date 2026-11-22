@@ -225,7 +225,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
       slot: num(t.slot),
       index: num(t.txIndex),
       fee: str(t.fee ?? '0'),
-      deposit: str(t.deposit ?? '0'),
+      deposit: t.deposit == null ? null : str(t.deposit),
       size: numOrNull(t.size),
       blockTime: num(t.blockTime),
       spendsCollaterals,

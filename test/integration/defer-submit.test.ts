@@ -1,14 +1,15 @@
 /**
  * Deferred submit: with deferSubmit the verify + claim run on the caller's transaction,
  * the action returns the tx hash at once and the network submit runs after the caller's
- * commit. Interrupted submissions are re-driven at boot from the persisted signed CBOR.
+ * commit. A refused transaction ends as 'failed'. A submit without a verdict stays
+ * 'submitting' and is resolved later from the persisted signed CBOR.
  */
 
 import cds from '@sap/cds';
 // Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext, shutdownAppContext, getCardanoClient } =
   require('../../srv/server') as typeof import('../../srv/server');
-const { TransactionAlreadySubmittedError, ProviderUnavailableError } =
+const { TransactionAlreadySubmittedError, ProviderUnavailableError, TransactionValidationError, NotFoundError } =
   require('../../srv/utils/errors') as typeof import('../../srv/utils/errors');
 const { redriveInterruptedSubmissions } =
   require('../../srv/blockchain/signing/submission-finalizer') as typeof import('../../srv/blockchain/signing/submission-finalizer');
@@ -21,7 +22,6 @@ vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'buildooor';
 
 /** Poll the signing request row until it leaves 'submitting' (deferred submit ran). */
 async function waitForStatus(signingRequestId: string, expected: string[], timeoutMs = 8000): Promise<string> {
@@ -36,6 +36,12 @@ async function waitForStatus(signingRequestId: string, expected: string[], timeo
     await new Promise((r) => setTimeout(r, 100));
   }
   return status;
+}
+
+/** The node refuses the transaction and no backend has it on chain. */
+function refuseSubmit(reason: string) {
+  vi.spyOn(getCardanoClient(), 'getTransaction').mockRejectedValue(new NotFoundError('Transaction', 'koios'));
+  return vi.spyOn(getCardanoClient(), 'submitTransaction').mockRejectedValue(new TransactionValidationError(reason, undefined));
 }
 
 describe('deferred submit', () => {
@@ -149,12 +155,11 @@ describe('deferred submit', () => {
     expect(row?.status).to.equal('pending');
   });
 
-  it('marks the request failed when the deferred network submit fails', async () => {
+  it('marks the request failed when the node refuses the deferred submit', async () => {
     const signingRequestId = await createSigningRequest();
     const signSrv = await cds.connect.to('CardanoSignService');
 
-    vi.spyOn(getCardanoClient(), 'submitTransaction')
-      .mockRejectedValue(new ProviderUnavailableError('node down', 'koios'));
+    refuseSubmit('ValueNotConserved');
 
     const result = await cds.tx(async (tx: cds.Transaction) => {
       await tx.run(SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId }));
@@ -170,6 +175,44 @@ describe('deferred submit', () => {
     expect(status).to.equal('failed');            // durable although the caller succeeded
   });
 
+  it('keeps the request submitting when the submit gets no verdict, and resolves it on the next pass', async () => {
+    const signingRequestId = await createSigningRequest();
+    const signSrv = await cds.connect.to('CardanoSignService');
+
+    const lookup = vi.spyOn(getCardanoClient(), 'getTransaction')
+      .mockRejectedValue(new NotFoundError('Transaction', 'koios'));
+    const submit = vi.spyOn(getCardanoClient(), 'submitTransaction')
+      .mockRejectedValue(new ProviderUnavailableError('node down', 'koios'));
+
+    await signSrv.send('SubmitVerifiedTransaction', {
+      signingRequestId,
+      signedTxCbor: TEST_FIXTURES.witnessSetCbor,
+      deferSubmit: true,
+    });
+
+    // The deferred attempt ends with the chain lookup; give its cleanup a moment.
+    const deadline = Date.now() + 8000;
+    while (lookup.mock.calls.length === 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    await new Promise((r) => setTimeout(r, 300));
+
+    const open = await cds.run(
+      SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId })
+    ) as { status?: string; signedTxCbor?: string };
+    expect(open?.status).to.equal('submitting');
+    expect(open?.signedTxCbor).to.be.a('string').and.not.equal('');
+
+    // The node is back: the same signed transaction goes out again.
+    submit.mockResolvedValue(TEST_FIXTURES.txBodyHash);
+    const attempted = await redriveInterruptedSubmissions();
+    expect(attempted).to.equal(1);
+    expect(submit.mock.calls.length).to.equal(2);
+
+    const resolved = await cds.run(
+      SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId })
+    ) as { status?: string };
+    expect(resolved?.status).to.equal('submitted');
+  });
+
   it('re-drives an interrupted deferred submission at boot (idempotent via already-submitted)', async () => {
     const signingRequestId = await createSigningRequest();
 
@@ -178,10 +221,9 @@ describe('deferred submit', () => {
     const signSrv = await cds.connect.to('CardanoSignService');
     const fullSignedTxCbor = await (async () => {
       // Produce the combined CBOR the claim would have persisted by running
-      // the normal defer flow with a submit that never happens (spy throws a
-      // non-already-submitted error → row 'failed'), then reset the row.
-      vi.spyOn(getCardanoClient(), 'submitTransaction')
-        .mockRejectedValue(new ProviderUnavailableError('crash-window sim', 'koios'));
+      // the normal defer flow with a submit the node refuses (row 'failed'),
+      // then reset the row.
+      refuseSubmit('crash-window sim');
       await signSrv.send('SubmitVerifiedTransaction', {
         signingRequestId,
         signedTxCbor: TEST_FIXTURES.witnessSetCbor,

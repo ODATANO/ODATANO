@@ -17,7 +17,7 @@ if (!(cds.env.requires as Record<string, unknown>).kinds) {
   (cds.env.requires as { kinds?: Record<string, unknown> }).kinds = {};
 }
 
-/** The schema and the six CDS services this package ships, package-qualified. */
+/** The schema and the seven CDS services this package ships, package-qualified. */
 const PLUGIN_MODEL = [
   '@odatano/core/db/schema',
   '@odatano/core/srv/cardano-service',
@@ -25,7 +25,8 @@ const PLUGIN_MODEL = [
   '@odatano/core/srv/cardano-sign-service',
   '@odatano/core/srv/cardano-indexer-service',
   '@odatano/core/srv/cardano-worker-service',
-  '@odatano/core/srv/cardano-agent-service'
+  '@odatano/core/srv/cardano-agent-service',
+  '@odatano/core/srv/cardano-backend-service'
 ];
 
 /** Relative `@impl` values used in the CDS files (rewritten in plugin mode, see below). */
@@ -35,7 +36,8 @@ const IMPL_PATHS = [
   'srv/cardano-sign-service',
   'srv/cardano-indexer-service',
   'srv/cardano-worker-service',
-  'srv/cardano-agent-service'
+  'srv/cardano-agent-service',
+  'srv/cardano-backend-service'
 ];
 
 (cds.env.requires as { kinds?: Record<string, unknown> }).kinds!['odatano-core'] = {
@@ -57,10 +59,6 @@ logger.debug('Plugin registered');
 (require('../srv/utils/agent-grants-config') as typeof import('../srv/utils/agent-grants-config'))
   .activateAgentGrants();
 
-// The old path of the read service keeps answering until the 2.0.0 release.
-(require('../srv/utils/legacy-service-paths') as typeof import('../srv/utils/legacy-service-paths'))
-  .registerLegacyServicePaths();
-
 // In plugin mode relative @impl paths resolve from the consumer app.
 // Rewrite them to package-qualified paths that Node can resolve.
 cds.on('loaded', (model) => {
@@ -79,7 +77,7 @@ cds.on('served', async () => {
   if (initialized) return;
 
   // SKIP_AUTO_INIT lets consumer test suites mount the plugin without backend connections.
-  if (process.env.SKIP_AUTO_INIT === 'true') {
+  if ((require('../srv/config') as typeof import('../srv/config')).autoInitSkipped()) {
     logger.info('Skipping plugin auto-initialization (SKIP_AUTO_INIT=true)');
     return;
   }

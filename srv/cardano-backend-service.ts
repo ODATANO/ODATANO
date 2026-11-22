@@ -1,6 +1,8 @@
 import cds, { Request } from '@sap/cds';
 import { stringifyJson } from './utils/deep-json';
 import { handleRequest } from './utils/backend-request-handler';
+import { readOutside } from './utils/tx-utils';
+import { answerNumbersAsText } from './utils/result-numbers';
 import { rejectInvalid, rejectMissing, ProviderUnavailableError, ChainPointMismatchError } from './utils/errors';
 import {
   isTxHash,
@@ -36,7 +38,9 @@ type Db = Parameters<Parameters<typeof handleRequest>[1]>[0];
 
 // Provider-shaped answers for another ODATANO instance. Stored blocks and txs come from the index.
 // The rest goes through the indexer's resolvers. Answers are JSON strings so big integers survive.
+// Nothing is written here, so every database read runs outside the request transaction.
 module.exports = (srv: cds.Service) => {
+  answerNumbersAsText(srv);
   const client = () => getCardanoClient();
   const indexer = () => getCardanoIndexer();
 
@@ -73,20 +77,20 @@ module.exports = (srv: cds.Service) => {
 
   // --- blocks and transactions -------------------------------------------------------------------
   op('GetTransaction', async ({ hash }, db) => {
-    const stored = (await readTransactionsByHash(db, [String(hash)])).get(String(hash));
+    const stored = (await readOutside(db, (d) => readTransactionsByHash(d, [String(hash)]))).get(String(hash));
     if (stored && !lacksOutpoints(stored)) return stored;
     if (stored) {
       // An old row without input outpoints: the backend's copy when one can serve it
       if (!client().hasBackendFor('getTransaction')) return stored;
       return client().getTransaction(String(hash)).catch(() => stored);
     }
-    await indexer().refuseOutsideCrawl(db, 'getTransaction', `Transaction ${hash}`);
+    await readOutside(db, (d) => indexer().refuseOutsideCrawl(d, 'getTransaction', `Transaction ${hash}`));
     return client().getTransaction(String(hash));
   }, need(isTxHash, 'hash', 'transaction hash'));
 
   op('GetTransactionsBatch', async ({ hashes }, db) => {
     const wanted = hashes as string[];
-    const found = await readTransactionsByHash(db, wanted);
+    const found = await readOutside(db, (d) => readTransactionsByHash(d, wanted));
     const absent = wanted.filter(h => !found.has(h));
     // old rows without input outpoints: the backend's copy replaces them when it has one
     const stale = wanted.filter(h => found.has(h) && lacksOutpoints(found.get(h)!));
@@ -104,21 +108,21 @@ module.exports = (srv: cds.Service) => {
   }, jsonList('hashes', isTxHash, 'transaction hashes'));
 
   op('GetTransactionMetadata', async ({ hash }, db) => {
-    const stored = await readTransactionMetadata(db, String(hash));
+    const stored = await readOutside(db, async (d) =>
+      (await readTransactionMetadata(d, String(hash))) ?? (await indexer().refuseOutsideCrawl(d, 'getTransactionMetadata', `Transaction ${hash}`), null));
     if (stored) return stored;
-    await indexer().refuseOutsideCrawl(db, 'getTransactionMetadata', `Transaction ${hash}`);
     return client().getTransactionMetadata(String(hash));
   }, need(isTxHash, 'hash', 'transaction hash'));
 
   op('GetBlock', async ({ hash }, db) => {
-    const stored = await readBlock(db, String(hash));
+    const stored = await readOutside(db, async (d) =>
+      (await readBlock(d, String(hash))) ?? (await indexer().refuseOutsideCrawl(d, 'getBlock', `Block ${hash}`), null));
     if (stored) return stored;
-    await indexer().refuseOutsideCrawl(db, 'getBlock', `Block ${hash}`);
     return client().getBlock(String(hash));
   }, need(isBlockHash, 'hash', 'block hash'));
 
   op('GetBlockByHeight', async ({ height }, db) => {
-    const stored = await readBlockByHeight(db, Number(height));
+    const stored = await readOutside(db, (d) => readBlockByHeight(d, Number(height)));
     if (stored) return stored;
     const paging = client().getPaginatingBackend();
     if (!paging) throw new ProviderUnavailableError(`Block at height ${height} is not indexed here`, 'odatano');
@@ -127,15 +131,16 @@ module.exports = (srv: cds.Service) => {
 
   op('GetNextBlocks', async ({ afterHash, count, afterHeight }, db) => {
     const n = count == null ? 1 : Number(count);
-    const anchor = await readBlock(db, String(afterHash));
-    if (anchor?.height != null) {
-      const next = await readNextBlocks(db, anchor.height, n);
-      if (next.length) return next;
-    }
+    const { anchor, next, canonical } = await readOutside(db, async (d) => {
+      const anchor = await readBlock(d, String(afterHash));
+      const next = anchor?.height != null ? await readNextBlocks(d, anchor.height, n) : [];
+      const orphaned = !next.length && !anchor && afterHeight != null;
+      return { anchor, next, canonical: orphaned ? await readBlockByHeight(d, Number(afterHeight)) : null };
+    });
+    if (next.length) return next;
     // Unknown cursor block where this chain has another block at that height: the caller's
     // cursor was orphaned. The crawler recognises this prefix and enters reorg recovery.
     if (!anchor && afterHeight != null) {
-      const canonical = await readBlockByHeight(db, Number(afterHeight));
       if (canonical) {
         throw new ChainPointMismatchError(
           `CHAIN_POINT_MISMATCH: cursor block ${afterHash} at height ${afterHeight} is no longer canonical (canonical block: ${canonical.hash})`,
@@ -160,7 +165,7 @@ module.exports = (srv: cds.Service) => {
   }, need(isBlockHash, 'afterHash', 'block hash'));
 
   op('GetBlockTransactions', async ({ blockHash }, db) => {
-    const stored = await readBlockTransactions(db, String(blockHash));
+    const stored = await readOutside(db, (d) => readBlockTransactions(d, String(blockHash)));
     if (stored) return stored;
     const paging = client().getPaginatingBackend();
     if (!paging) throw new ProviderUnavailableError(`Transactions of block ${blockHash} are not indexed here`, 'odatano');
@@ -180,7 +185,7 @@ module.exports = (srv: cds.Service) => {
     indexer().resolveAddressTransactionHashes(db, String(data.address), limitOf(data, 10)), address);
   op('GetAddressTransactions', async (data, db) => {
     const hashes = await indexer().resolveAddressTransactionHashes(db, String(data.address), limitOf(data, 10));
-    const found = await readTransactionsByHash(db, hashes);
+    const found = await readOutside(db, (d) => readTransactionsByHash(d, hashes));
     const missing = hashes.filter(h => !found.has(h));
     if (missing.length) for (const [h, t] of await client().getTransactionsBatch(missing)) found.set(h, t);
     return hashes.map(h => found.get(h)).filter(Boolean);

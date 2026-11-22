@@ -40,6 +40,7 @@ function stubDeps() {
     submitTransaction: vi.fn(async () => TX_HASH),
     getTransaction: vi.fn(async () => ({ hash: TX_HASH, blockHeight: 100, slot: 500 })),
     getLatestBlock: vi.fn(async () => ({ height: 100, slot: 500 })),
+    supports: vi.fn(() => true),
   };
   const indexer = {
     indexSimpleBuildResult: vi.fn(async () => ({
@@ -87,7 +88,7 @@ describe('wallet worker (integration: real CAP + real SQLite)', () => {
 
   /** Boot the worker with stubbed backends and return the handle for manual ticks. */
   async function startWorker(deps = stubDeps()) {
-    const { loadWalletWorkerConfigFromEnv } = require('../../srv/server') as typeof import('../../srv/server');
+    const { loadWalletWorkerConfigFromEnv } = require('../../srv/config') as typeof import('../../srv/config');
     await startWalletWorker({
       client: deps.client as never,
       indexer: deps.indexer as never,

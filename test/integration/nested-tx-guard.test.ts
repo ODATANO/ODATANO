@@ -17,7 +17,6 @@ vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'buildooor';
 // Short guard budget so the deadlock test completes quickly.
 process.env.ODATANO_DETACHED_TX_TIMEOUT_MS = '2000';
 

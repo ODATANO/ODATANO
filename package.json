@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.49",
+  "version": "2.0.0-rc.50",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -16,27 +16,27 @@
     "srv/**/*.cds",
     "db/**/*.cds",
     "@cds-models/",
-    "scripts/migrate-txseq.mjs",
+    "scripts/migrate-schema.mjs",
     "scripts/migrate-slot-leader.mjs"
   ],
   "engines": {
     "node": ">=22.5"
   },
   "peerDependencies": {
-    "@sap/cds": ">=10"
+    "@sap/cds": "^10"
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "~6.2.0",
     "@cap-js/hana": "^3",
     "@cardano-ogmios/client": "^7.0.0",
-    "@harmoniclabs/buildooor": "0.2.9",
-    "@harmoniclabs/cardano-costmodels-ts": "~1.6.1",
-    "@harmoniclabs/cardano-ledger-ts": "^0.5.6",
-    "@harmoniclabs/cbor": "^2.0.1",
-    "@harmoniclabs/crypto": "^0.3.0",
-    "@harmoniclabs/plutus-data": "^2.0.1",
+    "@harmoniclabs/buildooor": "0.3.0",
+    "@harmoniclabs/cardano-costmodels-ts": "~1.7.0",
+    "@harmoniclabs/cardano-ledger-ts": "^0.6.1",
+    "@harmoniclabs/cbor": "^2.1.0",
+    "@harmoniclabs/crypto": "^0.3.2",
+    "@harmoniclabs/plutus-data": "^2.1.1",
     "@harmoniclabs/uint8array-utils": "^1.0.4",
-    "@harmoniclabs/uplc": "^2.0.7",
+    "@harmoniclabs/uplc": "^2.0.8",
     "@odatano/cap-auth": "^0.1.0",
     "@sap/xssec": "^4",
     "axios": "^1.18.0",
@@ -145,15 +145,16 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",
-    "pretest": "npm run clean && npm run cds:types && npm run db:deploy",
+    "db:fresh": "node -e \"for(const f of ['db.sqlite','db.sqlite-wal','db.sqlite-shm'])require('fs').rmSync(f,{force:true})\" && npm run db:deploy",
+    "pretest": "npm run clean && npm run cds:types && npm run db:fresh",
     "test": "vitest run",
-    "pretest:coverage": "npm run clean && npm run cds:types && npm run db:deploy",
+    "pretest:coverage": "npm run clean && npm run cds:types && npm run db:fresh",
     "test:coverage": "vitest run --coverage",
-    "pretest:ci": "npm run clean && npm run cds:types && npm run db:deploy",
+    "pretest:ci": "npm run clean && npm run cds:types && npm run db:fresh",
     "test:ci": "vitest run --exclude \"**/core-ogmios.test.ts\"",
-    "pretest:ci:coverage": "npm run clean && npm run cds:types && npm run db:deploy",
+    "pretest:ci:coverage": "npm run clean && npm run cds:types && npm run db:fresh",
     "test:ci:coverage": "vitest run --coverage --exclude \"**/core-ogmios.test.ts\"",
-    "pretest:integration": "npm run clean && npm run cds:types && npm run db:deploy",
+    "pretest:integration": "npm run clean && npm run cds:types && npm run db:fresh",
     "test:integration": "vitest run --project integration",
     "test:integration:blockfrost": "vitest run test/integration/core.blockfrost.test.ts",
     "test:integration:koios": "vitest run test/integration/core.koios.test.ts",
@@ -164,6 +165,7 @@
     "watch-odatano": "cds watch --open odatano/index.html?sap-ui-xx-viewCache=false --livereload false",
     "watch-wallet": "cds watch --open wallet/webapp/index.html",
     "release:check": "node scripts/release-check.mjs",
+    "smoke:consumer": "node scripts/smoke-consumer.mjs",
     "prepublishOnly": "node scripts/publish-guard.mjs"
   },
   "sapux": [

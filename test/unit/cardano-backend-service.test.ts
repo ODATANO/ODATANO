@@ -47,7 +47,7 @@ let handlers: Record<string, Handler> = {};
 beforeAll(async () => {
   const mod: any = await import('../../srv/cardano-backend-service');
   const register = mod.default ?? mod;
-  register({ on: (event: string, h: Handler) => { handlers[event] = h; } });
+  register({ on: (event: string, h: Handler) => { handlers[event] = h; }, after: () => undefined });
 });
 beforeEach(() => {
   vi.clearAllMocks();

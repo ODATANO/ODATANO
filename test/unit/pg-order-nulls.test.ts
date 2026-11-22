@@ -25,6 +25,28 @@ describe('stripNullsForNotNull', () => {
 });
 
 describe('installPostgresOrderNulls', () => {
+  it('reports the hook only when the configured database is PostgreSQL', () => {
+    const proto = PostgresService.CQN2SQL.prototype as Record<string | symbol, unknown>;
+    const marker = Symbol.for('odatano.pgOrderNulls');
+    const original = proto._orderBy;
+    const requires = cds.env.requires as Record<string, { kind?: string } | undefined>;
+    const configured = requires.db;
+    const info = vi.spyOn(cds.log('PgOrderNulls'), 'info').mockImplementation(() => undefined);
+    try {
+      for (const [kind, lines] of [['sqlite', 0], ['postgres', 1]] as const) {
+        info.mockClear();
+        requires.db = { kind };
+        expect(installPostgresOrderNulls()).toBe(true);
+        expect(info).toHaveBeenCalledTimes(lines);
+        proto._orderBy = original;
+        delete proto[marker];
+      }
+    } finally {
+      requires.db = configured;
+      info.mockRestore();
+    }
+  });
+
   it('renders ORDER BY on the key and on a NOT NULL column without NULLS, a nullable column with it; installs once', () => {
     const { SELECT } = cds.ql;
     expect(installPostgresOrderNulls()).toBe(true);

@@ -25,6 +25,7 @@ Add the `odatano-core` section to your project's `package.json`:
   "cds": {
     "requires": {
       "db": { "kind": "sqlite" },
+      "auth": { "users": { "alice": { "roles": ["Read", "Transact", "Sign"] } } },
       "odatano-core": {
         "network": "preview",
         "backends": ["koios"]
@@ -33,6 +34,9 @@ Add the `odatano-core` section to your project's `package.json`:
   }
 }
 ```
+
+The services ask for the roles `Read`, `Transact` and `Sign` (`Admin` for operator actions). The `auth`
+entry gives them to CAP's development user `alice`; in production your own authentication assigns them.
 
 Koios needs no account on its public tier. A token from [koios.rest](https://koios.rest) is optional and raises the rate limit. Set it as `KOIOS_API_KEY` in a `.env` file, or as `koiosApiKey` in the config above.
 
@@ -45,10 +49,10 @@ All config options:
 | `koiosApiKey` | | Optional token for Koios, raises the rate limit |
 | `blockfrostApiKey` | | Required if using the blockfrost backend |
 | `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |
-| `txBuilders` | `["buildooor"]` | Buildooor only — not configurable (legacy values ignored) |
 | `primaryTimeoutMs` | `30000` | Timeout for primary backend |
 | `fallbackTimeoutMs` | `60000` | Timeout for fallback backends |
 | `indexTtlMs` | `3600000` | Cache TTL (1 hour) |
+| `poolMetadataFetch` | `false` | Load pool names and tickers from the metadata URL a pool registered (needed with Ogmios alone) |
 
 ### 3) Run
 
@@ -56,12 +60,14 @@ All config options:
 cds watch
 ```
 
-All five services auto-register:
+All seven services auto-register:
 - **CardanoODataService** at `/odata/v4/cardano/` — read blockchain data
 - **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
 - **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
 - **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (off by default)
 - **CardanoWorkerService** at `/odata/v4/cardano-worker/` — asynchronous wallet jobs (off by default)
+- **CardanoBackendService** at `/odata/v4/cardano-backend/` — chain data for another ODATANO that uses this one as its `odatano` backend
+- **CardanoAgentService** at `/odata/v4/cardano-agent/` — agent grants: scoped tokens for agents (off by default)
 
 > `getStatus`, `GetJobStatus` and `GetWorkerStatus` are OData **functions** — call them with
 > HTTP GET and the parameters in the URL, e.g. `GET .../cardano-worker/GetWorkerStatus()`.
@@ -140,10 +146,11 @@ KOIOS_API_KEY=
 # Ogmios WebSocket URL (optional, for live data)
 OGMIOS_URL=ws://localhost:1337
 
-# Transaction builder is Buildooor only — TX_BUILDERS is no longer needed (any value is ignored)
-
 # Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
 INDEX_TTL_MS=3600000
+
+# Load pool name, ticker, homepage and description from the URL a pool registered (default false)
+# POOL_METADATA_FETCH=true
 
 # --- HSM signing (optional; server-side keys) -------------------------------
 HSM_ENABLED=false
@@ -172,6 +179,7 @@ WALLET_WORKER_ENABLED=false
 # signerType hsm | software; the software key is read from the env var named in keyEnv
 # (plain 64-hex or AES-256-GCM iv:tag:ciphertext) and never persisted.
 WALLET_WORKER_WALLETS=
+# Optional per wallet: "requiresRole":"<role>". Only callers with that role may queue jobs for it.
 WALLET_WORKER_MAX_CONCURRENT=4
 WALLET_WORKER_CONFIRMATION_DEPTH=3
 WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000

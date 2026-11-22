@@ -13,21 +13,28 @@ jobs:
     permissions:
       contents: read
 
-  # Gate 2: the npm package must build, pass the production audit and pack cleanly.
-  # Publishing to npm stays a manual step.
+  # Gate 2: the npm package must build, pass the production audit, pack cleanly and work
+  # when installed into an empty CAP project. Publishing to npm stays a manual step.
   package-check:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v5
         with:
-          node-version: 22.x
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=high
+      - run: node scripts/audit-tree.mjs app/router --omit=dev
+      - run: node scripts/audit-tree.mjs app/wallet
       - run: npm pack --dry-run
+      - run: node scripts/smoke-consumer.mjs
 
   build-and-release:
     needs: [verify, package-check]
@@ -92,6 +99,27 @@ jobs:
         run: |
           echo "repository_owner_lowercase=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_OUTPUT
       
+      - name: Build Docker image for the audit
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          tags: odatano:audit
+          build-args: |
+            VERSION=${{ steps.version.outputs.version }}
+            BUILD_DATE=${{ steps.version.outputs.build_date }}
+            VCS_REF=${{ steps.version.outputs.git_sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The image adds the DB adapters to the production tree, so its own tree is audited before the push.
+      - name: Audit the image's dependency tree
+        run: docker run --rm --entrypoint npm odatano:audit audit --audit-level=high
+
+      # The image is started before it is pushed: probes, credentials, a restart on the same volume.
+      - name: Start the image and probe it
+        run: node scripts/smoke-image.mjs odatano:audit
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:

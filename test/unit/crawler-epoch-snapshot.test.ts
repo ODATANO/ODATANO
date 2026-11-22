@@ -7,10 +7,13 @@
  */
 
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };
-const { dbRun, fakeDb } = vi.hoisted(() => {
+const { dbRun, fakeDb, snapshotAccounts } = vi.hoisted(() => {
   const dbRun = vi.fn<(q: Q) => Promise<unknown>>();
-  return { dbRun, fakeDb: { run: dbRun } };
+  return { dbRun, fakeDb: { run: dbRun }, snapshotAccounts: vi.fn() };
 });
+
+// its own suite runs it on a real database
+vi.mock('../../srv/blockchain/crawler/account-snapshots', () => ({ snapshotAccounts, dropAccountSnapshotsAfter: vi.fn() }));
 
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -44,6 +47,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   Transactions: 'odatano.cardano.Transactions',
   TransactionInputs: 'odatano.cardano.TransactionInputs',
   TransactionInputAssets: 'odatano.cardano.TransactionInputAssets',
+  TransactionInputAssetCopies: 'odatano.cardano.TransactionInputAssetCopies',
   TransactionOutputs: 'odatano.cardano.TransactionOutputs',
   TransactionOutputAssets: 'odatano.cardano.TransactionOutputAssets',
   AddressTransactions: 'odatano.cardano.AddressTransactions',
@@ -119,6 +123,8 @@ function makeIndexer(snapshotEpoch = vi.fn().mockResolvedValue({ pools: 2, dreps
   };
 }
 
+const ACCOUNT_BACKEND = { rewardAccountsAt: vi.fn() };
+
 /** Chain-sync client whose callbacks the test drives by hand; `ledger` = an Ogmios epoch-state backend exists. */
 function chainSyncClient(ledger = false) {
   let callbacks: ChainSyncCallbacks | undefined;
@@ -131,6 +137,7 @@ function chainSyncClient(ledger = false) {
     client: {
       getChainSyncBackend: () => ({ openChainSync }), getPaginatingBackend: () => null,
       getEpochStateBackend: () => (ledger ? { epochStateAt: vi.fn() } : null),
+      getRewardAccountStateBackend: () => (ledger ? ACCOUNT_BACKEND : null),
     },
     openChainSync,
     cbs: () => callbacks!,
@@ -149,6 +156,7 @@ function makeCrawler(client: unknown, indexer: unknown, config: CrawlerConfig = 
 
 beforeEach(() => {
   dbRun.mockReset();
+  snapshotAccounts.mockReset().mockResolvedValue({ taken: true, asked: 2, accounts: 1 });
   recordedEpochs = [];
   vi.restoreAllMocks();
   CardanoCrawler.resetPoisonMemory();
@@ -374,6 +382,87 @@ describe('CardanoCrawler — epoch snapshots', () => {
     await settle(() => true);
 
     expect(snapshotEpoch).not.toHaveBeenCalled();
+    await crawler.stop();
+  });
+});
+
+describe('CardanoCrawler — account snapshots', () => {
+  const WITH_ACCOUNTS: CrawlerConfig = { ...CONFIG, accountSnapshots: true, certificates: true };
+
+  async function crossEpoch(config: CrawlerConfig, ledger: boolean) {
+    const made = makeIndexer();
+    const { client, openChainSync, cbs } = chainSyncClient(ledger);
+    const crawler = makeCrawler(client, made.indexer, config);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    await cbs().rollForward(block(), [], TIP_EPOCH_3);
+    await settle(() => snapshotAccounts.mock.calls.length > 0);
+    return { crawler, snapshotEpoch: made.snapshotEpoch };
+  }
+
+  it('follows the pool snapshot, at the same block, with the node as source', async () => {
+    defaultDb();
+    const { crawler, snapshotEpoch } = await crossEpoch(WITH_ACCOUNTS, true);
+
+    expect(snapshotEpoch).toHaveBeenCalledTimes(1);
+    expect(snapshotAccounts).toHaveBeenCalledTimes(1);
+    expect(snapshotAccounts.mock.calls[0][0]).toMatchObject({
+      backend: ACCOUNT_BACKEND, epoch: 3, at: { slot: 259_300, hash: 'blk'.padEnd(64, '1') }, withdrawals: true,
+    });
+    // the walk ends with the crawler
+    const { shouldStop } = snapshotAccounts.mock.calls[0][0] as { shouldStop: () => boolean };
+    expect(shouldStop()).toBe(false);
+    await crawler.stop();
+    expect(shouldStop()).toBe(true);
+  });
+
+  it('tells the walk that withdrawals are not crawled', async () => {
+    defaultDb();
+    const { crawler } = await crossEpoch({ ...WITH_ACCOUNTS, certificates: false }, true);
+    expect(snapshotAccounts.mock.calls[0][0]).toMatchObject({ withdrawals: false });
+    await crawler.stop();
+  });
+
+  it('is taken for an epoch whose pool snapshot another run recorded', async () => {
+    defaultDb();
+    recordedEpochs = [3];
+    const { crawler, snapshotEpoch } = await crossEpoch(WITH_ACCOUNTS, true);
+    expect(snapshotEpoch).not.toHaveBeenCalled();
+    expect(snapshotAccounts).toHaveBeenCalledTimes(1);
+    await crawler.stop();
+  });
+
+  it('is off unless configured, and skipped without a backend that reads the ledger at a block', async () => {
+    defaultDb();
+    const off = await crossEpoch(CONFIG, true);
+    await off.crawler.stop();
+    const provider = await crossEpoch(WITH_ACCOUNTS, false);
+    await provider.crawler.stop();
+    expect(snapshotAccounts).not.toHaveBeenCalled();
+  });
+
+  it('is tried again after a failure, without repeating the pool snapshot', async () => {
+    defaultDb();
+    snapshotAccounts.mockReset().mockRejectedValueOnce(new Error('node gone')).mockResolvedValue({ taken: true, asked: 1, accounts: 1 });
+    const { indexer, snapshotEpoch } = makeIndexer();
+    // the pool snapshot of the first attempt is on record for the second
+    snapshotEpoch.mockImplementation(async () => { recordedEpochs = [3]; return { pools: 2, dreps: 1 }; });
+    const { client, openChainSync, cbs } = chainSyncClient(true);
+    const crawler = makeCrawler(client, indexer, WITH_ACCOUNTS);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    await cbs().rollForward(block(), [], TIP_EPOCH_3);
+    await settle(() => snapshotAccounts.mock.calls.length > 0);
+    // let the failed attempt end and set its backoff, then step past it
+    await settle(() => false, 20);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 11 * 60_000);
+    await cbs().rollForward(block({ hash: 'blk2'.padEnd(64, '1'), height: 42, slot: 259_350 }), [], TIP_EPOCH_3);
+    await settle(() => snapshotAccounts.mock.calls.length > 1);
+
+    expect(snapshotEpoch).toHaveBeenCalledTimes(1);
+    expect(snapshotAccounts).toHaveBeenCalledTimes(2);
+    expect(snapshotAccounts.mock.calls[1][0]).toMatchObject({ at: { slot: 259_350 } });
     await crawler.stop();
   });
 });

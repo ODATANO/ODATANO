@@ -1,7 +1,8 @@
 import cds from '@sap/cds';
-import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend, TokenRegistryBackend, isTokenRegistryBackend } from './backends/cardano-backend';
+import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend, TokenRegistryBackend, isTokenRegistryBackend, RewardAccountStateBackend, isRewardAccountStateBackend } from './backends/cardano-backend';
 import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
 import { PendingSpends } from './pending-spends';
+import { DEFAULT_INDEX_TTL_MS, PROTOCOL_PARAMS_TTL_MS } from '../utils/const';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
 
@@ -21,10 +22,14 @@ import {
   LedgerProtocolParameters,
   ScriptEvaluationResult
 } from '../utils/types';
-import { OgmiosBackend } from './backends/ogmios-backend';
-import { BlockfrostBackend } from './backends/blockfrost-backend';
-import { KoiosBackend } from './backends/koios-backend';
-import { OdatanoBackend } from './backends/odatano-backend';
+
+// A backend module loads when its backend is configured, and its provider SDK with it.
+const backendModules = {
+  ogmios: () => require('./backends/ogmios-backend') as typeof import('./backends/ogmios-backend'),
+  blockfrost: () => require('./backends/blockfrost-backend') as typeof import('./backends/blockfrost-backend'),
+  koios: () => require('./backends/koios-backend') as typeof import('./backends/koios-backend'),
+  odatano: () => require('./backends/odatano-backend') as typeof import('./backends/odatano-backend'),
+};
 
 const logger = cds.log('CardanoClient');
 
@@ -56,7 +61,6 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean; finalOnClientError?:
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
 export type BackendName = 'blockfrost' | 'koios' | 'ogmios' | 'odatano';
-export type TransactionBuilderName = 'buildooor';
 
 export type CardanoClientConfig = {
   network: Network;
@@ -69,7 +73,6 @@ export type CardanoClientConfig = {
   odatanoUrl?: string;
   /** Key for the remote ODATANO (a gateway `oda_…` key or an agent grant token). */
   odatanoApiKey?: string;
-  transactionBuilders: TransactionBuilderName[];
   primaryTimeoutMs: number;
   fallbackTimeoutMs: number;
   indexTtlMs: number;
@@ -88,14 +91,13 @@ export class CardanoClient {
   /** Backends whose init failed. They stay in rotation and init is retried per request. */
   private uninitializedBackends = new Set<CardanoBackend>();
   network: Network;
-  max_age_ms: number = 60000; // default 1 minute for temporary caching
+  max_age_ms: number = DEFAULT_INDEX_TTL_MS;
   /** Transactions submitted through this client that the ledger view does not show yet. */
   readonly pendingSpends = new PendingSpends();
   private protocolParamsCache?: { data: LedgerProtocolParameters; fetchedAt: number };
   private protocolParamsFetchPromise: Promise<LedgerProtocolParameters> | null = null;
   /** Last protocol parameters the live backend (node) answered. */
   private lastLiveProtocolParams?: LedgerProtocolParameters;
-  private static readonly PROTOCOL_PARAMS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
   // Deduplicate concurrent fetches for the same resource.
   private txCoalescer = new RequestCoalescer<Transaction>();
@@ -109,10 +111,12 @@ export class CardanoClient {
     const backends = clientConfig.backends;
 
     if (backends.includes('ogmios')) {
+      const { OgmiosBackend } = backendModules.ogmios();
       this.liveBackend = new OgmiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.ogmiosUrl);
     }
 
     if (backends.includes('blockfrost')) {
+      const { BlockfrostBackend } = backendModules.blockfrost();
       this.historicalBackends.push(new BlockfrostBackend(
         clientConfig.network,
         clientConfig.primaryTimeoutMs,
@@ -121,10 +125,12 @@ export class CardanoClient {
       ));
     }
     if (backends.includes('koios')) {
+      const { KoiosBackend } = backendModules.koios();
       this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));
     }
     if (backends.includes('odatano')) {
       // A remote ODATANO runs its own failover chain: allow its primary timeout plus the fallback.
+      const { OdatanoBackend } = backendModules.odatano();
       this.historicalBackends.push(new OdatanoBackend(
         clientConfig.network, clientConfig.fallbackTimeoutMs, clientConfig.odatanoUrl, clientConfig.odatanoApiKey,
       ));
@@ -437,8 +443,19 @@ export class CardanoClient {
     return this.route('getDrep', b => b.getDrep(drepId));
   }
 
-  getAccount(stakeAddress: string): Promise<AccountData> {
-    return this.route('getAccount', b => b.getAccount(stakeAddress));
+  // The node reports no balance for an account without a pool delegation. A provider then
+  // answers in its place; without one the node's answer stands, balance unknown.
+  async getAccount(stakeAddress: string): Promise<AccountData> {
+    const account = await this.route('getAccount', b => b.getAccount(stakeAddress));
+    if (account.withdrawableAmount != null) return account;
+    for (const provider of this.historicalBackends) {
+      try {
+        return await this.callWithResilience(provider, () => provider.getAccount(stakeAddress));
+      } catch (err: unknown) {
+        logger.debug(`getAccount on ${provider.name} failed, trying the next provider: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return account;
   }
 
   // The node lists only delegated credentials, so its absence proves nothing and providers decide.
@@ -589,6 +606,15 @@ export class CardanoClient {
     return null;
   }
 
+  /** Backend that reads reward accounts at a block, for account snapshots. */
+  getRewardAccountStateBackend(): RewardAccountStateBackend | null {
+    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
+    for (const b of candidates) {
+      if (b && !this.uninitializedBackends.has(b) && isRewardAccountStateBackend(b)) return b;
+    }
+    return null;
+  }
+
   /** Without one, epoch snapshots stay off instead of making thousands of single requests. */
   getEnumeratingBackend(): EnumeratingBackend | null {
     const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
@@ -624,7 +650,7 @@ export class CardanoClient {
   /** Protocol parameters with a 5-minute in-memory cache and coalesced refresh. */
   async getProtocolParameters(): Promise<LedgerProtocolParameters> {
     const now = Date.now();
-    if (this.protocolParamsCache && (now - this.protocolParamsCache.fetchedAt) < CardanoClient.PROTOCOL_PARAMS_TTL_MS) {
+    if (this.protocolParamsCache && (now - this.protocolParamsCache.fetchedAt) < PROTOCOL_PARAMS_TTL_MS) {
       logger.debug('Returning cached protocol parameters');
       return this.protocolParamsCache.data;
     }
@@ -712,6 +738,11 @@ export class CardanoClient {
       if (err instanceof TransactionAlreadySubmittedError) this.pendingSpends.record(signedTxCbor);
       throw err;
     }
+  }
+
+  /** True when a configured backend can serve the method. */
+  supports(methodName: string): boolean {
+    return [this.liveBackend, ...this.historicalBackends].some((b) => !!b && !b.unsupportedMethods?.has(methodName));
   }
 
   /** True when Ogmios is the live backend. */

@@ -47,7 +47,10 @@ const commands = [
   'npm run typecheck',
   'npm run lint',
   'npm audit --omit=dev --audit-level=high',
+  'node scripts/audit-tree.mjs app/router --omit=dev',
+  'node scripts/audit-tree.mjs app/wallet',
   'npm pack --dry-run',
+  'node scripts/smoke-consumer.mjs',
 ];
 for (const cmd of commands) {
   console.log(`\n$ ${cmd}`);

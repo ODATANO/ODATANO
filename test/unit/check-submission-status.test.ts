@@ -28,7 +28,7 @@ type Handler = (req: Record<string, unknown>) => Promise<unknown>;
 const handlers: Record<string, Handler> = {};
 beforeAll(async () => {
   const mod: any = await import('../../srv/cardano-tx-service');
-  (mod.default ?? mod)({ on: (event: string, h: Handler) => { handlers[event] = h; } });
+  (mod.default ?? mod)({ on: (event: string, h: Handler) => { handlers[event] = h; }, after: () => undefined });
 });
 
 const check = () => handlers.CheckSubmissionStatus({ params: [{ id: 's1' }] });

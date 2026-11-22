@@ -9,11 +9,12 @@ import { computeCip14Fingerprint, scriptHashToEnterpriseAddress, mapError } from
 import { getCardanoIndexer, getCardanoClient } from './server';
 import type { Network } from './blockchain/cardano-client';
 import { toSignedTransaction } from './utils/signing-helper';
-import { detachedTx } from './utils/tx-utils';
+import { detachedTx, readOutside } from './utils/tx-utils';
 import { pageOf } from './utils/paging';
 import { submitRecorded } from './blockchain/signing/submission-finalizer';
 import { SubmitTransaction } from '#cds-models/CardanoTransactionService';
 import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
+import { answerNumbersAsText } from './utils/result-numbers';
 import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
 import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates, parsePlutusCbor } from './utils/tx-request-parsers';
 
@@ -27,6 +28,7 @@ const logger = cds.log('CardanoTxService');
 
 /** CardanoTransactionService handlers: transaction building, submission and script helpers. */
 module.exports = (srv: cds.Service) => {
+  answerNumbersAsText(srv);
   logger.debug('Module loaded - registering handlers');
 
   const {
@@ -973,7 +975,8 @@ module.exports = (srv: cds.Service) => {
     const { id: submissionId } = req.params[0] as { id: string };
 
     return handleRequest(req, async (db) => {
-      const submission = await db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
+      // read outside the request transaction: the confirmation lookup below may ask a backend
+      const submission = await readOutside(db, (d) => d.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId })));
       if (!submission) throw new NotFoundError(`Submission '${submissionId}'`);
 
       // a block this deep is not rolled back in practice; a status set here is never reverted

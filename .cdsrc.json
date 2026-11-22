@@ -1,0 +1,26 @@
+{
+  "requires": {
+    "[development]": {
+      "auth": {
+        "kind": "mocked",
+        "users": {
+          "admin": { "roles": ["Read", "Transact", "Sign", "Admin"] },
+          "alice": { "roles": ["Read", "Transact", "Sign"] },
+          "bob": { "roles": ["Read", "Transact", "Sign"] },
+          "carol": { "roles": ["Read"] }
+        }
+      }
+    },
+    "[test]": {
+      "auth": {
+        "kind": "mocked",
+        "users": {
+          "admin": { "roles": ["Read", "Transact", "Sign", "Admin"] },
+          "alice": { "roles": ["Read", "Transact", "Sign"] },
+          "bob": { "roles": ["Read", "Transact", "Sign"] },
+          "carol": { "roles": ["Read"] }
+        }
+      }
+    }
+  }
+}

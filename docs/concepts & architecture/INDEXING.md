@@ -5,7 +5,7 @@
 ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
 
 1. **Data is indexed only when first requested**, not pre-synchronized
-2. **Temporal entities** (mutable state) remain valid for the duration defined by `INDEX_TTL_MS` (default: 600000ms = 10 minutes)
+2. **Temporal entities** (mutable state) remain valid for the duration defined by `INDEX_TTL_MS` (default: 3600000ms = 1 hour)
 3. **Non-temporal entities** (immutable facts) are stored permanently after first indexing
 
 When a client queries data for the first time, ODATANO checks the database, fetches from the blockchain on cache miss, persists the result, and returns the OData response. All subsequent reads within TTL are instant local DB lookups.
@@ -109,10 +109,9 @@ the point of the feature, and the reason the range carries no TTL.
 
 | Variable       | Default   | Description                                              |
 | -------------- | --------- | -------------------------------------------------------- |
-| `INDEX_TTL_MS` | `600000`  | TTL for temporal entities in milliseconds (10 minutes)   |
+| `INDEX_TTL_MS` | `3600000` | TTL for temporal entities in milliseconds (1 hour)       |
 | `NETWORK`      | `preview` | Cardano network: `mainnet`, `preview`, or `preprod`      |
-| `BACKENDS`     | `blockfrost,koios,ogmios` | Enabled backends                         |
-| `TX_BUILDERS`  | `buildooor`     | Ignored — Buildooor is the only builder           |
+| `BACKENDS`     | `koios`   | Enabled backends: `blockfrost`, `koios`, `ogmios`, `odatano` |
 
 `INDEX_TTL_MS` only affects temporal entities. Non-temporal entities remain permanently.
 

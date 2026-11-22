@@ -1,18 +1,25 @@
 /**
  * CardanoIndexerService handlers: getStatus shape and progress math, pauseCrawler,
- * the resumeCrawler `enabled` gate and getLiveness. Dependencies are mocked at
+ * the resumeCrawler `enabled` gate and the two probes. Dependencies are mocked at
  * module boundaries; handleRequest passes a fake db straight to the callback.
  */
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock, registryBackfillMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, readinessMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock, registryBackfillMock, registryFilesMock, registryEntryFilesMock, datumBackfillMock, metadataBackfillMock, copyPruneMock, copyRestoreMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
+  readinessMock: vi.fn(),
   backfillMock: vi.fn(),
   txBackfillMock: vi.fn(),
   credentialBackfillMock: vi.fn(),
   decimalsBackfillMock: vi.fn(),
   registryBackfillMock: vi.fn(),
+  registryFilesMock: vi.fn(),
+  registryEntryFilesMock: vi.fn(),
+  datumBackfillMock: vi.fn(),
+  metadataBackfillMock: vi.fn(),
+  copyPruneMock: vi.fn(),
+  copyRestoreMock: vi.fn(),
   crawlerMock: {
     isCrawlerRunning: vi.fn(() => true),
     getCrawler: vi.fn<() => { getActiveSource: () => string | null } | null>(() => null),
@@ -25,6 +32,7 @@ const { fakeDb, crawlerMock, readCursorMock, serverMock, backfillMock, txBackfil
     getCardanoClient: vi.fn(() => ({ network: 'preview' })),
     getCardanoIndexer: vi.fn(() => ({ indexer: true })),
     loadCrawlerConfigFromEnv: vi.fn(),
+    readinessParts: vi.fn(() => ({ context: true, hsm: null })),
   },
 }));
 
@@ -52,13 +60,23 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 }));
 
 vi.mock('../../srv/server', () => serverMock);
+vi.mock('../../srv/config', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../srv/config')>()),
+  loadCrawlerConfigFromEnv: serverMock.loadCrawlerConfigFromEnv,
+}));
+vi.mock('../../srv/utils/readiness', () => ({ buildReadiness: readinessMock }));
 // the snapshot import pulls cds.ql + the DB models at load time; not under test here
 vi.mock('../../srv/blockchain/crawler/utxo-set-import', () => ({ importUtxoSet: vi.fn(), rebuildUtxoSetAggregates: vi.fn(), refreshUtxoSetReferenceScripts: vi.fn() }));
 vi.mock('../../srv/blockchain/crawler/certificate-backfill', () => ({ backfillCertificates: backfillMock }));
 vi.mock('../../srv/blockchain/crawler/transaction-backfill', () => ({ backfillTransactions: txBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/credential-backfill', () => ({ backfillUtxoCredentials: credentialBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/asset-decimals-backfill', () => ({ backfillAssetDecimals: decimalsBackfillMock }));
-vi.mock('../../srv/blockchain/crawler/asset-registry-backfill', () => ({ backfillAssetRegistry: registryBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/asset-registry-backfill', () => ({
+  backfillAssetRegistry: registryBackfillMock, backfillAssetRegistryFromFiles: registryFilesMock, registryEntryFiles: registryEntryFilesMock,
+}));
+vi.mock('../../srv/blockchain/crawler/output-datum-backfill', () => ({ backfillOutputDatums: datumBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/metadata-position-backfill', () => ({ backfillMetadataPositions: metadataBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/input-asset-copies', () => ({ pruneInputAssetCopies: copyPruneMock, restoreInputAssetCopies: copyRestoreMock }));
 
 // The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
 // mocks above and surfaces the CJS export as `.default`. beforeAll, not top-level
@@ -73,7 +91,7 @@ beforeAll(async () => {
 
 function boot(): Record<string, Handler> {
   const handlers: Record<string, Handler> = {};
-  const srv = { on: (event: string, handler: Handler) => { handlers[event] = handler; } };
+  const srv = { on: (event: string, handler: Handler) => { handlers[event] = handler; }, after: () => undefined };
   registerHandlers(srv);
   return handlers;
 }
@@ -107,17 +125,25 @@ describe('CardanoIndexerService.getStatus', () => {
       // crawler-fed UTxO set: not configured, nothing imported
       utxoSet: { enabled: false, status: 'none', anchorSlot: null, anchorHash: null, importedAt: null, error: null },
       certificateBackfill: {
-        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, certificates: 0, withdrawals: 0,
+        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, certificates: 0, withdrawals: 0, removed: 0,
         startedAt: null, finishedAt: null, error: null,
       },
       transactionBackfill: {
-        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
+        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, transactions: 0, inputs: 0, outputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
         startedAt: null, finishedAt: null, error: null,
       },
       credentialBackfill: { status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, startedAt: null, finishedAt: null, error: null },
       decimalsBackfill: { status: 'none', scanned: 0, candidates: 0, filled: 0, startedAt: null, finishedAt: null, error: null },
-      registryBackfill: { status: 'none', units: 0, processed: 0, filled: 0, failed: 0, startedAt: null, finishedAt: null, error: null },
-      epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null },
+      registryBackfill: { status: 'none', units: 0, processed: 0, filled: 0, failed: 0, absent: 0, skipped: 0, startedAt: null, finishedAt: null, error: null },
+      datumBackfill: {
+        status: 'none', scanned: 0, candidates: 0, transactions: 0, missing: 0, outputs: 0, inputs: 0, ledgerUtxos: 0,
+        startedAt: null, finishedAt: null, error: null,
+      },
+      metadataBackfill: { status: 'none', atSlot: '0', toSlot: '0', rows: 0, startedAt: null, finishedAt: null, error: null },
+      epochBackfill: { status: 'none', atEpoch: 0, toEpoch: 0, updated: 0, created: 0, startedAt: null, finishedAt: null, error: null },
+      copyPrune: { status: 'none', atSlot: '0', toSlot: '0', referenced: 0, kept: 0, deleted: 0, startedAt: null, finishedAt: null, error: null },
+      copyRestore: { status: 'none', atSlot: '0', toSlot: '0', restored: 0, rows: 0, startedAt: null, finishedAt: null, error: null },
+      epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null, accounts: false, lastAccountEpoch: null, lastAccountCount: null },
     });
   });
 
@@ -139,16 +165,19 @@ describe('CardanoIndexerService.getStatus', () => {
 
   it('reports the newest epoch snapshot and the source the next one would use', async () => {
     readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
-    // once per read: utxoSet flag, epochSnapshots flag, snapshot source
-    serverMock.loadCrawlerConfigFromEnv.mockReturnValueOnce({ epochSnapshots: true }).mockReturnValueOnce({ epochSnapshots: true });
+    serverMock.loadCrawlerConfigFromEnv.mockReturnValue({ epochSnapshots: true, accountSnapshots: true });
     serverMock.getCardanoClient.mockReturnValueOnce({
       network: 'preview', getEpochStateBackend: () => ({}), getEnumeratingBackend: () => ({}),
     } as never);
-    fakeDb.run.mockResolvedValueOnce({ epoch: 1201, source: 'ogmios', snapshotSlot: 103_766_400 });
+    fakeDb.run.mockResolvedValueOnce({ epoch: 1201, source: 'ogmios', snapshotSlot: 103_766_400 })
+      .mockResolvedValueOnce({ epoch: 1200, accountCount: 345 });
     const handlers = boot();
 
     expect(await handlers.getStatus({})).toMatchObject({
-      epochSnapshots: { enabled: true, source: 'ogmios', lastEpoch: 1201, lastSource: 'ogmios', lastSlot: '103766400' },
+      epochSnapshots: {
+        enabled: true, source: 'ogmios', lastEpoch: 1201, lastSource: 'ogmios', lastSlot: '103766400',
+        accounts: true, lastAccountEpoch: 1200, lastAccountCount: 345,
+      },
     });
   });
 
@@ -233,6 +262,38 @@ describe('CardanoIndexerService.resumeCrawler', () => {
       config,
     }, true);
     expect(result).toBe(true); // isCrawlerRunning
+  });
+});
+
+describe('CardanoIndexerService.getReadiness', () => {
+  const READY = { status: 'ready', timestamp: '2026-11-16T12:00:00.000Z', context: true, database: true, hsm: null };
+  const makeReq = () => ({ http: { res: { status: vi.fn() } } });
+
+  it('answers the body with the default status when the instance is ready', async () => {
+    readinessMock.mockResolvedValue(READY);
+    const req = makeReq();
+
+    await expect(boot().getReadiness(req)).resolves.toBe(READY);
+
+    expect(readinessMock).toHaveBeenCalledWith({ context: true, hsm: null });
+    expect(req.http.res.status).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 with the same body while a part is missing', async () => {
+    const notReady = { ...READY, status: 'not_ready', database: false };
+    readinessMock.mockResolvedValue(notReady);
+    const req = makeReq();
+
+    await expect(boot().getReadiness(req)).resolves.toBe(notReady);
+
+    expect(req.http.res.status).toHaveBeenCalledWith(503);
+  });
+
+  it('returns the body to an in-process caller that has no HTTP response', async () => {
+    const notReady = { ...READY, status: 'not_ready', context: false };
+    readinessMock.mockResolvedValue(notReady);
+
+    await expect(boot().getReadiness({})).resolves.toBe(notReady);
   });
 });
 
@@ -373,6 +434,142 @@ describe('CardanoIndexerService.backfillAssetDecimals', () => {
   });
 });
 
+describe('CardanoIndexerService.backfillOutputDatums', () => {
+  const cursor = { lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 };
+  const clientThat = (serves: boolean) => ({ network: 'preview', supports: vi.fn(() => serves) }) as any;
+
+  it('refuses without a backend that serves transactions and names the other way', async () => {
+    const client = clientThat(false);
+    serverMock.getCardanoClient.mockReturnValue(client);
+    const handlers = boot();
+
+    await expect(handlers.backfillOutputDatums({ data: {} })).rejects.toThrow(/run backfillTransactions/);
+    expect(client.supports).toHaveBeenCalledWith('getTransaction');
+    expect(datumBackfillMock).not.toHaveBeenCalled();
+  });
+
+  it('runs detached, refuses a second start and reports progress in getStatus', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    const client = clientThat(true);
+    serverMock.getCardanoClient.mockReturnValue(client);
+    let finishRun!: (r: unknown) => void;
+    datumBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ scanned: 5000, candidates: 40, transactions: 30, missing: 1, outputs: 12, inputs: 9, ledgerUtxos: 3 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillOutputDatums({ data: {} })).toMatchObject({ accepted: true });
+    expect(datumBackfillMock).toHaveBeenCalledWith(expect.objectContaining({ client }));
+    await expect(handlers.backfillOutputDatums({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ datumBackfill: { status: 'running', scanned: 5000, candidates: 40, outputs: 12 } });
+
+    finishRun({ scanned: 9000, candidates: 70, transactions: 55, missing: 1, outputs: 20, inputs: 15, ledgerUtxos: 5 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ datumBackfill: { status: 'done', scanned: 9000, outputs: 20, inputs: 15, ledgerUtxos: 5, error: null } });
+  });
+
+  it('keeps the error of a failed run', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    serverMock.getCardanoClient.mockReturnValue(clientThat(true));
+    datumBackfillMock.mockRejectedValue(new Error('provider down'));
+    const handlers = boot();
+
+    await handlers.backfillOutputDatums({ data: {} });
+    await new Promise((r) => setImmediate(r));
+
+    expect(await handlers.getStatus({})).toMatchObject({ datumBackfill: { status: 'failed', error: 'provider down' } });
+  });
+});
+
+describe('CardanoIndexerService.backfillMetadataPositions', () => {
+  it('runs detached without a backend, refuses a second start and reports slots as strings', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
+    let finishRun!: (r: unknown) => void;
+    metadataBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ atSlot: 40_000, toSlot: 90_000, rows: 12 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillMetadataPositions({ data: {} })).toMatchObject({ accepted: true });
+    await expect(handlers.backfillMetadataPositions({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({ metadataBackfill: { status: 'running', atSlot: '40000', toSlot: '90000', rows: 12 } });
+    expect(metadataBackfillMock).toHaveBeenCalledWith({ onProgress: expect.any(Function) });
+
+    finishRun({ atSlot: 90_000, toSlot: 90_000, rows: 30 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ metadataBackfill: { status: 'done', atSlot: '90000', rows: 30, error: null } });
+  });
+});
+
+describe('CardanoIndexerService.backfillEpochs', () => {
+  it('runs detached on the indexer and reports the epochs it wrote', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 });
+    const backfillEpochs = vi.fn(async (onProgress: (p: unknown) => void) => {
+      onProgress({ atEpoch: 5, toEpoch: 9, updated: 2, created: 1 });
+      return { atEpoch: 9, toEpoch: 9, updated: 4, created: 3 };
+    });
+    serverMock.getCardanoIndexer.mockReturnValueOnce({ backfillEpochs } as never);
+    const handlers = boot();
+
+    expect(await handlers.backfillEpochs({ data: {} })).toMatchObject({ accepted: true });
+    await new Promise((r) => setImmediate(r));
+    expect(backfillEpochs).toHaveBeenCalledTimes(1);
+    expect(await handlers.getStatus({})).toMatchObject({ epochBackfill: { status: 'done', atEpoch: 9, toEpoch: 9, updated: 4, created: 3, error: null } });
+  });
+});
+
+describe('CardanoIndexerService input asset copies', () => {
+  const cursor = { lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 };
+
+  it('prunes the named slots detached, refuses a second walk and reports the counts', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    let finishRun!: (r: unknown) => void;
+    copyPruneMock.mockImplementation((opts: { onProgress: (p: unknown) => void }) => new Promise((r) => {
+      opts.onProgress({ atSlot: 119, toSlot: 500, referenced: 40, kept: 3, deleted: 95 });
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.pruneInputAssetCopies({ data: { fromSlot: 100, toSlot: '500' } })).toMatchObject({ accepted: true });
+    await expect(handlers.pruneInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/already running/);
+    await expect(handlers.restoreInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/already running/);
+    expect(copyPruneMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 500, onProgress: expect.any(Function) });
+    expect(await handlers.getStatus({})).toMatchObject({ copyPrune: { status: 'running', atSlot: '119', toSlot: '500', referenced: 40, kept: 3, deleted: 95 } });
+
+    finishRun({ atSlot: 500, toSlot: 500, referenced: 90, kept: 7, deleted: 210 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ copyPrune: { status: 'done', atSlot: '500', referenced: 90, deleted: 210, error: null } });
+  });
+
+  it.each(['pruneInputAssetCopies', 'restoreInputAssetCopies'])('%s moves only a slot range the caller names', async (action) => {
+    readCursorMock.mockResolvedValue(cursor);
+    const handlers = boot();
+
+    await expect(handlers[action]({ data: { toSlot: 200 } })).rejects.toThrow(/fromSlot/);
+    await expect(handlers[action]({ data: { fromSlot: 100 } })).rejects.toThrow(/toSlot/);
+    await expect(handlers[action]({ data: { fromSlot: 300, toSlot: 200 } })).rejects.toThrow(/must not be after/);
+    expect(copyPruneMock).not.toHaveBeenCalled();
+    expect(copyRestoreMock).not.toHaveBeenCalled();
+  });
+
+  it('restores a slot range and reports a failed walk', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    copyRestoreMock.mockResolvedValueOnce({ atSlot: 200, toSlot: 200, restored: 12, rows: 30 }).mockRejectedValueOnce(new Error('disk full'));
+    const handlers = boot();
+
+    expect(await handlers.restoreInputAssetCopies({ data: { fromSlot: 100, toSlot: 200, slotWindow: 5000 } })).toMatchObject({ accepted: true });
+    expect(copyRestoreMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 200, slotWindow: 5000, onProgress: expect.any(Function) });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ copyRestore: { status: 'done', restored: 12, rows: 30 } });
+
+    await handlers.restoreInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ copyRestore: { status: 'failed', error: 'disk full' } });
+  });
+});
+
 describe('CardanoIndexerService.backfillAssetRegistry', () => {
   const cursor = { lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 };
 
@@ -404,5 +601,38 @@ describe('CardanoIndexerService.backfillAssetRegistry', () => {
     await new Promise((r) => setImmediate(r));
     expect(await handlers.getStatus({})).toMatchObject({ registryBackfill: { status: 'done', processed: 7984, filled: 7980, failed: 4, error: null } });
     expect(await handlers.backfillAssetRegistry({ data: {} })).toMatchObject({ accepted: true });
+    // end the second run, so the next case starts idle
+    finishRun({ units: 0, processed: 0, filled: 0, failed: 0 });
+    await new Promise((r) => setImmediate(r));
+  });
+
+  it('reads the entry files of a folder without any backend', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getTokenRegistryBackend: () => null } as any);
+    registryBackfillMock.mockReset();
+    registryEntryFilesMock.mockResolvedValue(['a.json']);
+    registryFilesMock.mockResolvedValue({ units: 9000, processed: 9000, filled: 8700, failed: 1, absent: 250, skipped: 49 });
+    const handlers = boot();
+
+    expect(await handlers.backfillAssetRegistry({ data: { source: 'file', path: '/data/registry/mappings' } })).toMatchObject({ accepted: true });
+    await new Promise((r) => setImmediate(r));
+
+    expect(registryEntryFilesMock).toHaveBeenCalledWith('/data/registry/mappings');
+    expect(registryFilesMock).toHaveBeenCalledWith({ directory: '/data/registry/mappings', onProgress: expect.any(Function) });
+    expect(registryBackfillMock).not.toHaveBeenCalled();
+    expect(await handlers.getStatus({})).toMatchObject({
+      registryBackfill: { status: 'done', units: 9000, filled: 8700, failed: 1, absent: 250, skipped: 49 },
+    });
+  });
+
+  it('refuses the file source without a path, and a path that holds no entries', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    registryFilesMock.mockReset();
+    const handlers = boot();
+
+    await expect(handlers.backfillAssetRegistry({ data: { source: 'file' } })).rejects.toThrow(/path/);
+    registryEntryFilesMock.mockRejectedValue(new Error('path holds no entry files (*.json).'));
+    await expect(handlers.backfillAssetRegistry({ data: { source: 'file', path: '/empty' } })).rejects.toThrow(/holds no entry files/);
+    expect(registryFilesMock).not.toHaveBeenCalled();
   });
 });

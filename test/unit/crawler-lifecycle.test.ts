@@ -38,6 +38,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   Transactions: 'odatano.cardano.Transactions',
   TransactionInputs: 'odatano.cardano.TransactionInputs',
   TransactionInputAssets: 'odatano.cardano.TransactionInputAssets',
+  TransactionInputAssetCopies: 'odatano.cardano.TransactionInputAssetCopies',
   TransactionOutputs: 'odatano.cardano.TransactionOutputs',
   TransactionOutputAssets: 'odatano.cardano.TransactionOutputAssets',
   AddressTransactions: 'odatano.cardano.AddressTransactions',
@@ -630,6 +631,70 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     expect(getNextBlocks).not.toHaveBeenCalled();
     expect(crawler.isRunning()).toBe(true);
     await crawler.stop();
+  });
+
+  describe('a stream that goes silent', () => {
+    const idle = CardanoCrawler as unknown as { CHAIN_SYNC_IDLE_MS: number };
+    const standard = idle.CHAIN_SYNC_IDLE_MS;
+    const mocks = () => ({ indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn() });
+    const tip = { slot: 9000, hash: 't'.padEnd(64, '9'), height: 90 };
+
+    // settle() spins microtasks only, so these cases wait in real time for the timer
+    const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    beforeEach(() => { idle.CHAIN_SYNC_IDLE_MS = 200; });
+    afterEach(() => { idle.CHAIN_SYNC_IDLE_MS = standard; });
+
+    it('waits five minutes by default', () => {
+      expect(standard).toBe(5 * 60 * 1000);
+    });
+
+    it('is closed and reopened at the cursor, without pagination and without an error', async () => {
+      statefulCursor();
+      const getNextBlocks = vi.fn().mockResolvedValue([]);
+      const { client, openChainSync, close } = hybridClient({ getNextBlocks });
+      const crawler = makeCrawler(client, CONFIG, mocks());
+
+      await crawler.start();
+      await settle(() => openChainSync.mock.calls.length > 0);
+      await wait(450);
+      await settle(() => openChainSync.mock.calls.length > 1, 2000);
+
+      expect(openChainSync.mock.calls.length).toBeGreaterThan(1);
+      expect(close).toHaveBeenCalled();
+      expect(getNextBlocks).not.toHaveBeenCalled();
+      expect(crawler.isRunning()).toBe(true);
+      expect(updatesWith(s => s.syncStatus === 'error')).toEqual([]);
+      await crawler.stop();
+    });
+
+    it('stays open while frames keep arriving', async () => {
+      statefulCursor();
+      const { client, openChainSync, cbs } = hybridClient({ getNextBlocks: vi.fn().mockResolvedValue([]) });
+      const crawler = makeCrawler(client, CONFIG, mocks());
+
+      await crawler.start();
+      await settle(() => openChainSync.mock.calls.length > 0);
+      for (let height = 41; height <= 45; height++) {
+        await cbs().rollForward(block({ height, hash: `b${height}`.padEnd(64, '0'), slot: height * 100 }), [], tip);
+        await wait(40);
+      }
+
+      expect(openChainSync).toHaveBeenCalledTimes(1);
+      await crawler.stop();
+    });
+
+    it('does not fire once the crawler stopped', async () => {
+      statefulCursor();
+      const { client, openChainSync } = hybridClient({ getNextBlocks: vi.fn().mockResolvedValue([]) });
+      const crawler = makeCrawler(client, CONFIG, mocks());
+
+      await crawler.start();
+      await settle(() => openChainSync.mock.calls.length > 0);
+      await crawler.stop();
+      await wait(450);
+
+      expect(openChainSync).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("still halts on a closed stream without progress when the source is pinned to 'ogmios'", async () => {

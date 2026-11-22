@@ -174,7 +174,6 @@ jobs:
           NETWORK: 'preview'
           BACKENDS: 'koios,blockfrost'  #Ogmios excluded here (tests will skip Ogmios tests)
           BLOCKFROST_API_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
-          TX_BUILDERS: 'buildooor,csl'
           PRIMARY_TIMEOUT_MS: 15000
           FALLBACK_TIMEOUT_MS: 15000
           INDEX_TTL_MS: 60000
@@ -190,7 +189,6 @@ jobs:
           BACKENDS: 'koios,blockfrost'
           BLOCKFROST_API_KEY: ${{ secrets.BLOCKFROST_API_KEY }}
           OGMIOS_URL: 'ws://localhost:1337'
-          TX_BUILDERS: 'buildooor,csl'
           PRIMARY_TIMEOUT_MS: 15000
           FALLBACK_TIMEOUT_MS: 15000
           INDEX_TTL_MS: 60000

@@ -7,10 +7,13 @@
 type Q = { _op: string; entity: string; where?: unknown; set?: unknown; entries?: unknown };
 // vi.mock factories are hoisted above all statements — anything they capture
 // must be hoisted too.
-const { dbRun, fakeDb } = vi.hoisted(() => {
+const { dbRun, fakeDb, dropAccountSnapshotsAfter } = vi.hoisted(() => {
   const dbRun = vi.fn<(q: Q) => Promise<unknown>>();
-  return { dbRun, fakeDb: { run: dbRun } };
+  return { dbRun, fakeDb: { run: dbRun }, dropAccountSnapshotsAfter: vi.fn(async () => undefined) };
 });
+
+// its own suite runs it on a real database
+vi.mock('../../srv/blockchain/crawler/account-snapshots', () => ({ snapshotAccounts: vi.fn(), dropAccountSnapshotsAfter }));
 
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -39,6 +42,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   Transactions: 'odatano.cardano.Transactions',
   TransactionInputs: 'odatano.cardano.TransactionInputs',
   TransactionInputAssets: 'odatano.cardano.TransactionInputAssets',
+  TransactionInputAssetCopies: 'odatano.cardano.TransactionInputAssetCopies',
   TransactionOutputs: 'odatano.cardano.TransactionOutputs',
   TransactionOutputAssets: 'odatano.cardano.TransactionOutputAssets',
   AddressTransactions: 'odatano.cardano.AddressTransactions',
@@ -108,7 +112,7 @@ describe('CardanoCrawler.handleReorg', () => {
 
     const deletes = opsFor('DELETE').map(q => shortName(q.entity));
     expect(deletes).toEqual(expect.arrayContaining([
-      'TransactionInputAssets', 'TransactionOutputAssets',
+      'TransactionInputAssetCopies', 'TransactionOutputAssets',
       'TransactionInputs', 'TransactionOutputs', 'TransactionMetadata',
       'AddressTransactions', 'AddressUTxOs', 'UTxOAssets', 'AssetHistory',
       'TransactionCertificates', 'TransactionWithdrawals',
@@ -131,6 +135,7 @@ describe('CardanoCrawler.handleReorg', () => {
       const snapDelete = opsFor('DELETE').find(q => q.entity.endsWith(name));
       expect(snapDelete!.where).toEqual({ snapshotSlot: { '>': 500 } });
     }
+    expect(dropAccountSnapshotsAfter).toHaveBeenCalledWith(fakeDb, 500);
 
     // cursor rewound to the fork
     const update = opsFor('UPDATE')[0];

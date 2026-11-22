@@ -141,9 +141,9 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
     it('POST /GetLatestEpoch - verify epoch time boundary calculations', async () => {
       const { status, data } = await test.post('/odata/v4/cardano/GetLatestEpoch', {});
       expect(status).to.equal(200);
-      expect(data.endTime).to.be.greaterThan(data.startTime);
+      expect(Number(data.endTime)).to.be.greaterThan(Number(data.startTime));
       // Preview epoch is ~1 day (86400 slots * 1s = 86400 seconds), not mainnet's 5 days
-      const epochDuration = data.endTime - data.startTime;
+      const epochDuration = Number(data.endTime) - Number(data.startTime);
       expect(epochDuration).to.be.greaterThan(80000); // ~1 day
       expect(epochDuration).to.be.lessThan(90000);
     });
@@ -219,10 +219,11 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
 
     it('POST /GetLatestEpoch - verify epoch time boundaries', async () => {
       const { status, data } = await test.post('/odata/v4/cardano/GetLatestEpoch', {});
-      expect(data.startTime).to.be.a('number');
-      expect(data.endTime).to.be.a('number');
-      expect(data.endTime).to.be.greaterThan(data.startTime);
-      const duration = data.endTime - data.startTime;
+      // Int64 leaves the service as text
+      expect(data.startTime).to.be.a('string');
+      expect(data.endTime).to.be.a('string');
+      expect(Number(data.endTime)).to.be.greaterThan(Number(data.startTime));
+      const duration = Number(data.endTime) - Number(data.startTime);
       expect(duration).to.be.greaterThan(80000); // preview epoch ≈ 86400s (~1 day)
       expect(status).to.equal(200);
     });

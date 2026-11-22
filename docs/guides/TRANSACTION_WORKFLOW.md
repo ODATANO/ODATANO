@@ -401,6 +401,26 @@ For externally built transactions (not via ODATANO actions).
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | Wrong signing key or tampered CBOR | Verify correct `.skey`, re-build if modified |
 | `ODATANO_PROVIDER_UNAVAILABLE` | 503 | All backends unreachable/timed out | Retry after 30s, check the status of the configured backends |
 | `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Transaction already on chain/mempool | Expected (idempotent), check explorer |
+| `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | The submit got no verdict from the node (timeout, outage, rate limit) | Do not build a replacement. Read the status until it leaves `submitting` / `pending` |
+
+### What a failed submit means
+
+A submit can end in three ways, and the stored status says which:
+
+| Outcome | Signing request | Submission | Response |
+|---------|-----------------|------------|----------|
+| The node accepted the transaction, or the chain already has it | `submitted` | `submitted` | 200, or 409 `ODATANO_TX_ALREADY_SUBMITTED` on `SubmitTransaction` / `SubmitSignedTransaction` |
+| The node refused the transaction and it is not on chain | `failed`, with `errorMessage` | `failed`, with `errorMessage` | the node's 4xx |
+| No verdict | stays `submitting` | stays `pending` | 503 `ODATANO_SUBMIT_OUTCOME_UNKNOWN` |
+
+`failed` is therefore a statement about the chain: this transaction did not go out. Without a
+verdict the server keeps the signed transaction and resolves the record itself, at start and
+every 60 seconds. For 10 minutes after the submit it sends the same transaction again. After that
+it only reads the chain: on chain ends as `submitted`, not on chain as `failed`. Poll
+`GetSigningRequest`, or read the `TransactionSubmissions` row of the transaction hash, for the result.
+
+With Ogmios as the only backend no transaction lookup exists, so there the node's answer to the
+repeated submit decides.
 
 ---
 

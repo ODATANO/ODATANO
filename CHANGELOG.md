@@ -1,6 +1,249 @@
 # Changelog
 
+All notable changes to ODATANO will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
 ## [Unreleased]
+
+## [v2.0.0-rc.50] - enforced roles, schema migration at start, input assets by reference, account snapshots
+
+Schema: `CardanoAgentGrants` no longer has the columns `walletId` and `allowedJobKinds`;
+`CardanoWorkerWallets` has the new column `requiresRole`, `TransactionMetadata` the new column `txSeq` with
+an index on `(id, txSeq)`, `Pools` the new columns `metadataUrl`, `metadataHash`, `name`, `ticker`, `homepage` and
+`description`, `TransactionInputs` the new column `spentTxSeq`, `EpochLedgerSnapshots` the new columns
+`accountCount` and `accountSnapshotSlot`. New table `AccountEpochSnapshots`. Not additive: `Blocks.time` is a timestamp column,
+`CardanoAgentGrants` loses `walletId` and `allowedJobKinds`, the table `TransactionInputAssets` is renamed to
+`TransactionInputAssetCopies` and its old name is a view. `scripts/migrate-schema.mjs` applies these to an existing
+PostgreSQL or SQLite database before the schema deploy; the Docker image runs it on every start.
+
+### Added
+
+- Input assets by reference. `TransactionInputAssets` keeps its name, keys and rows and is a view: an input reads
+  its assets from a stored copy (`TransactionInputAssetCopies`) or from the output it spent
+  (`TransactionInputs.spentTxSeq`), never from both. A crawled input whose spent output is stored gets the
+  reference and no copy; `inputAssetCopies` (`CRAWLER_INPUT_ASSET_COPIES`, off) keeps a copy for every input.
+  Rows stored earlier keep their copies.
+- `pruneInputAssetCopies(fromSlot, toSlot, slotWindow)` and `restoreInputAssetCopies(fromSlot, toSlot,
+  slotWindow)` on `CardanoIndexerService` (actions, Admin, both slots required, slot of the spending
+  transaction): move the inputs of a slot range from copies to their output and back. The prune moves an input
+  only when its output is stored and holds exactly the assets of the copy. One transaction per `slotWindow`
+  slots (default 20000, at most 1000000); a window that would leave an input with copies and a reference is
+  rolled back and ends the walk. PostgreSQL and SQLite. Progress in `getStatus().copyPrune` and
+  `getStatus().copyRestore`.
+- Account snapshots. `accountSnapshots` (`CRAWLER_ACCOUNT_SNAPSHOTS`, off, needs `epochSnapshots` and Ogmios)
+  writes one `AccountEpochSnapshots` row per epoch for every reward account the node reports at the snapshot
+  block: `withdrawableAmount`, `creditedAmount`, `deposit`, `poolId`, `drepId`. The accounts asked are the
+  stake keys of the UTxO set and the stake addresses of crawled certificates. `creditedAmount` is the balance
+  difference to the epoch before plus the withdrawals in between, and needs `certificates`.
+  `getStatus().epochSnapshots` carries `accounts`, `lastAccountEpoch` and `lastAccountCount`.
+- `backfillAssetRegistry(source, path)`: with `source: "file"` the CIP-26 registry fields come from the entry
+  files of a checkout of the registry repository (`mappings` of `cardano-token-registry`, `registry` of
+  `metadata-registry-testnet`), read from the folder `path` on the server. No backend. Units without an
+  `Assets` row are counted (`registryBackfill.absent`), entries that describe a script are skipped
+  (`registryBackfill.skipped`). Without parameters the action reads from Koios as before.
+- `backfillEpochs()` on `CardanoIndexerService` (action, Admin): writes block count, transaction count, fees
+  and the first and last block time of every epoch the crawl covers in full, from the stored blocks. An epoch
+  without a row gets one; `output` and `activeStake` of an existing row stay. No backend. Progress in
+  `getStatus().epochBackfill`.
+- Index on `Blocks.time`.
+- Docker image: an existing SQLite volume gets the schema of the new image at start, like PostgreSQL. A file
+  created by an earlier image is given a record of its schema on the first start.
+- `GetMetadataByLabel(label, fromSlot, limit, skip)` on `CardanoODataService`: the stored metadata of one
+  label in chain order, oldest first, from the database only. Rows carry `txSeq`. Default limit 100, at most
+  1000. Agent tokens may call it.
+- `backfillMetadataPositions()` on `CardanoIndexerService` (action, Admin): writes `txSeq` to the
+  `TransactionMetadata` rows stored before the column existed. No backend. Progress in
+  `getStatus().metadataBackfill`.
+- `GetLatestTransactionsByAddress` takes `sinceTime` (unix seconds, only transactions with a later block
+  time) and `waitMs` (at most 30000, needs `sinceTime`): the call reads again every 5 seconds until a newer
+  transaction appears or the time is up.
+- `GetJobStatus(jobId, waitMs)`: with `waitMs` (at most 30000) the call answers as soon as the job is
+  confirmed, failed or cancelled, or after that time with the state it has then. A waiting request holds no
+  database connection. Without `waitMs` the call answers at once, as before.
+- `backfillOutputDatums()` on `CardanoIndexerService` (action, Admin): reads the transactions again whose
+  stored outputs hold a datum hash and no inline datum, and writes the inline datum and the reference-script
+  fields to the output, to the inputs that spent it and to its `LedgerUTxOs` row. Only empty fields change.
+  Needs a backend that serves transactions (Koios, Blockfrost, remote ODATANO). Progress in
+  `getStatus().datumBackfill`.
+- `backfillTransactions` fills the same output fields from the node (`transactionBackfill.outputs`).
+- `getReadiness()` on `CardanoIndexerService` (function, no credentials): 200 with `status: "ready"`, or 503
+  with the same body while the app context, the database or a configured HSM is missing. The body is
+  `{ status, timestamp, context, database, hsm }`. Agent tokens may call it. The image's `HEALTHCHECK` stays
+  on `getLiveness()`.
+- Open submits are resolved at start and every 60 seconds: signing requests at `submitting` and
+  submissions at `pending`. The stored transaction is sent again for 10 minutes after the submit, after
+  that only the chain is read (on chain: `submitted`, not on chain: `failed`). With Ogmios as the only
+  backend the node's answer to the repeated submit decides.
+- `SigningRequests`: `signedTxCbor`, `signerType`, `signerInfo` and `signedAt` are stored when the request
+  is claimed, on the synchronous path too. `errorMessage` carries the node's refusal.
+- `Pools` carries `metadataUrl` and `metadataHash` from the registration, and `name`, `ticker`, `homepage` and
+  `description` from the metadata file. Koios and Blockfrost deliver the four fields. With
+  `poolMetadataFetch` (`POOL_METADATA_FETCH`, off by default) ODATANO loads the file itself, which Ogmios
+  needs: at most 512 bytes, used only when it hashes to the registered hash, public hosts only, at most
+  five redirects, 3 seconds. Blockfrost: one more request per pool read (`/pools/{id}/metadata`).
+- Wallet job kind `payout`: several recipients in one transaction. `requestJson` takes `outputsJson` in the
+  form of `BuildPlutusTransaction`, at most 150 outputs, plus `forceInputsJson`, `protectInputsJson` and the
+  validity window. The outputs keep their order, the change returns to the wallet.
+- `VerifyDataSignature` accepts a reward address (`stake1…`): the stake key signs for it. A payload the
+  wallet hashed (`hashed: true`, hardware wallets) is checked against the blake2b-224 of `expectedPayload`.
+  The answer carries `signedPayloadHex`, the payload bytes as signed.
+- Worker wallets: a wallet entry in `walletWorker.wallets` (`WALLET_WORKER_WALLETS`) takes an optional
+  `requiresRole`. `SubmitWalletJob` for that wallet answers 403 `ODATANO_FORBIDDEN` to a caller without the
+  role, on an HSM wallet in addition to `hsm.requiresRole`. `WorkerWallets` shows the role. A wallet without
+  it behaves as before.
+
+### Breaking
+
+- Roles are enforced. `CardanoODataService` and `CardanoBackendService` need `Read`,
+  `CardanoTransactionService` and `CardanoWorkerService` need `Transact`, `CardanoSignService` needs `Sign`
+  (not `VerifyDataSignature`), `SyncState`, `ReorgLog` and `getStatus()` need `Read`.
+  `EvaluateTransaction` and `SubmitTransaction` on `CardanoBackendService` need `Transact` as well. A
+  logged-in user without the role gets 403; a login alone was enough before.
+  - XSUAA: the role template `CardanoAdmin` carries `Read`, `Transact`, `Sign` and `Admin`.
+  - Docker image: `ODATANO_HTTP_ROLES` defaults to `Read,Transact,Sign,Admin` (was `Admin`).
+  - Agent tokens hold `Read`, `Transact` and `Sign`; the grant decides per operation as before.
+  - A CAP project that loads ODATANO as a plugin assigns the roles to its users.
+- `Blocks.time` is `Edm.DateTimeOffset` (was `Edm.String`). The value keeps its form, and a `$filter` with a
+  quoted text keeps working; `$filter=time gt 2026-01-01T00:00:00Z` and `year(time)` are new.
+- A plugin project runs `node node_modules/@odatano/core/scripts/migrate-schema.mjs` before `cds deploy` on an
+  existing database; `cds deploy` alone refuses the three changes that are not additive.
+  `scripts/migrate-txseq.mjs` and the image mode `migrate-txseq` are gone, the key change is a step of the
+  new script. Image modes: `migrate-schema` (these steps, `--dry-run` reports) and `deploy-schema` (these
+  steps and the additive deployment, without starting the service).
+- `TransactionInputs/assets` is an association, not a composition: deleting an input through CAP no longer
+  deletes asset rows with it.
+- `/odata/v4/cardano-odata` is gone. `CardanoODataService` answers at `/odata/v4/cardano` only.
+- Agent tokens cannot use worker wallets: an agent signs its transactions itself. `SubmitWalletJob` and
+  `CancelJob` are no longer grantable, and `CardanoWorkerService` answers every token request with 403,
+  status and reads included.
+- `CreateAgentGrant` and `UpdateAgentGrant` lose the parameters `walletId` and `allowedJobKinds`; a
+  request that still sends one is a 400. `GetGrantStatus` and the issued grant lose the two fields. A stored
+  grant that lists a wallet action keeps its other actions.
+- `SubmitWalletJob`: a job that fails after its transaction may have been sent (`TX_DROPPED`,
+  `SUBMIT_REJECTED`) keeps its `idempotencyKey`. A retry with that key returns the failed job; paying again
+  needs a new key. A job that fails before the send, and a cancelled job, release the key as before.
+- `SubmitWalletJob`: the same `idempotencyKey` with a different request is a 409
+  `ODATANO_IDEMPOTENCY_KEY_CONFLICT`. The comparison ignores the order of JSON keys.
+- `SubmitVerifiedTransaction`, `SignAndSubmitWithHsm`, `SubmitTransaction`, `SubmitSignedTransaction`: a
+  submit without a verdict from the node (timeout, 5xx, rate limit, or a refusal whose chain lookup failed)
+  answers 503 `ODATANO_SUBMIT_OUTCOME_UNKNOWN`. The signing request stays `submitting`, the submission
+  `pending`. Both ended as `failed` before. `failed` now means: refused by the node and not on chain.
+- Agent tokens: access is declared per operation in the service models (`@odatano.agent`: `read`, `grant`,
+  `operator`; `closed` on a service) and checked per service. A token is refused an operation name on a
+  service that does not declare it. The exports `AGENT_ALLOWLISTABLE_ACTIONS` and
+  `AGENT_ALWAYS_ALLOWED_EVENTS` are gone; `agentGrantableActions()` and `agentAccessOf(service, event)`
+  answer from the loaded model.
+- The transaction builder is no setting: `CardanoClientConfig.transactionBuilders` and the type
+  `TransactionBuilderName` are gone, `TX_BUILDERS` / `txBuilders` have no effect.
+  `createTestContext(backends, protocolParams?)` takes no builder name.
+- `VerifyDataSignature` follows CIP-30 strictly. `valid: false` for: a signed header without `alg` EdDSA or
+  without the `address`, an `address` header that is not the given address, a COSE_Key that is not OKP,
+  EdDSA, Ed25519, a label that occurs twice, key ids that differ, a signature that is not 64 bytes. The
+  payload is compared with `expectedPayload` byte for byte; `signedPayload` is empty for bytes that are not
+  UTF-8. `coseSignature` takes at most 65536 characters, `coseKey` 512, `expectedPayload` 16384 (400 above).
+- A refused transaction that is on chain ends as `submitted` on the sign service and as 409
+  `ODATANO_TX_ALREADY_SUBMITTED` on `SubmitTransaction` / `SubmitSignedTransaction`.
+- `Int64` and `Decimal` are JSON text in every answer, whether the row was read from the database or built
+  for the answer. JSON numbers until now: the counters of `getStatus()`, `blockHeight` and `tipHeight` of
+  `GetTransactionConfirmations`, `createdAt` of a build, `submittedAt` of a submission, `slot` of
+  `GetLatestBlock`, the times of `GetLatestEpoch`, `blockTime` of `GetAssetHistory`, and `slot`, `blockTime`,
+  the epoch times and the pool and protocol parameter fractions on the first call for a row not yet stored.
+
+### Fixed
+
+- Transactions read through Koios carry the inline datum bytes and the reference scripts of their outputs
+  (lazy path and pagination crawl): `/tx_info` is asked for scripts and bytecode. Rows stored by an earlier
+  version are repaired with `backfillOutputDatums` or `backfillTransactions`.
+- Koios asset info: a registry text field the entry does not carry is null, not an empty string
+  (`registryTicker`, `registryName`, `registryDescription`, `registryUrl`, `registryLogo`). A rerun of
+  `backfillAssetRegistry` rewrites stored rows.
+- A Plutus build that fails local evaluation names the machine's error message next to the script logs.
+- Two concurrent finalizations of one signing request write one submission record.
+- Wallet worker: a job whose repeated submit was refused no longer stays `submitting` for good when no
+  configured backend can look transactions up.
+- Plugin mode serves `CardanoBackendService`. The plugin did not register its model, so a project that
+  loads ODATANO as a plugin answered 404 on `/odata/v4/cardano-backend/`; only the standalone server and
+  the image served it.
+- Transactions crawled over Ogmios chain-sync carry their deposit: what the transaction locks, or gets back
+  as a negative amount, derived from its inputs, withdrawals, outputs, fee and treasury donation. It was 0
+  for every such transaction. `Transactions.deposit` is null for a transaction with certificates or
+  proposals while one of its spent inputs is not indexed. Rows stored earlier keep their value.
+- `Transactions.size` of a transaction crawled over Ogmios chain-sync is filled when Ogmios runs with
+  `--include-transaction-cbor`. Without the flag it stays null.
+- `Epochs.firstBlockTime` and `lastBlockTime` of an epoch the crawl covers in full hold the time of its
+  first and last crawled block, taken from their slots. They were written empty, also over the values a
+  backend had delivered. `backfillEpochs` rewrites the rows stored earlier.
+- A start on SQLite no longer logs the PostgreSQL `ORDER BY` hook.
+- Accounts read from the node: for an account without a pool delegation Ogmios 7.0 answers a reward balance
+  of 0, whatever the account holds. `withdrawableAmount` and `rewardsSum` of such an account now come from a
+  provider (Koios, Blockfrost, remote ODATANO) when one is configured, and are null with Ogmios alone.
+  `AccountData.withdrawableAmount` and `rewardsSum` are `string | null`.
+- Crawl over Ogmios chain-sync: a transaction whose script phase failed stores no certificates and no
+  withdrawals, since the ledger applies neither. `backfillCertificates` removes the rows stored earlier in
+  the range it replays and counts them in `certificateBackfill.removed`.
+- Crawler: a chain-sync stream that delivers nothing for five minutes is closed and reopened at the
+  cursor. A half-open socket, which sends neither blocks nor a close, no longer leaves the crawler waiting
+  with a healthy lease.
+- A build with a reward withdrawal above zero balances: the change carries the withdrawn amount. The node
+  refused such a transaction before (value not conserved).
+- Local script evaluation prices builtins by the protocol version of the chain (`protocolMajorVer` of the
+  protocol parameters), and passes a finite upper validity bound to the script as exclusive, like a Conway
+  node.
+
+### Changed
+
+- A read that misses the index holds no database connection while the backend answers. The lookup runs
+  in a short transaction of its own, then the backend is asked, and the request transaction starts with
+  the write. This covers the read service, `CardanoBackendService`, the build actions and the builds of
+  the wallet worker. On SQLite, which has one connection, every other request, the crawler and the wallet
+  worker waited for the backend call before. A request that already holds its connection, such as an
+  in-process call from a handler that wrote first, reads on that connection as before.
+- Two first reads of one key that overlap store it once: the later request keeps the row the earlier one
+  wrote.
+- Peer dependency `@sap/cds` is `^10` (was `>=10`). CAP 10 is the major the package is tested on.
+- Configuration is read in one module (`srv/config.ts`): the section `cds.requires.odatano-core` first, then
+  the environment, then the default. The exported loaders keep their names.
+- `CardanoClient` built with an `indexTtlMs` that is not a positive number uses the default of one hour
+  (was 60 seconds), the same default as `INDEX_TTL_MS`.
+- `@harmoniclabs/buildooor` 0.3.0 and `@harmoniclabs/cardano-ledger-ts` 0.6.1, with `plutus-data` 2.1.1,
+  `cbor` 2.1.0, `uplc` 2.0.8, `crypto` 0.3.2 and `cardano-costmodels-ts` 1.7.0. The reference-script fee,
+  voting and proposing redeemers, and the bytes of a datum given as CBOR come from these libraries.
+- Reference-script fee: the builder counts up to 16 bytes more per script than the ledger, which is 240
+  lovelace per reference script on the inputs in the first price tier.
+- Built transactions list the required signers in ascending order, each once, and leave out an empty mint,
+  certificate or withdrawal field.
+- `ParseTransactionCbor` answers 400 `ODATANO_TX_PARSE_FAILED` for a transaction whose voting or proposal
+  procedures are malformed. They were counted without being decoded before.
+- Wallet worker: a dispatch round reads one due job per wallet it signs for, without the job payloads,
+  and filters `notBefore` in the database. It read every pending job with its payload before. Wallets are
+  served in the order of their next job (priority, then age). Indexes on `CardanoWalletJobs`:
+  `(walletId, status, priority, createdAt)` and `(status)` replace the two earlier ones.
+- Agent grants: usage counters (`CardanoAgentGrantUsage`) older than 400 days are deleted once a day.
+  `AGENT_GRANT_USAGE_RETENTION_DAYS` / `agentGrants.usageRetentionDays` sets the number of days, 0 keeps
+  every row.
+- A provider SDK loads with its backend: without `blockfrost` in `backends` the Blockfrost SDK is not read,
+  without `ogmios` the Ogmios client is not. A start on Koios or a remote ODATANO alone reads neither.
+- Image: built from `node:22.23.5-alpine` (Node security release of 2026-11-11). `@sap/cds-dk` and its
+  dependency tree are no longer in the runtime image; the DB adapters are dependencies of the image's own
+  manifest, and `npm ls` checks the tree at build time.
+- `docker-compose.yml` publishes the ports 1337 and 4004 on `127.0.0.1` only.
+- `app/router`: `@sap/approuter` 23.4.0 (was 22.0.3), without overrides.
+- `backfillAssetRegistry` logs the units it could not fill, counted by error, at warn level.
+- Docker image: the schema is brought up to date on every start, in two parts: the steps of
+  `scripts/migrate-schema.mjs` that are still due, then CAP's additive deployment. `migrate` (SQLite to
+  PostgreSQL) brings the SQLite file to the schema of the image before it copies.
+- Release gates: the packed tarball is installed into an empty CAP project and served
+  (`scripts/smoke-consumer.mjs`, `npm run smoke:consumer`, on Node 22 and 24), and the image is started
+  and probed before the push (`scripts/smoke-image.mjs`). The consumer run also checks on the installed
+  CAP that a transaction takes its database connection with its first statement.
+- Docs: `docs/guides/UPGRADE_2.0.md` for the step from 1.x, `deferSubmit` in the User Guide, the
+  authorization section of the Security Guide for all seven services, a database table in the
+  Production Deployment guide.
+- Release gates: the router's production tree and the wallet app's build tooling are audited
+  (`scripts/audit-tree.mjs`, dated exceptions in `scripts/audit-exceptions.json`), and the release workflow
+  audits the image's dependency tree before the push.
 
 ## [v2.0.0-rc.49] - CIP-26 registry fields for the asset catalogue
 
@@ -1089,7 +1332,7 @@ The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a 
   Delete those rows before re-crawling if you need a clean table (they are
   rare: standard labels are far below 2^53).
 
-## [v2.0.0] - CAP 10, chain crawler / pre-sync, wallet worker
+## [v2.0.0-rc.1 to rc.9] - CAP 10, chain crawler / pre-sync, wallet worker
 
 ### Added (rc.9)
 
@@ -1134,11 +1377,6 @@ The crawl now carries certificates, withdrawals, input outpoints and, opt-in, a 
   development mode, which is why it worked there). Both services now carry
   `@requires: 'any'` at the service level; every element keeps its own
   requirement, nothing else changes for callers. The model test pins it.
-
-All notable changes to ODATANO will be documented in this file.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed (rc.7)
 

@@ -18,15 +18,25 @@ vi.mock('@sap/cds', () => {
     if (!tables.has(name)) tables.set(name, []);
     return tables.get(name)!;
   };
+  // Object predicates as cds.ql reads them: keys are ANDed, an `or` key adds an alternative.
   const matches = (row: Record<string, unknown>, where?: Record<string, unknown>): boolean => {
     if (!where) return true;
-    return Object.entries(where).every(([k, v]) => {
+    const { or, ...rest } = where as Record<string, unknown> & { or?: Record<string, unknown> };
+    const all = Object.entries(rest).every(([k, v]) => {
+      if (k === 'and') return matches(row, v as Record<string, unknown>);
       if (v !== null && typeof v === 'object' && 'in' in (v as Record<string, unknown>)) {
         return ((v as { in: unknown[] }).in).includes(row[k]);
       }
+      if (v !== null && typeof v === 'object' && '<=' in (v as Record<string, unknown>)) {
+        return row[k] != null && String(row[k]) <= String((v as Record<string, unknown>)['<=']);
+      }
       return row[k] === v || (v === null && (row[k] === null || row[k] === undefined));
     });
+    return all || (or !== undefined && matches(row, or));
   };
+  const dispatchOrder = (rows: Record<string, unknown>[]): Record<string, unknown>[] => [...rows].sort((a, b) =>
+    (Number(a.priority ?? 0) - Number(b.priority ?? 0)) ||
+    String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
   const db = {
     run: async (raw: { _op: string; entity: string; where?: Record<string, unknown>; set?: Record<string, unknown>; entries?: unknown; orderBy?: unknown[]; _q?: never }) => {
       // SELECT chains carry their data under `_q`; INSERT/UPDATE are flat.
@@ -35,16 +45,12 @@ vi.mock('@sap/cds', () => {
       switch (q._op) {
         case 'SELECT.one': {
           const found = rows.filter(r => matches(r, q.where));
-          return found.length ? { ...found[found.length - 1] } : undefined;
+          if (!found.length) return undefined;
+          return { ...(q.orderBy?.includes('priority') ? dispatchOrder(found)[0] : found[found.length - 1]) };
         }
         case 'SELECT': {
-          let found = rows.filter(r => matches(r, q.where));
-          if (q.orderBy?.length) {
-            found = [...found].sort((a, b) =>
-              (Number(a.priority ?? 0) - Number(b.priority ?? 0)) ||
-              String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
-          }
-          return found.map(r => ({ ...r }));
+          const found = rows.filter(r => matches(r, q.where));
+          return (q.orderBy?.length ? dispatchOrder(found) : found).map(r => ({ ...r }));
         }
         case 'INSERT': {
           const entries = Array.isArray(q.entries) ? q.entries : [q.entries];
@@ -134,6 +140,7 @@ function makeDeps() {
     submitTransaction: vi.fn().mockResolvedValue(TX_HASH),
     getTransaction: vi.fn(),
     getLatestBlock: vi.fn(),
+    supports: vi.fn(() => true),
   };
   const indexer = {
     indexSimpleBuildResult: vi.fn().mockResolvedValue({
@@ -143,6 +150,9 @@ function makeDeps() {
     indexMetadataBuildResult: vi.fn(),
     indexMultiAssetBuildResult: vi.fn(),
     indexPlutusSpendBuildResult: vi.fn(),
+    indexPlutusBuildResult: vi.fn().mockResolvedValue({
+      id: 'build-payout', unsignedTxCbor: 'dead', txBodyHash: 'e'.repeat(64), fee: '190000',
+    }),
     persistTransactionSubmission: vi.fn().mockResolvedValue({}),
     findIndexedTransaction: vi.fn().mockResolvedValue(null),
   };
@@ -689,6 +699,21 @@ describe('engine: reconciling an interrupted submit', () => {
     expect((await getJobById(db, job.ID))!.status).toBe('submitting');
   });
 
+  it('takes the rejection as final when no backend can look transactions up', async () => {
+    const deps = makeDeps();
+    deps.client.supports.mockReturnValue(false);
+    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('ValueNotConserved', undefined));
+    const worker = makeWorker(deps);
+    const job = await seedInterruptedSubmit();
+
+    await reconcile(worker, job);
+
+    expect(deps.client.getTransaction).not.toHaveBeenCalled();
+    const row = (await getJobById(db, job.ID))!;
+    expect(row.status).toBe('failed');
+    expect(row.errorCode).toBe(JOB_ERROR_CODES.SUBMIT_REJECTED);
+  });
+
   it('fails a submitting row that has no signed transaction rather than blocking the wallet', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
@@ -752,6 +777,39 @@ describe('engine: dispatch mapping and failure classification', () => {
     expect(deps.indexer.indexMintBuildResult).toHaveBeenCalled();
     expect(deps.indexer.indexPlutusSpendBuildResult).toHaveBeenCalled();
     expect(() => buildForKind('teleport')).toThrow(/Unsupported job kind/);
+  });
+
+  it('payout: one transaction for all recipients, the wallet as sender and change target', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const outputs = [{ address: 'addr_test1_a', lovelaceAmount: '2000000' }, { address: 'addr_test1_b', lovelaceAmount: '3000000' }];
+    // address validation needs the app context; this test is about the dispatch
+    const parser = await import('../../srv/utils/tx-request-parsers');
+    const parse = vi.spyOn(parser, 'parseOutputList').mockReturnValue({ parsed: outputs });
+    const job = await seedJob('payout', JSON.stringify({ outputsJson: JSON.stringify(outputs) }));
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+    parse.mockRestore();
+
+    expect(deps.indexer.indexPlutusBuildResult).toHaveBeenCalledTimes(1);
+    expect(deps.indexer.indexPlutusBuildResult.mock.calls[0][1]).toMatchObject({
+      network: 'preview', senderAddress: 'addr_test1_worker', changeAddress: 'addr_test1_worker', scriptInputs: [], outputs,
+    });
+    expect(deps.indexer.indexSimpleBuildResult).not.toHaveBeenCalled();
+    expect((await getJobById(db, job.ID))!.status).toBe('submitted');
+  });
+
+  it('payout: a job without recipients fails at once, nothing is built', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob('payout', '{}');
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    const row = (await getJobById(db, job.ID))!;
+    expect(row.status).toBe('failed');
+    expect(row.errorMessage).toMatch(/outputsJson is required/);
+    expect(deps.indexer.indexPlutusBuildResult).not.toHaveBeenCalled();
   });
 
   it('labels a non-BackendError failure EXECUTION_FAILED', async () => {
@@ -834,6 +892,36 @@ describe('engine: per-wallet serialization', () => {
 
     expect((await getJobById(db, w2Job))!.status).toBe('submitted');
     expect(deps.client.submitTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('with one slot, the wallet holding the more urgent job runs first', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps, { ...CONFIG, maxConcurrentWallets: 1 });
+    const request = '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}';
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    await upsertWalletRegistration(db, { walletId: 'w2', signerType: 'software', address: 'addr_test1_w2', publicKeyHash: 'e'.repeat(56) });
+    (worker as unknown as { signers: Map<string, unknown> }).signers.set('w2', deps.signer);
+    const { jobId: routine } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request, priority: 100 });
+    const { jobId: urgent } = await insertJob(db, { walletId: 'w2', kind: 'simpleAda', request, priority: 1 });
+
+    await runTick(worker);
+
+    expect((await getJobById(db, urgent))!.status).toBe('submitted');
+    expect((await getJobById(db, routine))!.status).toBe('pending');
+  });
+
+  it('a job scheduled for later does not hold back a due job of the same wallet', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    const later = new Date(Date.now() + 3_600_000).toISOString();
+    const { jobId: scheduled } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{}', priority: 1, notBefore: later });
+    const { jobId: due } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}' });
+
+    await runTick(worker);
+
+    expect((await getJobById(db, due))!.status).toBe('submitted');
+    expect((await getJobById(db, scheduled))!.status).toBe('pending');
   });
 
   it('skips wallets this instance has no signer for', async () => {

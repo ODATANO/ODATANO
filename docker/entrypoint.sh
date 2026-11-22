@@ -23,14 +23,24 @@ wait_for_postgres() {
     '
 }
 
-# Moves an older database onto the txSeq key layout. Run once with the service stopped,
-# before the first start of the new image. --dry-run only reports.
-if [ "$MODE" = "migrate-txseq" ]; then
+# Applies the schema changes the additive deploy refuses, as a run of its own. The service does
+# the same before every start; on a large database run it once with the service stopped.
+# --dry-run only reports.
+if [ "$MODE" = "migrate-schema" ]; then
     shift
     CDS_CONFIG="$(node /app/docker/cds-config.mjs --db-only)" || exit 1
     export CDS_CONFIG
     [ -n "$DB_URL" ] && wait_for_postgres
-    exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-txseq.mjs "$@"
+    exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-schema.mjs "$@"
+fi
+
+# Brings the database to the schema of the image and exits: the migration steps, then the
+# additive deploy. For preparing a database without starting the service.
+if [ "$MODE" = "deploy-schema" ]; then
+    CDS_CONFIG="$(node /app/docker/cds-config.mjs --db-only)" || exit 1
+    export CDS_CONFIG
+    [ -n "$DB_URL" ] && wait_for_postgres
+    exec node --no-warnings=ExperimentalWarning /app/docker/deploy-schema.mjs
 fi
 
 # Copies a SQLite file into PostgreSQL. Run as a one-off container before the first
@@ -56,15 +66,11 @@ if [ -z "${CDS_CONFIG:-}" ]; then
     export CDS_CONFIG
 fi
 
-# PostgreSQL gets the schema on every boot, since CAP's schema evolution is additive.
+# The schema is brought up to date on every boot: the migration steps, then CAP's additive deploy.
 # SQLite is seeded on first boot from the schema the image build deployed.
 if [ -n "$DB_URL" ]; then
     DB_LABEL="postgres ($(printf '%s' "$DB_URL" | sed -E 's#://([^:/@]*)(:[^@]*)?@#://\1:***@#'))"
     wait_for_postgres
-    if [ "${ODATANO_DB_DEPLOY:-auto}" != "never" ]; then
-        echo "Deploying schema to PostgreSQL (additive evolution; ODATANO_DB_DEPLOY=never skips this)"
-        node /app/docker/deploy-schema.mjs
-    fi
 else
     DB_LABEL="sqlite ($DB_PATH)"
     mkdir -p "$(dirname "$DB_PATH")"
@@ -72,6 +78,10 @@ else
         echo "First boot: seeding $DB_PATH from the image's deployed schema"
         cp /app/db.sqlite "$DB_PATH"
     fi
+fi
+if [ "${ODATANO_DB_DEPLOY:-auto}" != "never" ]; then
+    echo "Deploying schema to $DB_LABEL (migration steps, then additive evolution; ODATANO_DB_DEPLOY=never skips this)"
+    node --no-warnings=ExperimentalWarning /app/docker/deploy-schema.mjs
 fi
 
 echo "Starting ODATANO (network=${NETWORK:-preview}, auth=${ODATANO_AUTH:-basic}, db=$DB_LABEL)"

@@ -35,7 +35,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
 import {
   insertJob,
   getJobById,
-  findDueJobs,
+  findNextDueJob,
   findSubmittedJobs,
   walletHasActiveJob,
   findOrphanedSubmittingJob,
@@ -47,6 +47,7 @@ import {
   markConfirmed,
   dedupKeyFor,
   markFailed,
+  markFailedAfterSend,
   markCancelled,
   requeueForRetry,
   recoverInterruptedJobs,
@@ -70,15 +71,25 @@ function makeStore() {
     if (!tables.has(name)) tables.set(name, []);
     return tables.get(name)!;
   };
+  // Object predicates as cds.ql reads them: keys are ANDed, an `or` key adds an alternative.
   const matches = (row: Row, where?: Row): boolean => {
     if (!where) return true;
-    return Object.entries(where).every(([k, v]) => {
+    const { or, ...rest } = where as Row & { or?: Row };
+    const all = Object.entries(rest).every(([k, v]) => {
+      if (k === 'and') return matches(row, v as Row);
       if (v !== null && typeof v === 'object' && 'in' in (v as Row)) {
         return ((v as { in: unknown[] }).in).includes(row[k]);
       }
+      if (v !== null && typeof v === 'object' && '<=' in (v as Row)) {
+        return row[k] != null && String(row[k]) <= String((v as Row)['<=']);
+      }
       return row[k] === v || (v === null && (row[k] === null || row[k] === undefined));
     });
+    return all || (or !== undefined && matches(row, or));
   };
+  const dispatchOrder = (rows: Row[]): Row[] => [...rows].sort((a, b) =>
+    (Number(a.priority ?? 0) - Number(b.priority ?? 0)) ||
+    String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
   const db = {
     run: vi.fn(async (raw: Query & { _q?: Query }) => {
       // SELECT chains carry their data under `_q`; INSERT/UPDATE are flat.
@@ -87,16 +98,12 @@ function makeStore() {
       switch (q._op) {
         case 'SELECT.one': {
           const found = rows.filter(r => matches(r, q.where));
-          return found.length ? { ...found[found.length - 1] } : undefined;
+          if (!found.length) return undefined;
+          return { ...(q.orderBy?.includes('priority') ? dispatchOrder(found)[0] : found[found.length - 1]) };
         }
         case 'SELECT': {
-          let found = rows.filter(r => matches(r, q.where));
-          if (q.orderBy?.length) {
-            found = [...found].sort((a, b) =>
-              (Number(a.priority ?? 0) - Number(b.priority ?? 0)) ||
-              String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
-          }
-          return found.map(r => ({ ...r }));
+          const found = rows.filter(r => matches(r, q.where));
+          return (q.orderBy?.length ? dispatchOrder(found) : found).map(r => ({ ...r }));
         }
         case 'INSERT': {
           const entries = Array.isArray(q.entries) ? q.entries : [q.entries!];
@@ -235,7 +242,7 @@ describe('job-store: insertJob + idempotency', () => {
         raced = true;
         await inner({
           _op: 'INSERT', entity: JOBS,
-          entries: { ID: 'winner-job', walletId: 'w1', kind: 'mint', status: 'pending', idempotencyKey: 'k1', dedupKey: 'k1' },
+          entries: { ID: 'winner-job', walletId: 'w1', kind: 'mint', status: 'pending', idempotencyKey: 'k1', dedupKey: 'k1', request: '{}' },
         } as never);
       }
       return result;
@@ -383,14 +390,33 @@ describe('job-store: state machine transitions', () => {
     expect(row.signedTxCbor).toBe('beef');
   });
 
-  it('findDueJobs filters notBefore in the future and orders by priority', async () => {
+  it('findNextDueJob skips a job whose notBefore lies ahead, however high its priority', async () => {
     const db = makeStore();
     const later = new Date(Date.now() + 60_000).toISOString();
-    await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', notBefore: later });
-    const { jobId: dueNow } = await insertJob(db as never, { walletId: 'w2', kind: 'simpleAda', request: '{}', priority: 50 });
+    await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', notBefore: later, priority: 1 });
+    expect(await findNextDueJob(db as never, 'w1')).toBeNull();
 
-    const due = await findDueJobs(db as never);
-    expect(due.map(j => j.ID)).toEqual([dueNow]);
+    const { jobId: dueNow } = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', priority: 50 });
+    expect(await findNextDueJob(db as never, 'w1')).toMatchObject({ ID: dueNow, walletId: 'w1', priority: 50 });
+    // the waiting job goes first once its time has come
+    const afterwards = await findNextDueJob(db as never, 'w1', new Date(Date.now() + 120_000));
+    expect(afterwards?.priority).toBe(1);
+  });
+
+  it('findNextDueJob answers one job of the asked wallet: lowest priority number, then oldest', async () => {
+    const db = makeStore();
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{"n":1}', priority: 50 });
+    await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{"n":2}', priority: 50 });
+    await insertJob(db as never, { walletId: 'w2', kind: 'simpleAda', request: '{}', priority: 1 });
+    const rows = db.tables.get(JOBS)!;
+    rows[0].createdAt = '2026-01-01T00:00:00.000Z';
+    rows[1].createdAt = '2026-01-01T00:00:01.000Z';
+
+    const next = await findNextDueJob(db as never, 'w1');
+    expect(next).toEqual({ ID: first.jobId, walletId: 'w1', priority: 50, createdAt: '2026-01-01T00:00:00.000Z' });
+    // no payload columns are read
+    expect(db.run.mock.calls.at(-1)![0]._q).toMatchObject({ columns: ['ID', 'walletId', 'priority', 'createdAt'] });
+    expect(await findNextDueJob(db as never, 'w3')).toBeNull();
   });
 
   it('walletHasActiveJob covers building, submitting AND submitted', async () => {
@@ -418,6 +444,59 @@ describe('job-store: state machine transitions', () => {
     expect(retry.deduplicated).toBe(true);
     expect(retry.jobId).toBe(first.jobId);
     expect(db.tables.get(JOBS)).toHaveLength(1);
+  });
+
+  it('a job failed after its transaction may have been sent keeps the key: the retry gets that job', async () => {
+    const db = makeStore();
+    const request = '{"lovelaceAmount":"5"}';
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request, idempotencyKey: 'invoice-1' });
+    await markBuilding(db as never, first.jobId, 1);
+    await markSubmitting(db as never, first.jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'beef', fee: null });
+    await markSubmitted(db as never, first.jobId, 'a'.repeat(64));
+
+    expect(await markFailedAfterSend(db as never, first.jobId, JOB_ERROR_CODES.TX_DROPPED, new Error('unseen'))).toBe(true);
+    const retry = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request, idempotencyKey: 'invoice-1' });
+
+    expect(retry).toEqual({ jobId: first.jobId, status: 'failed', deduplicated: true });
+    expect(db.tables.get(JOBS)).toHaveLength(1);
+    expect(db.tables.get(JOBS)![0].dedupKey).toBe('invoice-1');
+  });
+
+  it('markFailed does not touch a job whose transaction may have been sent', async () => {
+    const db = makeStore();
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', idempotencyKey: 'invoice-1' });
+    await markBuilding(db as never, first.jobId, 1);
+    await markSubmitting(db as never, first.jobId, { txHash: 'a'.repeat(64), unsignedTxCbor: null, signedTxCbor: 'beef', fee: null });
+
+    expect(await markFailed(db as never, first.jobId, 'X', new Error('boom'))).toBe(false);
+
+    const row = db.tables.get(JOBS)![0];
+    expect(row.status).toBe('submitting');
+    expect(row.dedupKey).toBe('invoice-1');
+  });
+
+  it('markFailedAfterSend does not touch a job that never sent', async () => {
+    const db = makeStore();
+    const jobId = await seedPending(db);
+
+    expect(await markFailedAfterSend(db as never, jobId, 'X', new Error('boom'))).toBe(false);
+  });
+
+  it('answers a retry in another key order with the job, and another request under the key with 409', async () => {
+    const db = makeStore();
+    const base = { walletId: 'w1', kind: 'simpleAda' as const, idempotencyKey: 'invoice-1' };
+    const first = await insertJob(db as never, { ...base, request: '{"recipientAddress":"addr1","lovelaceAmount":"5"}' });
+
+    const same = await insertJob(db as never, { ...base, request: '{"lovelaceAmount":"5", "recipientAddress":"addr1"}' });
+    expect(same).toEqual({ jobId: first.jobId, status: 'pending', deduplicated: true });
+
+    await expect(insertJob(db as never, { ...base, request: '{"recipientAddress":"addr1","lovelaceAmount":"6"}' }))
+      .rejects.toMatchObject({ statusCode: 409, code: 'ODATANO_IDEMPOTENCY_KEY_CONFLICT' });
+    // an integer above 2^53 is compared digit by digit
+    const big = await insertJob(db as never, { ...base, idempotencyKey: 'invoice-2', request: '{"lovelaceAmount":90071992547409931}' });
+    await expect(insertJob(db as never, { ...base, idempotencyKey: 'invoice-2', request: '{"lovelaceAmount":90071992547409932}' }))
+      .rejects.toMatchObject({ statusCode: 409 });
+    expect(big.deduplicated).toBe(false);
   });
 });
 
@@ -551,6 +630,17 @@ describe('job-store: per-wallet lease', () => {
     expect(await readWallet(db as never, 'w1')).toMatchObject({
       signerType: 'hsm', address: 'addr_test1_rotated',
     });
+  });
+
+  it('upsertWalletRegistration stores the wallet role and clears it when the config drops it', async () => {
+    const db = makeStore();
+    const wallet = { walletId: 'w9', signerType: 'software' as const, address: 'addr_test1_w9', publicKeyHash: 'c'.repeat(56) };
+
+    await upsertWalletRegistration(db as never, { ...wallet, requiresRole: 'Treasurer' });
+    expect((await readWallet(db as never, 'w9'))!.requiresRole).toBe('Treasurer');
+
+    await upsertWalletRegistration(db as never, wallet);
+    expect((await readWallet(db as never, 'w9'))!.requiresRole).toBeNull();
   });
 
   it('bumpWalletStats increments the matching counter', async () => {

@@ -20,7 +20,7 @@ cds.User.default = (cds.User as unknown as { Anonymous: typeof cds.User.default 
   impl: '@odatano/cap-auth',
   realm: 'odatano',
   basicThrottle: { maxFailures: 4 },
-  users: { odatano: { password: 'op-secret', roles: ['Admin'] } },
+  users: { odatano: { password: 'op-secret', roles: ['Read', 'Transact', 'Sign', 'Admin'] } },
 };
 
 // Native require shares the module graph with the booted CAP server and registers

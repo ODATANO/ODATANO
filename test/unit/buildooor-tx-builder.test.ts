@@ -1106,6 +1106,12 @@ describe('BuildooorTxBuilder', () => {
         .toThrow(/forfeit the collateral/);
     });
 
+    it('names the machine error in the build error', () => {
+      const failures = [{ tag: 0, index: 0, logs: [], error: 'bls12_381_G1_compress :: first argument not BlsG1 elem' }];
+      expect(() => resolve([fakeRedeemer(0, 0, 1n, 1n)], undefined, failures))
+        .toThrow(/Machine error: bls12_381_G1_compress :: first argument not BlsG1 elem\. Script logs: \[\]/);
+    });
+
     it('only fails the redeemer that actually failed', () => {
       const evaluated = new Map([['1:0', { mem: 10n, cpu: 20n }]]);
       const failures = [{ tag: 1, index: 0, logs: [] }];
@@ -1722,6 +1728,12 @@ describe('BuildooorTxBuilder', () => {
 
     const mapParams = (pp: any) =>
       (builder as any)._mapLedgerParametersToBuildooorParams(pp);
+
+    it('passes the protocol version of the chain, and none when the backend reports 0', () => {
+      expect(mapParams({ protocolMajorVer: 11, protocolMinorVer: 0 }).protocolVersion).toEqual({ major: 11, minor: 0 });
+      expect(mapParams({ protocolMajorVer: 0, protocolMinorVer: 0 }).protocolVersion).toBeUndefined();
+      expect(mapParams({}).protocolVersion).toBeUndefined();
+    });
 
     it('keeps library defaults for missing/null fields instead of degrading to 0', () => {
       const mapped = mapParams({ coinsPerUtxoSize: null, minFeeA: undefined, maxTxSize: '' });

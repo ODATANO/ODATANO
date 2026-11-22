@@ -16,7 +16,6 @@ vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'buildooor';
 
 describe('CardanoTransactionService Handler Validations', () => {
   const test = cds.test(__dirname + '/../../');
@@ -729,6 +728,8 @@ describe('CardanoTransactionService Handler Validations', () => {
         })
       );
 
+      // a refusal is final only for a transaction that is not on chain
+      setupTxInfoMock([]);
       nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
         .reply(400, { error: 'Transaction validation failed: signature verification failed' });

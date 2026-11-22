@@ -38,7 +38,7 @@ export function createTxErrorTestSuite(txBuilderConfig: TestConfiguration) {
       setupNocks();
       setupKoiosMocks();
 
-      const testContext = await createTestContext(['koios'], txBuilderConfig.txBuilderName);
+      const testContext = await createTestContext(['koios']);
       resetAppContext(testContext);
     });
 

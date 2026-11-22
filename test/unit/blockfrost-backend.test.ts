@@ -118,9 +118,15 @@ describe('BlockfrostBackend getPool mock test', () => {
       fixed_cost: '340000000',
       reward_account: 'stake1uxyz789'
     };
+    const mockPoolMetadata = {
+      pool_id: 'pool1abc123def456', hex: '0f'.repeat(28),
+      url: 'https://stakenuts.com/mainnet.json', hash: '47c0c68cb57f4a5b4a87bad896fc274678e7aea98e200fa14a1cb40c0cab1d8c',
+      ticker: 'NUTS', name: 'Stake Nuts', description: 'The best pool ever', homepage: 'https://stakentus.com/',
+    };
 
     BlockFrostAPI.mockImplementation(function () { return {
       poolsById: vi.fn().mockResolvedValue(mockPoolData),
+      poolMetadata: vi.fn().mockResolvedValue(mockPoolMetadata),
       blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }; });
@@ -144,7 +150,13 @@ describe('BlockfrostBackend getPool mock test', () => {
       pledge: '1000000000000',
       margin: 0.02,
       fixedCost: '340000000',
-      rewardAccount: 'stake1uxyz789'
+      rewardAccount: 'stake1uxyz789',
+      metadataUrl: 'https://stakenuts.com/mainnet.json',
+      metadataHash: '47c0c68cb57f4a5b4a87bad896fc274678e7aea98e200fa14a1cb40c0cab1d8c',
+      name: 'Stake Nuts',
+      ticker: 'NUTS',
+      homepage: 'https://stakentus.com/',
+      description: 'The best pool ever',
     });
   });
 
@@ -168,6 +180,8 @@ describe('BlockfrostBackend getPool mock test', () => {
 
     BlockFrostAPI.mockImplementation(function () { return {
       poolsById: vi.fn().mockResolvedValue(mockPoolData),
+      // a pool registered without metadata
+      poolMetadata: vi.fn().mockResolvedValue({}),
       blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }; });
@@ -181,6 +195,7 @@ describe('BlockfrostBackend getPool mock test', () => {
     expect(result.activeStake).toBe('0');
     expect(result.pledge).toBe('0');
     expect(result.fixedCost).toBe('0');
+    expect(result).toMatchObject({ metadataUrl: null, metadataHash: null, name: null, ticker: null, homepage: null, description: null });
   });
 
   it('should throw NotFoundError when pool does not exist', async () => {
@@ -189,6 +204,7 @@ describe('BlockfrostBackend getPool mock test', () => {
         status: 404,
         message: 'Pool not found'
       }),
+      poolMetadata: vi.fn().mockRejectedValue({ status: 404, message: 'Pool not found' }),
       blocksLatest: vi.fn().mockResolvedValue({ hash: 'block123' }),
       options: { requestTimeout: 0 },
     }; });

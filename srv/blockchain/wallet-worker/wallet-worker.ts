@@ -9,25 +9,26 @@ import {
   AllBackendsFailedError,
   HsmError,
   TransactionAlreadySubmittedError,
-  isNotFoundOnAllBackends,
 } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { getTxHashFromCbor } from '../../utils/tx-build-helper';
+import { isTransactionOnChain } from '../transaction-presence';
 import { TransactionSubmissions } from '#cds-models/odatano/cardano';
 import { ConfirmationTracker } from './confirmation-tracker';
 import { LeaseHeartbeat } from './lease-heartbeat';
-import { prepareWorkerBuildRequest } from './build-request';
+import { preparePayoutRequest, prepareWorkerBuildRequest } from './build-request';
 import { emitServiceEvent } from '../../utils/service-events';
 import { createWorkerSigner, type WorkerSigner, type WorkerWalletConfig } from './signers';
 import {
   JOB_ERROR_CODES,
   bumpWalletStats,
   failOrphanedBuildingJobs,
-  findDueJobs,
+  findNextDueJob,
   findOrphanedSubmittingJob,
   getJobById,
   markBuilding,
   markFailed,
+  markFailedAfterSend,
   markSubmitted,
   markSubmitting,
   recoverInterruptedJobs,
@@ -38,6 +39,7 @@ import {
   tryAcquireWalletLease,
   upsertWalletRegistration,
   walletHasActiveJob,
+  type DueJobRef,
   type WalletJobKindValue,
   type WalletJobRow,
 } from './job-store';
@@ -160,6 +162,7 @@ export class CardanoWalletWorker {
           signerType: walletCfg.signerType,
           address: signer.getAddress(),
           publicKeyHash: signer.getPublicKeyHash(),
+          requiresRole: walletCfg.requiresRole ?? null,
         }));
       } catch (err) {
         logger.error(`Wallet "${walletCfg.walletId}" skipped, signer initialization failed:`, err);
@@ -230,31 +233,37 @@ export class CardanoWalletWorker {
     // Interrupted submits first: a stuck `submitting` row blocks its wallet queue.
     await this.reconcileOrphanedSubmissions();
 
-    const due = await runWithoutAmbientTx(() => cds.tx((tx) => findDueJobs(tx)));
-    if (!due.length) return;
+    // The next due job of every idle wallet this instance signs for: one row per wallet.
+    const idle = this.getWalletIds().filter(walletId => !this.executing.has(walletId));
+    if (!idle.length) return;
+    const due = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+      const next: DueJobRef[] = [];
+      for (const walletId of idle) {
+        const ref = await findNextDueJob(tx, walletId);
+        if (ref) next.push(ref);
+      }
+      return next;
+    }));
+    // dispatch order across wallets: priority, then age
+    due.sort((a, b) => a.priority - b.priority || String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')));
 
-    // First runnable job per wallet, dispatch order (priority, createdAt) preserved.
-    const nextPerWallet = new Map<string, WalletJobRow>();
-    for (const job of due) {
-      if (!nextPerWallet.has(job.walletId)) nextPerWallet.set(job.walletId, job);
-    }
-
-    for (const [walletId, job] of nextPerWallet) {
+    for (const { ID, walletId } of due) {
       if (!this.running) return;
       if (this.executing.size >= this.deps.config.maxConcurrentWallets) return;
-      if (this.executing.has(walletId)) continue;
       const signer = this.signers.get(walletId);
-      if (!signer) continue; // job for a wallet this instance cannot sign for
+      if (!signer) continue;
 
-      const dispatched = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+      const job = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
         // A building row with an expired lease belongs to a dead executor.
         // Failing it unblocks the wallet without a reboot.
         await failOrphanedBuildingJobs(tx, walletId);
         // An active job blocks the wallet queue until the tracker finalizes it.
-        if (await walletHasActiveJob(tx, walletId)) return false;
-        return tryAcquireWalletLease(tx, walletId, this.deps.instanceId);
+        if (await walletHasActiveJob(tx, walletId)) return null;
+        const next = await getJobById(tx, ID);
+        if (next?.status !== 'pending') return null;
+        return (await tryAcquireWalletLease(tx, walletId, this.deps.instanceId)) ? next : null;
       }));
-      if (!dispatched) continue;
+      if (!job) continue;
 
       this.spawn(walletId, () => this.executeJob(job, signer));
     }
@@ -331,14 +340,14 @@ export class CardanoWalletWorker {
         rawReq.network = this.deps.network;
         rawReq.senderAddress = signer.getAddress();
         if (!rawReq.changeAddress) rawReq.changeAddress = signer.getAddress();
-        const buildReq = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, rawReq, this.deps.network as Network);
+        const build = this.buildOf(job, rawReq);
 
         // Lease lost → abort BEFORE building; orphan cleanup fails the row once the lease is provably dead.
         if (!(await heartbeat.fence())) {
           logger.warn(`Job ${job.ID}: wallet lease for ${job.walletId} lost before build, aborting execution`);
           return;
         }
-        const buildResult = await runWithoutAmbientTx(() => cds.tx((tx) => this.buildForKind(tx, job, buildReq)));
+        const buildResult = await runWithoutAmbientTx(() => cds.tx(build));
         unsignedTxCbor = buildResult.unsignedTxCbor as string;
         fee = (buildResult.fee as string | number | null) ?? null;
         buildId = (buildResult.id as string) ?? null;
@@ -444,19 +453,11 @@ export class CardanoWalletWorker {
       // A rejection may mean the tx is already on-chain (inputs spent), so the chain decides.
       let onChain: boolean;
       try {
-        // the local index first (filled by the crawler), then the backends
-        const txHash = job.txHash;
-        const indexed = await runWithoutAmbientTx(() => cds.tx((t) => this.deps.indexer.findIndexedTransaction(t, txHash)));
-        if (!indexed) {
-          await this.deps.client.getTransaction(txHash);
-        }
-        onChain = true;
+        // null: no backend can look transactions up, so the re-submit above is the only evidence
+        onChain = await isTransactionOnChain(this.deps.indexer, this.deps.client, job.txHash) === true;
       } catch (lookupErr) {
-        if (!isNotFoundOnAllBackends(lookupErr)) {
-          logger.warn(`Job ${job.ID}: chain lookup for ${job.txHash} inconclusive, retrying next tick:`, lookupErr);
-          return;
-        }
-        onChain = false;
+        logger.warn(`Job ${job.ID}: chain lookup for ${job.txHash} inconclusive, retrying next tick:`, lookupErr);
+        return;
       }
 
       if (onChain) {
@@ -472,7 +473,7 @@ export class CardanoWalletWorker {
         return;
       }
 
-      // Proven absent and not submittable anymore: releasing the idempotency key is safe.
+      // Not on-chain and not submittable now. The job fails and keeps its idempotency key.
       const code = expired ? JOB_ERROR_CODES.TX_DROPPED : JOB_ERROR_CODES.SUBMIT_REJECTED;
       logger.error(`Job ${job.ID}: tx ${job.txHash} is not on-chain and cannot be submitted (${code}), failing:`, submitError);
       await this.failReconciled(job, code, submitError);
@@ -485,9 +486,19 @@ export class CardanoWalletWorker {
 
   private async failReconciled(job: WalletJobRow, code: string, err: unknown): Promise<void> {
     await runWithoutAmbientTx(() => cds.tx(async (tx) => {
-      const transitioned = await markFailed(tx, job.ID, code, err ?? new Error(code));
+      const transitioned = await markFailedAfterSend(tx, job.ID, code, err ?? new Error(code));
       if (transitioned) await bumpWalletStats(tx, job.walletId, 'failed');
     })).catch((persistErr) => logger.error(`Job ${job.ID}: failure persist failed:`, persistErr));
+  }
+
+  /** The job's build, ready to run in a transaction. A malformed request throws 400 INVALID_INPUT here. */
+  private buildOf(job: WalletJobRow, raw: Record<string, unknown>): (tx: cds.Transaction) => Promise<Record<string, unknown>> {
+    if (job.kind === 'payout') {
+      const request = preparePayoutRequest(raw);
+      return (tx) => this.deps.indexer.indexPlutusBuildResult(tx, request) as Promise<Record<string, unknown>>;
+    }
+    const request = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, raw, this.deps.network as Network);
+    return (tx) => this.buildForKind(tx, job, request);
   }
 
   /** Dispatch the job kind to the matching indexer build method. */

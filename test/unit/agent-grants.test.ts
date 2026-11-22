@@ -5,12 +5,9 @@
  */
 
 import cds from '@sap/cds';
-import fs from 'node:fs';
 import path from 'node:path';
 import {
   errorStatus,
-  AGENT_ALLOWLISTABLE_ACTIONS,
-  AGENT_ALWAYS_ALLOWED_EVENTS,
   AGENT_ROLE,
   AGENT_TOKEN_PREFIX,
   GRANTS_ENTITY,
@@ -18,6 +15,7 @@ import {
   __resetGrantRateLimiterForTests,
   __resetGrantUsageBufferForTests,
   __setGrantUsageModeForTests,
+  __setGrantUsagePrunedForTests,
   __setTokenCacheMsForTests,
   tokenCacheSize,
   agentPrincipalId,
@@ -41,7 +39,19 @@ import {
   type AgentGrantRow,
   type Runner,
 } from '../../srv/utils/agent-grants';
-import { loadGrantAdminRateLimit } from '../../srv/utils/agent-grants-config';
+import { loadGrantAdminRateLimit, loadGrantUsageRetentionDays } from '../../srv/config';
+import { agentAccessOf, agentGrantableActions } from '../../srv/utils/agent-access';
+
+/** The service most cases run the hook on. */
+const TX_SERVICE = 'CardanoTransactionService';
+
+// The retention runs once a day and process; cases that are not about it start after today's run.
+beforeEach(() => __setGrantUsagePrunedForTests(new Date().toISOString().slice(0, 10)));
+
+// The hook reads the access class of an operation from the service models.
+beforeAll(async () => {
+  (cds as unknown as { model: unknown }).model = await cds.load(path.join(__dirname, '..', '..', 'srv'));
+});
 
 // ---------------------------------------------------------------------------
 // Fake runner: a Map of grant rows plus the handful of UPDATE shapes we emit.
@@ -51,6 +61,7 @@ type Cqn = {
   SELECT?: { from: { ref: string[] }; where?: unknown[]; one?: boolean; columns?: unknown[]; groupBy?: { ref: string[] }[] };
   INSERT?: { into: { ref: string[] }; entries: Record<string, unknown>[] };
   UPDATE?: { entity: { ref: string[] }; data?: Record<string, unknown>; with?: Record<string, unknown>; where?: unknown[] };
+  DELETE?: { from: { ref: string[] }; where?: unknown[] };
 };
 
 interface WhereClause { col: string; op: string; val: unknown }
@@ -85,9 +96,9 @@ function matches(row: Record<string, unknown>, where: WhereClause[]): boolean {
     const actual = row[col] ?? null;
     switch (op) {
       case '=': if (actual !== val) return false; break;
-      case '<': if (!(Number(actual) < Number(val))) return false; break;
-      case '>': if (!(Number(actual) > Number(val))) return false; break;
       // day strings compare lexically (YYYY-MM-DD), numbers numerically
+      case '<': if (!(actual !== null && (actual as string | number) < (val as string | number))) return false; break;
+      case '>': if (!(actual !== null && (actual as string | number) > (val as string | number))) return false; break;
       case '>=': if (!(actual !== null && (actual as string | number) >= (val as string | number))) return false; break;
       case '<=': if (!(actual !== null && (actual as string | number) <= (val as string | number))) return false; break;
       default: throw new Error(`fake runner: unsupported operator ${op}`);
@@ -186,6 +197,16 @@ class FakeStore implements Runner {
       }
       return affected;
     }
+    if (cqn.DELETE) {
+      const table = this.tableFor(cqn.DELETE.from.ref[0]!);
+      const where = whereMap(cqn.DELETE.where);
+      this.statements.push(`DELETE WHERE ${whereCols(where)}`);
+      let affected = 0;
+      for (const [key, row] of table) {
+        if (matches(row, where)) { table.delete(key); affected++; }
+      }
+      return affected;
+    }
     throw new Error('fake runner: unknown statement');
   }
 }
@@ -197,9 +218,7 @@ function grant(overrides: Partial<AgentGrantRow> = {}): AgentGrantRow {
   return {
     ID: GRANT_ID,
     userId: 'alice',
-    allowedActions: JSON.stringify(['BuildSimpleAdaTransaction', 'SubmitWalletJob', 'CancelJob']),
-    walletId: 'ops',
-    allowedJobKinds: null,
+    allowedActions: JSON.stringify(['BuildSimpleAdaTransaction', 'SubmitTransaction']),
     maxJobsPerDay: null,
     jobsUsedToday: 0,
     budgetWindow: null,
@@ -244,16 +263,16 @@ beforeEach(() => __resetGrantRateLimiterForTests());
 // ---------------------------------------------------------------------------
 
 describe('makeAgentUser', () => {
-  it('is the principal agent:<grantId> with only the agent-grant role and the grant in attr', () => {
+  it('is the principal agent:<grantId> with the agent-grant role, the three service roles and the grant in attr', () => {
     const user = makeAgentUser(grant());
     expect(user.id).toBe(agentPrincipalId(GRANT_ID));
     expect(user.is(AGENT_ROLE)).toBe(true);
+    for (const role of ['Read', 'Transact', 'Sign']) expect(user.is(role), role).toBe(true);
     expect(user.is('Admin')).toBe(false);
     expect(user.is('admin')).toBe(false);
     expect(user.is('authenticated-user')).toBe(true);
     expect((user.attr as Record<string, unknown>).grantId).toBe(GRANT_ID);
     expect((user.attr as Record<string, unknown>).operator).toBe('alice');
-    expect((user.attr as Record<string, unknown>).walletId).toBe('ops');
   });
 });
 
@@ -400,7 +419,7 @@ describe('enforceAgentGrant', () => {
   it('is a no-op for an ordinary principal', async () => {
     const store = new FakeStore();
     const req = makeReq('PauseWorker', {}, null);
-    await expect(enforceAgentGrant(req as never, store)).resolves.toBeUndefined();
+    await expect(enforceAgentGrant(req as never, store, undefined, TX_SERVICE)).resolves.toBeUndefined();
     expect(req.reject).not.toHaveBeenCalled();
     expect(store.statements).toEqual([]);
   });
@@ -408,9 +427,13 @@ describe('enforceAgentGrant', () => {
   it('lets always-allowed events through without an allow-list entry and without budget', async () => {
     const store = new FakeStore();
     store.seed(grant({ allowedActions: '[]', maxJobsPerDay: 1, jobsUsedToday: 1, budgetWindow: today() }));
-    for (const event of ['READ', 'GetLatestBlock', 'GetJobStatus', 'GetGrantStatus', 'ParseTransactionCbor']) {
+    const reads = [
+      ['READ', TX_SERVICE], ['GetLatestBlock', 'CardanoODataService'], ['GetGrantStatus', 'CardanoAgentService'],
+      ['ParseTransactionCbor', 'CardanoODataService'], ['GetBuildDetails', TX_SERVICE], ['getReadiness', 'CardanoIndexerService'],
+    ];
+    for (const [event, service] of reads) {
       const req = makeReq(event, {}, store.rows.get(GRANT_ID) as unknown as AgentGrantRow);
-      await expect(enforceAgentGrant(req as never, store)).resolves.toBeUndefined();
+      await expect(enforceAgentGrant(req as never, store, undefined, service)).resolves.toBeUndefined();
     }
     // lastUsedAt touched (once: throttled to a minute), nothing else changed.
     expect(store.statements.filter((s) => s.startsWith('UPDATE lastUsedAt'))).toHaveLength(1);
@@ -419,54 +442,45 @@ describe('enforceAgentGrant', () => {
 
   it('refuses an action outside the allow list with 403 naming it', async () => {
     const req = makeReq('BuildMintTransaction');
-    const r = await rejection(enforceAgentGrant(req as never, new FakeStore()));
+    const r = await rejection(enforceAgentGrant(req as never, new FakeStore(), undefined, TX_SERVICE));
     expect(r.status).toBe(403);
     expect(r.message).toContain("'BuildMintTransaction'");
   });
 
   it('refuses never-grantable actions even when a row smuggles them into allowedActions', async () => {
-    // The hook only checks the allow list; the Admin gate on the action itself is
-    // the second wall against a hand-edited row (role-less principal).
+    // The hook ignores a stored name that is not grantable; the Admin gate on the action is the second wall.
     const g = grant({ allowedActions: JSON.stringify(['PauseWorker']) });
     const req = makeReq('PauseWorker', {}, g);
     expect(makeAgentUser(g).is('Admin')).toBe(false);
-    await expect(enforceAgentGrant(req as never, new FakeStore())).resolves.toBeUndefined();
+    const r = await rejection(enforceAgentGrant(req as never, new FakeStore(), undefined, TX_SERVICE));
+    expect(r.status).toBe(403);
+    expect(r.message).toContain("'PauseWorker' is not allowed");
   });
 
   it('answers 401 for an inactive and 410 for an expired grant even after the lane admitted it', async () => {
-    expect((await rejection(enforceAgentGrant(makeReq('READ', {}, grant({ isActive: false })) as never, new FakeStore()))).status).toBe(401);
-    expect((await rejection(enforceAgentGrant(makeReq('READ', {}, grant({ validUntil: '2000-01-01T00:00:00Z' })) as never, new FakeStore()))).status).toBe(410);
+    expect((await rejection(enforceAgentGrant(makeReq('READ', {}, grant({ isActive: false })) as never, new FakeStore(), undefined, TX_SERVICE))).status).toBe(401);
+    expect((await rejection(enforceAgentGrant(makeReq('READ', {}, grant({ validUntil: '2000-01-01T00:00:00Z' })) as never, new FakeStore(), undefined, TX_SERVICE))).status).toBe(410);
   });
 
-  describe('wallet pinning', () => {
-    it('refuses wallet actions on a grant without a wallet', async () => {
-      const r = await rejection(enforceAgentGrant(makeReq('SubmitWalletJob', { walletId: 'ops', kind: 'simpleAda' }, grant({ walletId: null })) as never, new FakeStore()));
+  describe('worker wallets', () => {
+    it('refuses every event on the worker service, reads and status included, and writes nothing', async () => {
+      const store = new FakeStore();
+      store.seed(grant({ maxJobsPerDay: 5 }));
+      for (const event of ['SubmitWalletJob', 'CancelJob', 'GetJobStatus', 'GetWorkerStatus', 'READ']) {
+        const req = makeReq(event, { walletId: 'ops', kind: 'simpleAda' }, store.rows.get(GRANT_ID) as unknown as AgentGrantRow);
+        const r = await rejection(enforceAgentGrant(req as never, store, undefined, 'CardanoWorkerService'));
+        expect(r.status).toBe(403);
+        expect(r.message).toContain('worker wallets are not available to agent tokens');
+      }
+      expect(store.statements).toEqual([]);
+    });
+
+    it('does not admit a wallet action that an older grant still lists', async () => {
+      const old = grant({ allowedActions: JSON.stringify(['BuildSimpleAdaTransaction', 'SubmitWalletJob']) });
+      const r = await rejection(enforceAgentGrant(makeReq('SubmitWalletJob', { kind: 'simpleAda' }, old) as never, new FakeStore(), undefined, 'CardanoTransactionService'));
       expect(r.status).toBe(403);
-      expect(r.message).toContain('no wallet binding');
-    });
-
-    it('refuses a foreign walletId and injects the pinned one when absent', async () => {
-      const mismatch = await rejection(enforceAgentGrant(makeReq('SubmitWalletJob', { walletId: 'treasury', kind: 'simpleAda' }) as never, new FakeStore()));
-      expect(mismatch.status).toBe(403);
-      expect(mismatch.message).toContain('walletId');
-
-      const req = makeReq('SubmitWalletJob', { kind: 'simpleAda' });
-      await enforceAgentGrant(req as never, new FakeStore());
-      expect(req.data.walletId).toBe('ops');
-    });
-
-    it('narrows job kinds when the grant lists them', async () => {
-      const g = grant({ allowedJobKinds: JSON.stringify(['simpleAda', 'metadata']) });
-      const ok = makeReq('SubmitWalletJob', { kind: 'metadata' }, g);
-      await expect(enforceAgentGrant(ok as never, new FakeStore())).resolves.toBeUndefined();
-      const bad = await rejection(enforceAgentGrant(makeReq('SubmitWalletJob', { kind: 'mint' }, g) as never, new FakeStore()));
-      expect(bad.status).toBe(403);
-      expect(bad.message).toContain("'mint'");
-    });
-
-    it('lets CancelJob through pinned; ownership is the worker service`s createdBy gate', async () => {
-      const req = makeReq('CancelJob', { jobId: '33333333-3333-4333-8333-333333333333' });
-      await expect(enforceAgentGrant(req as never, new FakeStore())).resolves.toBeUndefined();
+      expect(r.message).toContain("'SubmitWalletJob' is not allowed");
+      expect(toGrantStatus(old).allowedActions).toEqual(['BuildSimpleAdaTransaction']);
     });
   });
 
@@ -475,7 +489,7 @@ describe('enforceAgentGrant', () => {
       const store = new FakeStore();
       store.seed(grant({ maxJobsPerDay: 2, budgetWindow: '2020-01-01', jobsUsedToday: 2 }));
       const g = store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
-      await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, g) as never, store);
+      await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, g) as never, store, undefined, TX_SERVICE);
       expect(store.rows.get(GRANT_ID)).toMatchObject({ budgetWindow: today(), jobsUsedToday: 1 });
     });
 
@@ -483,9 +497,9 @@ describe('enforceAgentGrant', () => {
       const store = new FakeStore();
       store.seed(grant({ maxJobsPerDay: 2, budgetWindow: today(), jobsUsedToday: 1 }));
       const current = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
-      await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store);
+      await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store, undefined, TX_SERVICE);
       expect(current().jobsUsedToday).toBe(2);
-      const r = await rejection(enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store));
+      const r = await rejection(enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store, undefined, TX_SERVICE));
       expect(r.status).toBe(429);
       expect(r.message).toContain('2/day');
       expect(current().jobsUsedToday).toBe(2);
@@ -497,7 +511,7 @@ describe('enforceAgentGrant', () => {
       const current = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
 
       const refused = makeReq('BuildSimpleAdaTransaction', {}, current());
-      await enforceAgentGrant(refused as never, store);
+      await enforceAgentGrant(refused as never, store, undefined, TX_SERVICE);
       expect(current().jobsUsedToday).toBe(1);
       // The refund runs in a setImmediate; a 0 ms timer can fire before it on a
       // busy loop, so wait for the check phase first, then a timer.
@@ -507,14 +521,14 @@ describe('enforceAgentGrant', () => {
       expect(current().jobsUsedToday).toBe(0);
 
       const crashed = makeReq('BuildSimpleAdaTransaction', {}, current());
-      await enforceAgentGrant(crashed as never, store);
+      await enforceAgentGrant(crashed as never, store, undefined, TX_SERVICE);
       crashed._failed.forEach((fn) => fn({ statusCode: 503 }));
       await settled();
       expect(current().jobsUsedToday).toBe(1);
 
       // two parameters rejected by the model at once: no status on the combined error
       const twoBad = makeReq('BuildSimpleAdaTransaction', {}, current());
-      await enforceAgentGrant(twoBad as never, store);
+      await enforceAgentGrant(twoBad as never, store, undefined, TX_SERVICE);
       expect(current().jobsUsedToday).toBe(2);
       twoBad._failed.forEach((fn) => fn({ message: 'MULTIPLE_ERRORS', details: [{ status: 400 }, { status: 400 }] }));
       await settled();
@@ -541,12 +555,12 @@ describe('enforceAgentGrant', () => {
         // 23:59:59Z: a request is charged to day D1.
         vi.setSystemTime(new Date('2026-09-05T23:59:59Z'));
         const late = makeReq('BuildSimpleAdaTransaction', {}, current());
-        await enforceAgentGrant(late as never, store);
+        await enforceAgentGrant(late as never, store, undefined, TX_SERVICE);
         expect(current()).toMatchObject({ budgetWindow: '2026-09-05', jobsUsedToday: 1 });
 
         // 00:00:01Z next day: another request opens D2 with one unit used.
         vi.setSystemTime(new Date('2026-09-06T00:00:01Z'));
-        await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store);
+        await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, current()) as never, store, undefined, TX_SERVICE);
         expect(current()).toMatchObject({ budgetWindow: '2026-09-06', jobsUsedToday: 1 });
 
         // The D1 request is now refused by its handler. Its refund must not
@@ -566,7 +580,7 @@ describe('enforceAgentGrant', () => {
       // detached=false is what budgetRunnerFor picks when cds.tx(req) is already begun:
       // the statements run on that transaction and its rollback is the refund.
       const req = makeReq('BuildSimpleAdaTransaction', {}, g);
-      await enforceAgentGrant(req as never, store, false);
+      await enforceAgentGrant(req as never, store, false, TX_SERVICE);
       expect(store.rows.get(GRANT_ID)!.jobsUsedToday).toBe(1);
       expect(req._failed).toHaveLength(0);
     });
@@ -598,12 +612,11 @@ describe('validateGrantInput / issueAgentGrant / revokeAgentGrantById', () => {
     expect(() => validateGrantInput({ allowedActions: ['CreateAgentGrant'] })).toThrow(/non-grantable/);
   });
 
-  it('requires a wallet for wallet actions and job kinds only with them', () => {
-    expect(() => validateGrantInput({ allowedActions: ['SubmitWalletJob'] })).toThrow(/walletId is required/);
-    expect(() => validateGrantInput({ allowedActions: ['BuildSimpleAdaTransaction'], allowedJobKinds: ['mint'] })).toThrow(/needs SubmitWalletJob/);
-    expect(() => validateGrantInput({ allowedActions: ['SubmitWalletJob'], walletId: 'ops', allowedJobKinds: ['bogus'] })).toThrow(/unknown kinds: bogus/);
-    const n = validateGrantInput({ allowedActions: ['SubmitWalletJob', 'SubmitWalletJob'], walletId: ' ops ', allowedJobKinds: ['mint'] });
-    expect(n).toMatchObject({ allowedActions: ['SubmitWalletJob'], walletId: 'ops', allowedJobKinds: ['mint'] });
+  it('refuses the wallet actions as non-grantable and de-duplicates the list', () => {
+    expect(() => validateGrantInput({ allowedActions: ['SubmitWalletJob'] })).toThrow(/non-grantable entries: SubmitWalletJob/);
+    expect(() => validateGrantInput({ allowedActions: ['BuildSimpleAdaTransaction', 'CancelJob'] })).toThrow(/non-grantable entries: CancelJob/);
+    const n = validateGrantInput({ allowedActions: ['SubmitTransaction', 'SubmitTransaction'] });
+    expect(n).toMatchObject({ allowedActions: ['SubmitTransaction'] });
   });
 
   it('validates budget, expiry and label', () => {
@@ -625,7 +638,7 @@ describe('validateGrantInput / issueAgentGrant / revokeAgentGrantById', () => {
     const row = store.rows.get(issued.grantId)!;
     expect(row.tokenHash).toBe(hashAgentToken(issued.token));
     expect(JSON.stringify(row)).not.toContain(issued.token);
-    expect(row).toMatchObject({ userId: 'alice', agentLabel: 'trace-bot', maxJobsPerDay: 10, isActive: true, walletId: null });
+    expect(row).toMatchObject({ userId: 'alice', agentLabel: 'trace-bot', maxJobsPerDay: 10, isActive: true });
 
     const resolved = await resolveAgentToken(issued.token, store);
     expect(resolved.ok).toBe(true);
@@ -638,7 +651,7 @@ describe('validateGrantInput / issueAgentGrant / revokeAgentGrantById', () => {
   it('reports the status honestly: a counter from an earlier day is zero budget used today', () => {
     const s = toGrantStatus(grant({ maxJobsPerDay: 5, jobsUsedToday: 4, budgetWindow: '2020-01-01' }));
     expect(s.jobsUsedToday).toBe(0);
-    expect(s.allowedActions).toContain('SubmitWalletJob');
+    expect(s.allowedActions).toContain('SubmitTransaction');
     const t = toGrantStatus(grant({ maxJobsPerDay: 5, jobsUsedToday: 4, budgetWindow: today() }));
     expect(t.jobsUsedToday).toBe(4);
   });
@@ -794,9 +807,7 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     const store = new FakeStore();
     store.seed(grant({
       agentLabel: 'before',
-      allowedActions: JSON.stringify(['BuildSimpleAdaTransaction', 'SubmitWalletJob']),
-      walletId: 'ops',
-      allowedJobKinds: JSON.stringify(['mint']),
+      allowedActions: JSON.stringify(['BuildSimpleAdaTransaction', 'SubmitTransaction']),
       maxJobsPerDay: 5,
       budgetWindow: today(),
       jobsUsedToday: 4,
@@ -810,12 +821,12 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     const r = await updateAgentGrant(GRANT_ID, { agentLabel: 'after', maxJobsPerDay: 9 }, store);
     expect(r).toEqual({ ok: true, grantId: GRANT_ID, updated: ['agentLabel', 'maxJobsPerDay'] });
     expect(store.rows.get(GRANT_ID)).toMatchObject({
-      agentLabel: 'after', maxJobsPerDay: 9, validUntil: future, allowedJobKinds: JSON.stringify(['mint']), walletId: 'ops', jobsUsedToday: 4,
+      agentLabel: 'after', maxJobsPerDay: 9, validUntil: future, jobsUsedToday: 4,
     });
 
-    const cleared = await updateAgentGrant(GRANT_ID, { allowedJobKinds: null, maxJobsPerDay: null, validUntil: null, agentLabel: null }, store);
+    const cleared = await updateAgentGrant(GRANT_ID, { maxJobsPerDay: null, validUntil: null, agentLabel: null }, store);
     expect(cleared.ok).toBe(true);
-    expect(store.rows.get(GRANT_ID)).toMatchObject({ allowedJobKinds: null, maxJobsPerDay: null, validUntil: null, agentLabel: null });
+    expect(store.rows.get(GRANT_ID)).toMatchObject({ maxJobsPerDay: null, validUntil: null, agentLabel: null });
 
     // Nothing given: nothing written, still ok.
     const statementsBefore = store.statements.length;
@@ -823,16 +834,14 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     expect(store.statements.slice(statementsBefore).filter((s) => s.startsWith('UPDATE'))).toHaveLength(0);
   });
 
-  it('validates the merged row with the UpdateAgentGrant prefix: no empty allow list, wallet actions need the pinned wallet, job kinds need SubmitWalletJob, validUntil in the future', async () => {
+  it('validates the merged row with the UpdateAgentGrant prefix: no empty allow list, grantable actions only, validUntil in the future', async () => {
     const store = seeded();
     const fail = async (input: Parameters<typeof updateAgentGrant>[1]) => rejection(updateAgentGrant(GRANT_ID, input, store));
 
     expect(await fail({ allowedActions: [] })).toMatchObject({ status: 400, message: expect.stringContaining('UpdateAgentGrant: allowedActions must be a non-empty array') });
     expect(await fail({ allowedActions: null })).toMatchObject({ status: 400 });
     expect(await fail({ allowedActions: ['PauseWorker'] })).toMatchObject({ status: 400, message: expect.stringContaining('non-grantable') });
-    // Dropping SubmitWalletJob while job kinds are set breaks the cross-field rule on the merged row.
-    expect(await fail({ allowedActions: ['BuildSimpleAdaTransaction'] })).toMatchObject({ status: 400, message: expect.stringContaining('allowedJobKinds needs SubmitWalletJob') });
-    expect(await fail({ allowedJobKinds: ['teleport'] })).toMatchObject({ status: 400, message: expect.stringContaining('unknown kinds') });
+    expect(await fail({ allowedActions: ['SubmitWalletJob'] })).toMatchObject({ status: 400, message: expect.stringContaining('non-grantable') });
     expect(await fail({ maxJobsPerDay: 0 })).toMatchObject({ status: 400 });
     expect(await fail({ validUntil: '2000-01-01T00:00:00Z' })).toMatchObject({ status: 400, message: expect.stringContaining('in the future') });
     expect(await fail({ validUntil: 'yesterday' })).toMatchObject({ status: 400 });
@@ -840,10 +849,12 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     // Nothing above was written.
     expect(store.rows.get(GRANT_ID)).toMatchObject({ agentLabel: 'before', maxJobsPerDay: 5 });
 
-    // A grant without a wallet cannot gain wallet actions by update.
-    store.seed(grant({ ID: OTHER_ID, walletId: null, allowedActions: JSON.stringify(['VerifySignature']) }));
-    const r = await rejection(updateAgentGrant(OTHER_ID, { allowedActions: ['SubmitWalletJob'] }, store));
-    expect(r).toMatchObject({ status: 400, message: expect.stringContaining('walletId is required') });
+    // An older grant that still lists a wallet action can be edited: the retired name is ignored.
+    store.seed(grant({ ID: OTHER_ID, allowedActions: JSON.stringify(['VerifySignature', 'SubmitWalletJob']) }));
+    expect(await updateAgentGrant(OTHER_ID, { agentLabel: 'kept' }, store)).toMatchObject({ ok: true, updated: ['agentLabel'] });
+    // One that lists nothing else needs a new allow list with the edit.
+    store.seed(grant({ ID: OTHER_ID, allowedActions: JSON.stringify(['SubmitWalletJob']) }));
+    expect(await rejection(updateAgentGrant(OTHER_ID, { agentLabel: 'x' }, store))).toMatchObject({ status: 400, message: expect.stringContaining('non-empty array') });
   });
 
   it('allows lowering maxJobsPerDay below jobsUsedToday (over budget until the day rolls) and leaves the counter alone', async () => {
@@ -851,7 +862,7 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     expect((await updateAgentGrant(GRANT_ID, { maxJobsPerDay: 2 }, store)).ok).toBe(true);
     expect(store.rows.get(GRANT_ID)).toMatchObject({ maxJobsPerDay: 2, jobsUsedToday: 4, budgetWindow: today() });
     const g = store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
-    expect((await rejection(enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, g) as never, store))).status).toBe(429);
+    expect((await rejection(enforceAgentGrant(makeReq('BuildSimpleAdaTransaction', {}, g) as never, store, undefined, TX_SERVICE))).status).toBe(429);
   });
 
   it('is 404 for an unknown grant, 409 GRANT_REVOKED for a revoked one, and a concurrent revoke wins', async () => {
@@ -873,12 +884,12 @@ describe('updateAgentGrant / UpdateAgentGrant', () => {
     expect(store.rows.get(GRANT_ID)).toMatchObject({ isActive: false, agentLabel: 'before' });
   });
 
-  it('the action: walletId is immutable (400), a revoked grant is 409 with the code, a token 403, no grantId 400', async () => {
+  it('the action: userId is immutable (400), a revoked grant is 409 with the code, a token 403, no grantId 400', async () => {
     const h = bootHandlers();
     const store = seeded();
     await withTx(store, async () => {
-      const immutable = await rejection(h.UpdateAgentGrant!(makeReq('UpdateAgentGrant', { grantId: GRANT_ID, walletId: 'other' }, null) as never));
-      expect(immutable).toMatchObject({ status: 400, message: expect.stringContaining('walletId cannot be changed') });
+      const immutable = await rejection(h.UpdateAgentGrant!(makeReq('UpdateAgentGrant', { grantId: GRANT_ID, userId: 'mallory' }, null) as never));
+      expect(immutable).toMatchObject({ status: 400, message: expect.stringContaining('userId cannot be changed') });
 
       const ok = await h.UpdateAgentGrant!(makeReq('UpdateAgentGrant', { grantId: GRANT_ID, agentLabel: 'via action' }, null) as never);
       expect(ok).toEqual({ grantId: GRANT_ID, updated: ['agentLabel'] });
@@ -929,12 +940,12 @@ describe('deferred usage counters (Postgres / HANA): buffered per key, flushed i
     // The next window adds to the existing row: one UPDATE, no INSERT.
     const before = store.statements.length;
     await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
-    await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, 'CardanoSignService'); // same action, other service = other key
+    await enforceAgentGrant(makeReq('SubmitTransaction', {}, g()) as never, store, undefined, 'CardanoBackendService'); // another service = another key
     expect(await flushGrantUsage(store)).toEqual({ flushed: 2, failed: 0 });
     expect(store.statements.slice(before).filter((s) => s === 'INSERT')).toHaveLength(1); // the new key only
     expect(store.usageRows()).toEqual([
       { grant_ID: GRANT_ID, day: today(), service: SVC, action: ACTION, calls: 4, refunded: 1 },
-      { grant_ID: GRANT_ID, day: today(), service: 'CardanoSignService', action: ACTION, calls: 1, refunded: 0 },
+      { grant_ID: GRANT_ID, day: today(), service: 'CardanoBackendService', action: 'SubmitTransaction', calls: 1, refunded: 0 },
     ]);
   });
 
@@ -1142,27 +1153,129 @@ describe('usage counters and GetGrantUsage', () => {
   });
 });
 
-describe('every operation in the service models is classified for agent tokens', () => {
-  // Operator only: an agent token gets 403 for these on purpose.
-  const OPERATOR_ONLY = new Set([
-    'CreateAgentGrant', 'RevokeAgentGrant', 'RotateAgentGrantToken', 'UpdateAgentGrant',
-    'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions', 'backfillPaymentCredentials', 'backfillAssetDecimals', 'backfillAssetRegistry',
-    'SignWithHsm', 'SignAndSubmitWithHsm', 'PauseWorker', 'ResumeWorker',
-  ]);
+describe('usage counter retention', () => {
+  const SVC = 'CardanoTransactionService';
+  const usage = (day: string) => ({ grant_ID: GRANT_ID, day, service: SVC, action: 'BuildSimpleAdaTransaction', calls: 1, refunded: 0 });
+  const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10);
 
-  it('lists each action and function as always allowed, allow-listable or operator only', () => {
-    const srvDir = path.join(__dirname, '..', '..', 'srv');
-    const unclassified: string[] = [];
-    for (const file of fs.readdirSync(srvDir).filter((f) => f.endsWith('.cds'))) {
-      const src = fs.readFileSync(path.join(srvDir, file), 'utf8');
-      for (const m of src.matchAll(/^\s*(?:action|function)\s+(\w+)\s*\(/gm)) {
-        const name = m[1];
-        if (!AGENT_ALWAYS_ALLOWED_EVENTS.has(name) && !AGENT_ALLOWLISTABLE_ACTIONS.includes(name) && !OPERATOR_ONLY.has(name)) {
-          unclassified.push(`${file}: ${name}`);
-        }
-      }
+  afterEach(() => {
+    delete process.env.AGENT_GRANT_USAGE_RETENTION_DAYS;
+    __setGrantUsageModeForTests(null);
+  });
+
+  it('keeps 400 days by default, takes the setting and falls back on a bad value', () => {
+    expect(loadGrantUsageRetentionDays({})).toBe(400);
+    expect(loadGrantUsageRetentionDays({ AGENT_GRANT_USAGE_RETENTION_DAYS: '30' })).toBe(30);
+    expect(loadGrantUsageRetentionDays({ AGENT_GRANT_USAGE_RETENTION_DAYS: '0' })).toBe(0);
+    expect(loadGrantUsageRetentionDays({ AGENT_GRANT_USAGE_RETENTION_DAYS: '-1' })).toBe(400);
+    expect(loadGrantUsageRetentionDays({ AGENT_GRANT_USAGE_RETENTION_DAYS: 'soon' })).toBe(400);
+  });
+
+  it('deletes the rows older than the retention once a day, with the first counted call', async () => {
+    const store = new FakeStore();
+    store.seed(grant());
+    store.seedUsage(usage(daysAgo(401)));
+    store.seedUsage(usage(daysAgo(399)));
+    __setGrantUsagePrunedForTests(null);
+
+    await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction') as never, store, undefined, SVC);
+    expect(store.usageRows().map((r) => r.day).sort()).toEqual([daysAgo(399), today()].sort());
+    expect(store.statements.filter((s) => s.startsWith('DELETE'))).toEqual(['DELETE WHERE day']);
+
+    await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction') as never, store, undefined, SVC);
+    expect(store.statements.filter((s) => s.startsWith('DELETE'))).toHaveLength(1);
+  });
+
+  it('runs after a buffered flush too', async () => {
+    const store = new FakeStore();
+    store.seed(grant());
+    store.seedUsage(usage(daysAgo(500)));
+    __setGrantUsageModeForTests('deferred');
+    __setGrantUsagePrunedForTests(null);
+
+    await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction') as never, store, undefined, SVC);
+    expect(store.usageRows()).toHaveLength(1);
+    await flushGrantUsage(store);
+    expect(store.usageRows().map((r) => r.day)).toEqual([today()]);
+  });
+
+  it('keeps every row with a retention of 0', async () => {
+    process.env.AGENT_GRANT_USAGE_RETENTION_DAYS = '0';
+    const store = new FakeStore();
+    store.seed(grant());
+    store.seedUsage(usage(daysAgo(5000)));
+    __setGrantUsagePrunedForTests(null);
+
+    await enforceAgentGrant(makeReq('BuildSimpleAdaTransaction') as never, store, undefined, SVC);
+    expect(store.usageRows()).toHaveLength(2);
+    expect(store.statements.filter((s) => s.startsWith('DELETE'))).toEqual([]);
+  });
+});
+
+describe('agent access declared in the service models', () => {
+  // Operations a grant can allow. A new entry here is a decision, not a side effect of a new action.
+  const GRANTABLE = [
+    'BuildSimpleAdaTransaction', 'BuildTransactionWithMetadata', 'BuildMultiAssetTransaction', 'BuildMintTransaction',
+    'BuildPlutusSpendTransaction', 'BuildPlutusTransaction', 'SetCollateral', 'CreateSigningRequest', 'VerifySignature',
+    'SubmitTransaction', 'SubmitSignedTransaction', 'SubmitVerifiedTransaction', 'CheckSubmissionStatus',
+  ];
+  // Operations no token may call.
+  const OPERATOR_ONLY = [
+    'CreateAgentGrant', 'RevokeAgentGrant', 'RotateAgentGrantToken', 'UpdateAgentGrant',
+    'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions', 'backfillPaymentCredentials',
+    'backfillAssetDecimals', 'backfillAssetRegistry', 'backfillOutputDatums', 'backfillMetadataPositions',
+    'pruneInputAssetCopies', 'restoreInputAssetCopies', 'backfillEpochs',
+    'SignWithHsm', 'SignAndSubmitWithHsm', 'PauseWorker', 'ResumeWorker',
+    'SubmitWalletJob', 'CancelJob', 'GetJobStatus', 'GetWorkerStatus',
+  ];
+
+  /** Every action and function of the models as [service, name, declared access]. */
+  function operations(): Array<[string, string, unknown]> {
+    const definitions = (cds.model as unknown as { definitions: Record<string, { kind?: string; actions?: Record<string, Record<string, unknown>> } & Record<string, unknown>> }).definitions;
+    const services = Object.keys(definitions).filter((name) => definitions[name].kind === 'service');
+    const found: Array<[string, string, unknown]> = [];
+    for (const [name, def] of Object.entries(definitions)) {
+      const service = services.find((candidate) => name.startsWith(candidate + '.'));
+      if (!service) continue;
+      if (def.kind === 'action' || def.kind === 'function') found.push([service, name.slice(service.length + 1), def['@odatano.agent']]);
+      for (const [bound, action] of Object.entries(def.actions ?? {})) found.push([service, bound, action['@odatano.agent']]);
     }
-    expect(unclassified).toEqual([]);
+    return found;
+  }
+
+  it('every action and function declares read, grant or operator', () => {
+    const all = operations();
+    expect(all.length).toBeGreaterThan(90);
+    expect(all.filter(([, , access]) => !['read', 'grant', 'operator'].includes(access as string))).toEqual([]);
+  });
+
+  it('a grant can allow exactly the listed operations', () => {
+    expect([...agentGrantableActions()].sort()).toEqual([...GRANTABLE].sort());
+    const declared = operations().filter(([, , access]) => access === 'grant').map(([, name]) => name);
+    expect([...new Set(declared)].sort()).toEqual([...GRANTABLE].sort());
+  });
+
+  it('no token may call the listed operator operations, and only those', () => {
+    const declared = operations().filter(([, , access]) => access === 'operator').map(([, name]) => name);
+    expect([...new Set(declared)].sort()).toEqual([...OPERATOR_ONLY].sort());
+  });
+
+  it('answers by service: a name is refused on a service that does not declare it', () => {
+    expect(agentAccessOf('CardanoTransactionService', 'BuildSimpleAdaTransaction')).toBe('grant');
+    expect(agentAccessOf('CardanoODataService', 'BuildSimpleAdaTransaction')).toBe('operator');
+    expect(agentAccessOf('CardanoTransactionService', 'CheckSubmissionStatus')).toBe('grant');
+    expect(agentAccessOf('CardanoBackendService', 'SubmitTransaction')).toBe('grant');
+    expect(agentAccessOf('CardanoBackendService', 'EvaluateTransaction')).toBe('read');
+    expect(agentAccessOf('CardanoIndexerService', 'pauseCrawler')).toBe('operator');
+    expect(agentAccessOf('CardanoODataService', 'READ')).toBe('read');
+    expect(agentAccessOf('CardanoODataService', 'CREATE')).toBe('operator');
+    expect(agentAccessOf('CardanoWorkerService', 'READ')).toBe('closed');
+    expect(agentAccessOf('NoSuchService', 'GetLatestBlock')).toBe('operator');
+  });
+
+  it('refuses everything while no model is loaded', () => {
+    expect(agentAccessOf('CardanoODataService', 'READ', null)).toBe('operator');
+    expect(agentGrantableActions(null)).toEqual([]);
   });
 });
 

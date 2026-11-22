@@ -3,14 +3,15 @@
 
 import cds, { Request } from '@sap/cds';
 import crypto from 'node:crypto';
-import { runWithoutAmbientTx } from './tx-utils';
+import { runWithoutAmbientTx, holdsConnection } from './tx-utils';
 import { RateLimiter, principalRateKey } from './rate-limiter';
 import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
 import type { CardanoAgentGrant } from '#cds-models/odatano/cardano';
-import { loadGrantAdminRateLimit, loadTokenCacheMs } from './agent-grants-config';
+import { loadGrantAdminRateLimit, loadGrantUsageRetentionDays, loadTokenCacheMs } from '../config';
+import { agentAccessOf, agentGrantableActions } from './agent-access';
 
-const { SELECT, INSERT, UPDATE } = cds.ql;
+const { SELECT, INSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('AgentGrants');
 
 export const AGENT_TOKEN_HEADER = 'x-agent-token';
@@ -36,59 +37,6 @@ export const AGENT_SERVICE_NAMES: readonly string[] = [
   'CardanoAgentService',
   'CardanoBackendService',
 ];
-
-/** Actions an operator may allow on a grant; each call costs one budget unit. Anything else not always allowed is a 403. */
-export const AGENT_ALLOWLISTABLE_ACTIONS: readonly string[] = [
-  // CardanoTransactionService: unsigned CBOR
-  'BuildSimpleAdaTransaction',
-  'BuildTransactionWithMetadata',
-  'BuildMultiAssetTransaction',
-  'BuildMintTransaction',
-  'BuildPlutusSpendTransaction',
-  'BuildPlutusTransaction',
-  'SetCollateral',
-  // externally signed transactions
-  'CreateSigningRequest',
-  'VerifySignature',
-  'SubmitTransaction',
-  'SubmitSignedTransaction',
-  'SubmitVerifiedTransaction',
-  'CheckSubmissionStatus',
-  // server-side wallets (need walletId on the grant)
-  'SubmitWalletJob',
-  'CancelJob',
-];
-
-/** Allow-listable actions that spend from a worker wallet: the grant must be pinned. */
-export const AGENT_WALLET_ACTIONS: ReadonlySet<string> = new Set(['SubmitWalletJob', 'CancelJob']);
-
-/** Events every valid token may use without allow-list entry or budget. Row-level `$user.grantId` restrictions narrow them. */
-export const AGENT_ALWAYS_ALLOWED_EVENTS: ReadonlySet<string> = new Set([
-  'READ',
-  // CardanoODataService: chain reads through the backends
-  'GetNetworkInformation', 'GetBlockByHash', 'GetEpochByNumber', 'GetPoolById', 'GetDrepById',
-  'GetAssetInfo', 'GetAssetHistory', 'GetAccountByStakeAddress', 'GetTransactionByHash',
-  'GetTransactionConfirmations', 'GetMetadataByTxHash', 'GetAddressByBech32', 'GetUTxOsByAddress', 'GetUTxOsByCredential',
-  'GetAssetsByAddress', 'GetLatestTransactionsByAddress', 'GetLatestBlock', 'GetLatestEpoch',
-  'GetLedgerProtocolParameters', 'ParseTransactionCbor', 'DecodePlutusData',
-  // CardanoTransactionService: compute-only
-  'GetBuildDetails', 'GetTransactionBuildsByAddress', 'DeriveScriptAddress', 'ExtractPaymentKeyHash',
-  // CardanoSignService: reads and stateless verification
-  'GetSigningRequest', 'GetSigningRequestsByAddress', 'VerifyDataSignature', 'GetHsmStatus',
-  // CardanoWorkerService / CardanoIndexerService: status and liveness
-  'GetJobStatus', 'GetWorkerStatus', 'getStatus', 'getLiveness',
-  // CardanoAgentService: the token's own grant (GetGrantUsage is narrowed to it in enforceAgentGrant)
-  'GetGrantStatus', 'GetGrantUsage',
-  // CardanoBackendService: reads and evaluation for another ODATANO instance (submit is allow-listed)
-  'GetTransaction', 'GetTransactionsBatch', 'GetTransactionMetadata', 'GetBlock', 'GetBlockByHeight',
-  'GetNextBlocks', 'GetBlockTransactions', 'GetCurrentSlot', 'GetEpoch', 'GetAddress', 'GetAddressUtxos',
-  'GetAddressTransactions', 'GetAddressTransactionHashes', 'GetCredentialUtxos', 'IsUtxoUnspent',
-  'GetUnspentOutputs', 'GetAccount', 'GetPool', 'GetPoolIds', 'GetPools', 'GetDrep', 'GetDrepIds', 'GetDreps',
-  'GetProtocolParameters', 'EvaluateTransaction',
-]);
-
-/** Mirrors WalletJobKind in db/types.cds; kept literal so this module stays free of cds-models. */
-export const AGENT_JOB_KINDS: readonly string[] = ['simpleAda', 'metadata', 'multiAsset', 'mint', 'plutusSpend', 'submitSigned'];
 
 /** Grant administration limiter: `adminRateLimit` calls per principal per hour, built on first use. */
 let grantAdminRateLimiter: RateLimiter | null = null;
@@ -139,6 +87,12 @@ export function parseGrantList(raw: string | null | undefined): string[] {
   } catch {
     return [];
   }
+}
+
+/** The stored allow list without names that are no longer grantable. */
+export function grantedActions(grant: Pick<AgentGrantRow, 'allowedActions'>): string[] {
+  const grantable = agentGrantableActions();
+  return parseGrantList(grant.allowedActions).filter((a) => grantable.includes(a));
 }
 
 function utcDay(now: Date = new Date()): string {
@@ -251,8 +205,9 @@ export async function resolveAgentToken(token: string, runner: Runner = dbRunner
 export function makeAgentUser(grant: AgentGrantRow): cds.User {
   return new cds.User({
     id: agentPrincipalId(grant.ID),
-    roles: [AGENT_ROLE],
-    attr: { grantId: grant.ID, operator: grant.userId, walletId: grant.walletId ?? '' },
+    // the service roles let a token past the model; its grant decides per operation
+    roles: [AGENT_ROLE, 'Read', 'Transact', 'Sign'],
+    attr: { grantId: grant.ID, operator: grant.userId },
   } as unknown as string);
 }
 
@@ -262,8 +217,6 @@ export function makeAgentUser(grant: AgentGrantRow): cds.User {
 
 export interface IssueAgentGrantInput {
   allowedActions: string[];
-  walletId?: string | null;
-  allowedJobKinds?: string[] | null;
   maxJobsPerDay?: number | null;
   validUntil?: string | null;
   agentLabel?: string | null;
@@ -274,8 +227,6 @@ export interface IssuedAgentGrant {
   /** Shown once. Never logged, never stored. */
   token: string;
   allowedActions: string[];
-  walletId: string | null;
-  allowedJobKinds: string[];
   maxJobsPerDay: number | null;
   validUntil: string | null;
 }
@@ -289,8 +240,6 @@ export class AgentGrantInputError extends BackendError {
 
 interface NormalizedGrantInput {
   allowedActions: string[];
-  walletId: string | null;
-  allowedJobKinds: string[];
   maxJobsPerDay: number | null;
   validUntil: string | null;
   agentLabel: string | null;
@@ -302,34 +251,15 @@ export function validateGrantInput(input: IssueAgentGrantInput, now: Date = new 
   if (!Array.isArray(actions) || actions.length === 0) {
     throw fail('allowedActions must be a non-empty array', 'allowedActions');
   }
-  const unknown = actions.filter((a) => !AGENT_ALLOWLISTABLE_ACTIONS.includes(a));
+  const grantable = agentGrantableActions();
+  const unknown = actions.filter((a) => !grantable.includes(a));
   if (unknown.length > 0) {
     throw fail(
-      `allowedActions contains non-grantable entries: ${unknown.join(', ')}. Grantable: ${AGENT_ALLOWLISTABLE_ACTIONS.join(', ')}`,
+      `allowedActions contains non-grantable entries: ${unknown.join(', ')}. Grantable: ${grantable.join(', ')}`,
       'allowedActions'
     );
   }
   const uniqueActions = [...new Set(actions)];
-
-  const walletId = typeof input.walletId === 'string' && input.walletId.trim() ? input.walletId.trim() : null;
-  const wantsWallet = uniqueActions.some((a) => AGENT_WALLET_ACTIONS.has(a));
-  if (wantsWallet && !walletId) {
-    throw fail('walletId is required when SubmitWalletJob or CancelJob is allowed', 'walletId');
-  }
-  if (walletId && walletId.length > 50) throw fail('walletId must be at most 50 characters', 'walletId');
-
-  let allowedJobKinds: string[] = [];
-  if (input.allowedJobKinds !== undefined && input.allowedJobKinds !== null) {
-    if (!Array.isArray(input.allowedJobKinds)) throw fail('allowedJobKinds must be an array', 'allowedJobKinds');
-    const badKinds = input.allowedJobKinds.filter((k) => !AGENT_JOB_KINDS.includes(k));
-    if (badKinds.length > 0) {
-      throw fail(`allowedJobKinds contains unknown kinds: ${badKinds.join(', ')}. Known: ${AGENT_JOB_KINDS.join(', ')}`, 'allowedJobKinds');
-    }
-    allowedJobKinds = [...new Set(input.allowedJobKinds)];
-    if (allowedJobKinds.length > 0 && !wantsWallet) {
-      throw fail('allowedJobKinds needs SubmitWalletJob in allowedActions', 'allowedJobKinds');
-    }
-  }
 
   let maxJobsPerDay: number | null = null;
   if (input.maxJobsPerDay !== undefined && input.maxJobsPerDay !== null) {
@@ -349,7 +279,7 @@ export function validateGrantInput(input: IssueAgentGrantInput, now: Date = new 
   const agentLabel = typeof input.agentLabel === 'string' && input.agentLabel.trim() ? input.agentLabel.trim() : null;
   if (agentLabel && agentLabel.length > 100) throw fail('agentLabel must be at most 100 characters', 'agentLabel');
 
-  return { allowedActions: uniqueActions, walletId, allowedJobKinds, maxJobsPerDay, validUntil, agentLabel };
+  return { allowedActions: uniqueActions, maxJobsPerDay, validUntil, agentLabel };
 }
 
 /** Mint a grant for `operatorId` on `runner`; validation errors surface as AgentGrantInputError (400). */
@@ -367,8 +297,6 @@ export async function issueAgentGrant(
     agentLabel: n.agentLabel,
     tokenHash: hashAgentToken(token),
     allowedActions: JSON.stringify(n.allowedActions),
-    walletId: n.walletId,
-    allowedJobKinds: n.allowedJobKinds.length > 0 ? JSON.stringify(n.allowedJobKinds) : null,
     maxJobsPerDay: n.maxJobsPerDay,
     jobsUsedToday: 0,
     budgetWindow: null,
@@ -383,15 +311,13 @@ export async function issueAgentGrant(
   logger.info(
     `agent grant ${grant.ID} issued by ${operatorId}` +
       `${n.agentLabel ? ` for '${n.agentLabel}'` : ''} (actions: ${n.allowedActions.join(', ')}` +
-      `${n.walletId ? `, wallet ${n.walletId}` : ''}${n.maxJobsPerDay ? `, budget ${n.maxJobsPerDay}/day` : ''}` +
+      `${n.maxJobsPerDay ? `, budget ${n.maxJobsPerDay}/day` : ''}` +
       `${n.validUntil ? `, until ${n.validUntil}` : ''})`
   );
   return {
     grantId: grant.ID,
     token,
     allowedActions: n.allowedActions,
-    walletId: n.walletId,
-    allowedJobKinds: n.allowedJobKinds,
     maxJobsPerDay: n.maxJobsPerDay,
     validUntil: n.validUntil,
   };
@@ -438,16 +364,15 @@ export async function rotateAgentGrantToken(grantId: string, runner: Runner = db
 export interface UpdateAgentGrantInput {
   agentLabel?: string | null;
   allowedActions?: string[] | null;
-  allowedJobKinds?: string[] | null;
   maxJobsPerDay?: number | null;
   validUntil?: string | null;
 }
 
-/** Row fields a grant edit never touches; a different wallet binding is a different grant. */
-export const GRANT_IMMUTABLE_FIELDS: readonly string[] = ['walletId', 'userId', 'tokenHash'];
+/** Row fields a grant edit never touches. */
+export const GRANT_IMMUTABLE_FIELDS: readonly string[] = ['userId', 'tokenHash'];
 
 const GRANT_EDITABLE_FIELDS: readonly (keyof UpdateAgentGrantInput)[] = [
-  'agentLabel', 'allowedActions', 'allowedJobKinds', 'maxJobsPerDay', 'validUntil',
+  'agentLabel', 'allowedActions', 'maxJobsPerDay', 'validUntil',
 ];
 
 export type UpdateAgentGrantResult =
@@ -469,9 +394,7 @@ export async function updateAgentGrant(
   // validUntil only when given: an untouched, already passed expiry is the lane's 410, not this edit's 400
   const n = validateGrantInput(
     {
-      allowedActions: has('allowedActions') ? (input.allowedActions as string[]) : parseGrantList(existing.allowedActions),
-      walletId: existing.walletId ?? null,
-      allowedJobKinds: has('allowedJobKinds') ? input.allowedJobKinds : parseGrantList(existing.allowedJobKinds),
+      allowedActions: has('allowedActions') ? (input.allowedActions as string[]) : grantedActions(existing),
       maxJobsPerDay: has('maxJobsPerDay') ? input.maxJobsPerDay : existing.maxJobsPerDay,
       validUntil: has('validUntil') ? input.validUntil : null,
       agentLabel: has('agentLabel') ? input.agentLabel : existing.agentLabel,
@@ -482,7 +405,6 @@ export async function updateAgentGrant(
 
   const patch: Record<string, unknown> = {};
   if (has('allowedActions')) patch.allowedActions = JSON.stringify(n.allowedActions);
-  if (has('allowedJobKinds')) patch.allowedJobKinds = n.allowedJobKinds.length > 0 ? JSON.stringify(n.allowedJobKinds) : null;
   if (has('maxJobsPerDay')) patch.maxJobsPerDay = n.maxJobsPerDay;
   if (has('validUntil')) patch.validUntil = n.validUntil;
   if (has('agentLabel')) patch.agentLabel = n.agentLabel;
@@ -592,8 +514,6 @@ export interface AgentGrantStatus {
   grantId: string;
   agentLabel: string | null;
   allowedActions: string[];
-  walletId: string | null;
-  allowedJobKinds: string[];
   maxJobsPerDay: number | null;
   jobsUsedToday: number;
   budgetWindow: string | null;
@@ -605,9 +525,7 @@ export function toGrantStatus(grant: AgentGrantRow): AgentGrantStatus {
   return {
     grantId: grant.ID,
     agentLabel: grant.agentLabel ?? null,
-    allowedActions: parseGrantList(grant.allowedActions),
-    walletId: grant.walletId ?? null,
-    allowedJobKinds: parseGrantList(grant.allowedJobKinds),
+    allowedActions: grantedActions(grant),
     maxJobsPerDay: grant.maxJobsPerDay ?? null,
     // a counter from an earlier UTC day belongs to a window that is over
     jobsUsedToday: grant.budgetWindow === utcDay() ? Number(grant.jobsUsedToday ?? 0) : 0,
@@ -663,8 +581,6 @@ export function registerAgentGrantHandlers(srv: cds.Service): void {
       grantId: issued.grantId,
       token: issued.token,
       allowedActions: issued.allowedActions,
-      walletId: issued.walletId,
-      allowedJobKinds: issued.allowedJobKinds,
       maxJobsPerDay: issued.maxJobsPerDay,
       validUntil: issued.validUntil,
     };
@@ -694,7 +610,7 @@ export function registerAgentGrantHandlers(srv: cds.Service): void {
     if (!data.grantId) return req.reject(400, 'grantId is required', 'grantId');
     const immutable = GRANT_IMMUTABLE_FIELDS.filter((f) => Object.prototype.hasOwnProperty.call(data, f));
     if (immutable.length > 0) {
-      return req.reject(400, `${immutable.join(', ')} cannot be changed; issue a new grant for a different binding`, immutable[0]);
+      return req.reject(400, `${immutable.join(', ')} cannot be changed`, immutable[0]);
     }
     let result: UpdateAgentGrantResult;
     try {
@@ -754,13 +670,13 @@ export interface BudgetRunner {
 
 export function budgetRunnerFor(req: Request, injected?: Runner, detached?: boolean): BudgetRunner {
   if (injected) return { runner: injected, detached: detached ?? true };
-  let tx: (Runner & { dbc?: unknown; ready?: unknown }) | null = null;
+  let tx: Runner | null = null;
   try {
-    tx = cds.tx(req) as unknown as Runner & { dbc?: unknown; ready?: unknown };
+    tx = cds.tx(req) as unknown as Runner;
   } catch {
     tx = null;
   }
-  if (tx && (tx.dbc || tx.ready)) return { runner: tx, detached: false };
+  if (tx && holdsConnection(tx)) return { runner: tx, detached: false };
   return { runner: dbRunner(), detached: true };
 }
 
@@ -789,7 +705,7 @@ function ownStatus(e: StatusCarrier): number | undefined {
   return Number.isInteger(code) && code >= 400 && code < 600 ? code : undefined;
 }
 
-/** The before('*') hook for token requests: allow list, wallet binding, daily budget and usage. */
+/** The before('*') hook for token requests: closed services, allow list, daily budget and usage. */
 export async function enforceAgentGrant(
   req: Request,
   runner?: Runner,
@@ -803,10 +719,15 @@ export async function enforceAgentGrant(
   if (grant.isActive === false) return req.reject(401, 'invalid agent token');
   if (isExpired(grant)) return req.reject(410, 'agent grant expired');
 
+  const event = String(req.event ?? '');
+  const access = agentAccessOf(serviceName, event);
+  if (access === 'closed') {
+    return req.reject(403, 'worker wallets are not available to agent tokens');
+  }
+
   const br = budgetRunnerFor(req, runner, detached);
 
-  const event = String(req.event ?? '');
-  if (AGENT_ALWAYS_ALLOWED_EVENTS.has(event)) {
+  if (access === 'read') {
     // a token sees its own usage only; a foreign id is not found (non-leaking)
     if (event === 'GetGrantUsage') {
       const asked = String((req.data as { grantId?: unknown } | undefined)?.grantId ?? '');
@@ -816,29 +737,8 @@ export async function enforceAgentGrant(
     return;
   }
 
-  const allowed = parseGrantList(grant.allowedActions);
-  if (!allowed.includes(event)) {
+  if (access !== 'grant' || !grantedActions(grant).includes(event)) {
     return req.reject(403, `action '${event}' is not allowed for this agent grant`);
-  }
-
-  const data = req.data as Record<string, unknown> | undefined;
-  if (AGENT_WALLET_ACTIONS.has(event)) {
-    if (!grant.walletId) {
-      return req.reject(403, 'this agent grant has no wallet binding; issue it with walletId to queue wallet jobs');
-    }
-    if (data && typeof data === 'object') {
-      if (event === 'SubmitWalletJob') {
-        if (data.walletId !== undefined && data.walletId !== null && data.walletId !== '' && data.walletId !== grant.walletId) {
-          return req.reject(403, 'walletId does not match this agent grant');
-        }
-        data.walletId = grant.walletId;
-        const kinds = parseGrantList(grant.allowedJobKinds);
-        if (kinds.length > 0 && !kinds.includes(String(data.kind ?? ''))) {
-          return req.reject(403, `job kind '${String(data.kind ?? '')}' is not allowed for this agent grant (allowed: ${kinds.join(', ')})`);
-        }
-      }
-      // CancelJob: the worker service scopes the job lookup by createdBy = agent:<grantId>
-    }
   }
 
   let charge: BudgetCharge | null = null;
@@ -974,6 +874,30 @@ function bufferUsage(key: { grant_ID: string; day: string; service: string; acti
   }
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** UTC day of the last retention run of this process. */
+let usagePrunedOn: string | null = null;
+
+/** Test seam: the day the retention last ran (null = not yet). */
+export function __setGrantUsagePrunedForTests(day: string | null): void {
+  usagePrunedOn = day;
+}
+
+// Once per UTC day and process: delete the usage rows older than the retention. Never fails the caller.
+async function pruneGrantUsage(runner: BudgetRunner, now: Date = new Date()): Promise<void> {
+  const today = utcDay(now);
+  if (usagePrunedOn === today) return;
+  usagePrunedOn = today;
+  const days = loadGrantUsageRetentionDays();
+  if (days === 0) return;
+  const before = utcDay(new Date(now.getTime() - days * DAY_MS));
+  try {
+    await runStmt(runner, DELETE.from(GRANT_USAGE_ENTITY).where({ day: { '<': before } }));
+  } catch (err) {
+    logger.warn(`usage retention failed: ${String((err as Error)?.message ?? err)}`);
+  }
+}
+
 /** Write the buffered deltas per key. A failed delta goes back into the buffer for the next flush. */
 export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ flushed: number; failed: number }> {
   if (usageBuffer.size === 0) return { flushed: 0, failed: 0 };
@@ -1006,6 +930,7 @@ export async function flushGrantUsage(runner: Runner = dbRunner()): Promise<{ fl
       logger.warn(`usage flush for grant ${d.grant_ID} (${d.service}.${d.action}) failed, kept for retry: ${String((err as Error)?.message ?? err)}`);
     }
   }
+  await pruneGrantUsage(br);
   return { flushed, failed };
 }
 
@@ -1026,15 +951,17 @@ export async function recordGrantUsage(
   }
   const bump = () => runStmt(runner, UPDATE.entity(GRANT_USAGE_ENTITY).set({ calls: { '+=': 1 } }).where(key));
   try {
-    if (Number(await bump()) > 0) return day;
-    try {
-      await runStmt(runner, INSERT.into(GRANT_USAGE_ENTITY).entries({ ...key, calls: 1, refunded: 0 }));
-    } catch {
-      await bump(); // lost the insert race: the row exists now
+    if (Number(await bump()) === 0) {
+      try {
+        await runStmt(runner, INSERT.into(GRANT_USAGE_ENTITY).entries({ ...key, calls: 1, refunded: 0 }));
+      } catch {
+        await bump(); // lost the insert race: the row exists now
+      }
     }
   } catch (err) {
     logger.warn(`usage record for grant ${grant.ID} (${service}.${action}) failed: ${String((err as Error)?.message ?? err)}`);
   }
+  await pruneGrantUsage(runner, now);
   return day;
 }
 

@@ -45,6 +45,7 @@ describe('list operations: limit and skip', () => {
     ['CardanoODataService', 'GetUTxOsByCredential', { credential: 'a'.repeat(56) }, 5000],
     ['CardanoODataService', 'GetAssetsByAddress', { address: ADDR }, 5000],
     ['CardanoODataService', 'GetMetadataByTxHash', { txHash: 'a'.repeat(64) }, 5000],
+    ['CardanoODataService', 'GetMetadataByLabel', { label: '674' }, 1000],
     ['CardanoTransactionService', 'GetTransactionBuildsByAddress', { address: ADDR }, 5000],
     ['CardanoSignService', 'GetSigningRequestsByAddress', { address: ADDR }, 5000],
   ];
@@ -88,5 +89,11 @@ describe('ranges and enums', () => {
     expect(await statusOf('CardanoWorkerService', 'SubmitWalletJob', { walletId: 'w', kind: 'teleport' })).toBe(400);
     expect(await statusOf('CardanoWorkerService', 'SubmitWalletJob', { walletId: 'w', kind: 'simpleAda', priority: 10_001 })).toBe(400);
     expect(await statusOf('CardanoWorkerService', 'SubmitWalletJob', { walletId: 'w', kind: 'simpleAda', priority: 10_000 })).toBe(200);
+    expect(await statusOf('CardanoODataService', 'GetLatestTransactionsByAddress', { address: ADDR, sinceTime: 1_700_000_000, waitMs: 30_000 })).toBe(200);
+    expect(await statusOf('CardanoODataService', 'GetLatestTransactionsByAddress', { address: ADDR, sinceTime: 1_700_000_000, waitMs: 30_001 })).toBe(400);
+    expect(await statusOf('CardanoODataService', 'GetLatestTransactionsByAddress', { address: ADDR, sinceTime: -1 })).toBe(400);
+    expect(await statusOf('CardanoWorkerService', 'GetJobStatus', { jobId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' })).toBe(200);
+    expect(await statusOf('CardanoWorkerService', 'GetJobStatus', { jobId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301', waitMs: 30_000 })).toBe(200);
+    expect(await statusOf('CardanoWorkerService', 'GetJobStatus', { jobId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301', waitMs: 30_001 })).toBe(400);
   });
 });

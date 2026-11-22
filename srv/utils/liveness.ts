@@ -1,8 +1,8 @@
 // Liveness body for getLiveness(). It reports process facts only and never touches
 // backends or the DB, so it answers while those start or fail.
 
-import cds from '@sap/cds';
 import path from 'path';
+import { configuredNetworkName } from '../config';
 
 export interface Liveness {
   status: 'alive';
@@ -32,14 +32,11 @@ function packageVersion(): string {
 }
 
 export function buildLiveness(now: Date = new Date()): Liveness {
-  const requires = (cds.env?.requires ?? {}) as Record<string, unknown>;
-  const core = (requires['odatano-core'] ?? {}) as { network?: unknown };
-  const network = String(core.network || process.env.NETWORK || 'preview');
   return {
     status: 'alive',
     timestamp: now.toISOString(),
     uptime: Math.max(0, Math.floor((now.getTime() - processStartedAt) / 1000)),
     version: packageVersion(),
-    network,
+    network: configuredNetworkName(),
   };
 }

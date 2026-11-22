@@ -38,8 +38,8 @@
     },
     {
       "name": "CardanoAdmin",
-      "description": "Operate the ODATANO chain crawler and wallet worker",
-      "scope-references": ["$XSAPPNAME.Admin"]
+      "description": "Everything a CardanoUser may, and operate the chain crawler, the wallet worker and agent grants",
+      "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign", "$XSAPPNAME.Admin"]
     }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]

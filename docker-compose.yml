@@ -40,7 +40,7 @@ services:
       - ./config/preview:/config:ro
       - node-ipc:/ipc
     ports:
-      - "1337:1337"
+      - "127.0.0.1:1337:1337"
     depends_on:
       - cardano-node
     restart: unless-stopped
@@ -68,7 +68,7 @@ services:
     image: odatano:${VERSION:-0.1.0}
     container_name: odatano-service
     ports:
-      - "4004:4004"
+      - "127.0.0.1:4004:4004"
     environment:
       - NETWORK=preview
       # Ogmios first (live), Koios as historical fallback. Blockfrost: add it to BACKENDS and set BLOCKFROST_API_KEY.

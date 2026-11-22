@@ -27,11 +27,17 @@ export const ERROR_CODES = {
   /** 409: transaction already submitted (duplicate / replay). */
   TX_ALREADY_SUBMITTED: 'ODATANO_TX_ALREADY_SUBMITTED',
 
+  /** 409: the idempotency key belongs to a job with another request. */
+  IDEMPOTENCY_KEY_CONFLICT: 'ODATANO_IDEMPOTENCY_KEY_CONFLICT',
+
   /** 429: provider rate limit hit. */
   PROVIDER_RATE_LIMITED: 'ODATANO_PROVIDER_RATE_LIMITED',
 
   /** 503: Cardano data provider unavailable. */
   PROVIDER_UNAVAILABLE: 'ODATANO_PROVIDER_UNAVAILABLE',
+
+  /** 503: a submit failed without a verdict; the transaction may still reach the chain. */
+  SUBMIT_OUTCOME_UNKNOWN: 'ODATANO_SUBMIT_OUTCOME_UNKNOWN',
 
   /** 500: unexpected internal error. */
   INTERNAL_ERROR: 'ODATANO_INTERNAL_ERROR',

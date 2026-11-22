@@ -33,6 +33,7 @@ npm install @odatano/core @cap-js/sqlite
   "cds": {
     "requires": {
       "db": { "kind": "sqlite" },
+      "auth": { "users": { "alice": { "roles": ["Read", "Transact", "Sign"] } } },
       "odatano-core": {
         "network": "preview",
         "backends": ["koios"]
@@ -41,6 +42,9 @@ npm install @odatano/core @cap-js/sqlite
   }
 }
 ```
+
+The services ask for the roles `Read`, `Transact` and `Sign` (`Admin` for operator actions). The `auth`
+entry gives them to CAP's development user `alice`; in production your own authentication assigns them.
 
 ```bash
 cds deploy --to sqlite 
@@ -90,11 +94,11 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 
 ## Dev Mode: Mocked Authentication
 
-> **Heads-up.** `cds serve` uses CAP's mocked auth: `@requires: 'authenticated-user'` accepts any Basic-Auth header against a mock user (`alice`, `bob`, …) — passwords are not checked. Anonymous requests get 401, but anyone reaching the port can authenticate.
+> **Heads-up.** `cds serve` uses CAP's mocked auth: any Basic-Auth header logs in as the named mock user and passwords are not checked. This repository gives `alice` and `bob` the roles `Read`, `Transact` and `Sign`, `carol` only `Read`, and `admin` all four (`.cdsrc.json`); any other name is logged in without a role and gets 403. Anonymous requests get 401, but anyone reaching the port can authenticate.
 >
 > Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
 >
-> The Docker image runs `NODE_ENV=production` with HTTP basic auth via `@odatano/cap-auth` (`ODATANO_HTTP_PASSWORD` required, user `ODATANO_HTTP_USER` default `odatano`, roles `ODATANO_HTTP_ROLES` default `Admin`; 20 failed attempts per 15 min per client address and user, then 429). `ODATANO_AUTH=dummy` disables authentication for local testing only. `getLiveness()` and `VerifyDataSignature` stay anonymous.
+> The Docker image runs `NODE_ENV=production` with HTTP basic auth via `@odatano/cap-auth` (`ODATANO_HTTP_PASSWORD` required, user `ODATANO_HTTP_USER` default `odatano`, roles `ODATANO_HTTP_ROLES` default `Read,Transact,Sign,Admin`; 20 failed attempts per 15 min per client address and user, then 429). `ODATANO_AUTH=dummy` disables authentication for local testing only. `getLiveness()` and `VerifyDataSignature` stay anonymous.
 >
 > Database of the image: `ODATANO_DB_URL=postgres://user:pw@host:5432/db` selects PostgreSQL (schema deployed on every boot); otherwise SQLite at `ODATANO_DB_PATH` (default `/data/db.sqlite`). `docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite` copies an existing SQLite file into a freshly deployed PostgreSQL.
 
@@ -102,14 +106,15 @@ Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/Q
 
 | Service | Path | Purpose |
 |---|---|---|
-| CardanoODataService | `/odata/v4/cardano/` | Read blockchain data (32 entities, 21 actions) |
+| CardanoODataService | `/odata/v4/cardano/` | Read blockchain data (33 entities, 22 actions) |
 | CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (14 actions) |
 | CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
 | CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (off by default) |
 | CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (off by default) |
+| CardanoBackendService | `/odata/v4/cardano-backend/` | Chain data in provider shape for another ODATANO that uses this one as its `odatano` backend |
 | CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants: scoped bearer tokens for agents (off by default) |
 
-Both services also publish **CAP events**, so a consumer can subscribe instead of polling —
+The indexer and the worker service also publish **CAP events**, so a consumer can subscribe instead of polling —
 in-process, no broker required:
 
 ```js
@@ -126,48 +131,54 @@ AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.
 AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating non-token requests (default: configured kind)
 AGENT_GRANT_ADMIN_RATE_LIMIT=10      # grant administration calls per principal per hour (or agentGrants.adminRateLimit)
 AGENT_TOKEN_CACHE_MS=10000           # a resolved token is reused this long before the row is read again; 0 = off (or agentGrants.tokenCacheMs)
+AGENT_GRANT_USAGE_RETENTION_DAYS=400 # usage counters older than this are deleted once a day; 0 = keep all (or agentGrants.usageRetentionDays)
 ```
 
 1. An **Admin** issues a grant (`POST /odata/v4/cardano-agent/CreateAgentGrant`): an allow list of
-   actions, optionally a worker `walletId` (required for `SubmitWalletJob`/`CancelJob`), allowed job
-   kinds, a daily budget and an expiry. The response carries the token `odat_…` **once**; the
+   actions, a daily budget and an expiry. The response carries the token `odat_…` **once**; the
    server stores only its SHA-256.
-2. The agent sends `x-agent-token: odat_…` on any of the six service paths. It runs as the principal
+2. The agent sends `x-agent-token: odat_…` on the service paths. It runs as the principal
    `agent:<grantId>` with the single role `agent-grant`, never as the operator: every
    `@requires: 'Admin'` surface (pause/resume, HSM signing, grant administration) refuses it by
    construction. Reads and compute-only actions are always allowed; allow-listed actions each cost
    one budget unit per UTC day (a build is the service an agent buys); everything else is 403.
-   Wallet jobs are pinned to the grant's wallet and visible only to the grant that queued them.
+   An agent signs its transactions itself: the wallet worker, which signs with server-held keys,
+   answers every token request with 403.
 3. `GET /odata/v4/cardano-agent/GetGrantStatus()` tells the agent what it may do and how much budget
    is left; `RevokeAgentGrant` turns the token into an unknown token immediately.
 4. Lifecycle (Admin; the same semantics as the gateway's peer services, so one client drives
-   them all): `UpdateAgentGrant` changes label, allow list, job kinds, daily budget or expiry
-   (absent = untouched, explicit `null` = cleared; the wallet binding is immutable, 409
-   `GRANT_REVOKED` on a revoked grant); `RotateAgentGrantToken` returns a fresh token once, the old
+   them all): `UpdateAgentGrant` changes label, allow list, daily budget or expiry
+   (absent = untouched, explicit `null` = cleared; 409 `GRANT_REVOKED` on a revoked grant); `RotateAgentGrantToken` returns a fresh token once, the old
    one is unknown from the next request; `GetGrantUsage(grantId, since, until)` lists admitted calls
    per service and action over up to 366 days (an Admin for any grant, a token for its own). All
    administration calls share the per-principal hourly rate limit above.
 
-Grantable: `Build*`, `SetCollateral`, `CreateSigningRequest`, `VerifySignature`, `Submit*`,
-`CheckSubmissionStatus`, `SubmitWalletJob`, `CancelJob`. Never: `SignWithHsm*`, `Pause*`/`Resume*`,
-`pauseCrawler`/`resumeCrawler`, grant administration.
+Grantable: `Build*`, `SetCollateral`, `CreateSigningRequest`, `VerifySignature`, `SubmitTransaction`,
+`SubmitSignedTransaction`, `SubmitVerifiedTransaction`, `CheckSubmissionStatus`. Never: `SignWithHsm*`,
+`SubmitWalletJob`, `CancelJob`, `Pause*`/`Resume*`, `pauseCrawler`/`resumeCrawler`, grant administration.
 
 Programmatic seams for other packages (`@odatano/x402` sells grants against a 402 payment):
 `issueAgentGrant()`, `updateAgentGrant()`, `rotateAgentGrantToken()`, `revokeAgentGrantById()`,
 `getGrantUsage()`, `registerTransportLane()` from `@odatano/core`.
 
-## Liveness probe
+## Liveness and readiness probes
 
 `GET /odata/v4/cardano-indexer/getLiveness()` answers `200 { status: "alive", timestamp, uptime,
 version, network }` **without credentials** (`@requires: 'any'`) as long as the process runs — no
 backend or DB probe, no secrets. The Docker `HEALTHCHECK`, compose and upstream probes use it
 instead of the service document, so a wrong operator password no longer reads as "ODATANO down".
-Readiness (crawler, worker, backends) stays authenticated: `getStatus()`, `GetWorkerStatus()`,
+
+`GET /odata/v4/cardano-indexer/getReadiness()` answers, also without credentials, whether this
+instance can serve requests: `200 { status: "ready", timestamp, context, database, hsm }`, or `503`
+with the same body and `status: "not_ready"` while the app context, the database or a configured
+HSM is missing (`hsm` is `null` without an HSM). Point a load balancer or an upstream gateway at it.
+
+The state of crawler, worker and backends stays authenticated: `getStatus()`, `GetWorkerStatus()`,
 `GetNetworkInformation`.
 
 ## Requirements
 
-- **Node.js >= 22.5** and **@sap/cds >= 10** (peer dependency). CAP 9 hosts cannot load `@odatano/core@2`.
+- **Node.js >= 22.5** and **@sap/cds 10** (peer dependency `^10`). CAP 9 hosts cannot load `@odatano/core@2`.
 - Upgrading a consumer from 1.x: run **`cds deploy`**. 2.0 adds six tables (`CardanoSyncState`,
   `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants`,
   `CardanoAgentGrantUsage`) plus a `dedupKey` column; without the redeploy the new services answer
@@ -183,6 +194,7 @@ Readiness (crawler, worker, backends) stays authenticated: `getStatus()`, `GetWo
 | [Transaction Workflow](docs/guides/TRANSACTION_WORKFLOW.md) | Build → Sign → Submit flow |
 | [Security Guide](docs/guides/SECURITY_GUIDE.md) | Authentication, signing security, HSM |
 | [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
+| [Upgrading to 2.0](docs/guides/UPGRADE_2.0.md) | What a 1.x deployment and its clients change |
 
 ## License
 

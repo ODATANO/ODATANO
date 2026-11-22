@@ -1,14 +1,21 @@
 import cds, { Request } from '@sap/cds';
-import { TransactionAlreadySubmittedError } from '../../utils/errors';
+import { SubmitOutcomeUnknownError, TransactionAlreadySubmittedError, isSubmitRejection } from '../../utils/errors';
 import { detachedTx, runWithoutAmbientTx } from '../../utils/tx-utils';
 import { extractTxCacheTargets } from '../../utils/tx-build-helper';
 import { getExternalSignerModule } from './external-signer';
+import { isTransactionOnChain, type TransactionLookup } from '../transaction-presence';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { CardanoClient } from '../cardano-client';
-import { AddressTransactionBuilds, type TransactionSubmission } from '#cds-models/CardanoTransactionService';
+import { AddressTransactionBuilds, TransactionSubmissions, type TransactionSubmission } from '#cds-models/CardanoTransactionService';
 
 const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('SubmissionFinalizer');
+
+const SIGNING_REQUESTS = 'odatano.cardano.SigningRequests';
+
+/** An open submit is sent again for this long. After it only the chain is read. */
+export const RESUBMIT_WINDOW_MS = 10 * 60_000;
+const RECONCILE_INTERVAL_MS = 60_000;
 
 /** Shape persisted by indexVerifiedTransactionSubmission. */
 export interface FinalizeParams {
@@ -26,7 +33,29 @@ export interface FinalizeParams {
   signerInfo?: string;
 }
 
-type SubmissionIndexer = Pick<CardanoIndexer, 'persistTransactionSubmission' | 'updateSubmissionStatus' | 'dropDuplicateSubmission' | 'invalidateUtxoCacheForTx'>;
+type SubmissionIndexer = Pick<CardanoIndexer,
+  'persistTransactionSubmission' | 'updateSubmissionStatus' | 'dropDuplicateSubmission' | 'invalidateUtxoCacheForTx' | 'findIndexedTransaction'>;
+type SubmissionClient = Pick<CardanoClient, 'submitTransaction'> & TransactionLookup;
+
+interface SubmissionDeps {
+  indexer: SubmissionIndexer & Pick<CardanoIndexer, 'indexVerifiedTransactionSubmission'>;
+  client: SubmissionClient;
+}
+
+/** accepted: the node or the chain has the transaction. rejected: refused and not on chain. unknown: no verdict. */
+type SubmitOutcome = 'accepted' | 'rejected' | 'unknown';
+
+interface RecordedSubmission {
+  id: string;
+  signedTxCbor: string;
+  txHash: string;
+  buildId: string | null;
+}
+
+// Record ids this process is sending right now. The reconciler leaves them alone.
+const inFlight = new Set<string>();
+// Signing requests whose stored transaction no longer verifies. Reported once, then skipped.
+const unverifiable = new Set<string>();
 
 // Lazy require avoids the srv/server.ts <-> this-module import cycle; the app-context
 // getters are only needed at runtime.
@@ -34,48 +63,165 @@ function server(): typeof import('../../server') {
   return require('../../server') as typeof import('../../server');
 }
 
+function liveDeps(): SubmissionDeps {
+  return { indexer: server().getCardanoIndexer(), client: server().getCardanoClient() };
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// Sends the transaction and says what the attempt proves. With send = false only the chain is read,
+// unless no backend can look transactions up: then the node's answer is the only evidence.
+// `error` is the failed submit, also when the transaction turned out to be known.
+async function attemptSubmit(
+  signedTxCbor: string,
+  txHash: string,
+  send: boolean,
+  indexer: Pick<CardanoIndexer, 'findIndexedTransaction'>,
+  client: SubmissionClient,
+): Promise<{ outcome: SubmitOutcome; error?: unknown }> {
+  const sent = send || !client.supports('getTransaction');
+  let error: unknown = new Error(`Transaction ${txHash} is not on chain ${RESUBMIT_WINDOW_MS / 60_000} minutes after its submit`);
+  if (sent) {
+    try {
+      await client.submitTransaction(signedTxCbor);
+      return { outcome: 'accepted' };
+    } catch (submitErr: unknown) {
+      if (submitErr instanceof TransactionAlreadySubmittedError) return { outcome: 'accepted', error: submitErr };
+      error = submitErr;
+    }
+  }
+
+  // A refusal may mean the transaction is already on chain and its inputs are spent.
+  try {
+    if (await isTransactionOnChain(indexer, client, txHash)) return { outcome: 'accepted', error };
+  } catch (lookupErr: unknown) {
+    logger.warn({ txHash, error: messageOf(lookupErr) }, 'Chain lookup after a failed submit was inconclusive');
+    return { outcome: 'unknown', error };
+  }
+  return { outcome: !sent || isSubmitRejection(error) ? 'rejected' : 'unknown', error };
+}
+
 // Outcomes are written in detached transactions, so no DB lock is held across the network call.
-// A failure is marked 'failed' and rethrown. A crash before finalize leaves 'submitting'.
+// A refused transaction is marked 'failed' and the error rethrown. Without a verdict the request
+// stays 'submitting' for the reconciler and the call throws SubmitOutcomeUnknownError.
 export async function submitAndFinalize(
   SigningRequests: unknown,
   params: FinalizeParams,
-  afterFinalize?: (db: cds.Transaction) => Promise<void>
+  afterFinalize?: (db: cds.Transaction) => Promise<void>,
+  send = true,
+  { indexer, client }: SubmissionDeps = liveDeps(),
 ): Promise<unknown> {
-  // Persist the submission + 'submitted' status in its own committed transaction.
+
   const finalizeSubmitted = () => detachedTx('finalize transaction submission', async (db: cds.Transaction) => {
-    const submission = await server().getCardanoIndexer().indexVerifiedTransactionSubmission(db as never, params);
+    // Only the caller that moves the request to 'submitted' writes the records.
+    const won = await db.run(
+      UPDATE.entity(SigningRequests as never).set({ status: 'submitted', errorMessage: null })
+        .where({ id: params.signingRequestId, status: { in: ['submitting', 'failed'] } })
+    );
+    if (won === 0) {
+      const request = await db.run(
+        SELECT.one.from(SigningRequests as never).columns('submission_id').where({ id: params.signingRequestId })
+      ) as { submission_id?: string | null } | undefined;
+      return db.run(SELECT.one.from(TransactionSubmissions).where({ id: request?.submission_id ?? null }));
+    }
+
+    const submission = await indexer.indexVerifiedTransactionSubmission(db as never, params);
     if (afterFinalize) await afterFinalize(db);
     // Best effort; must never roll back the durable submission record.
     try {
-      await server().getCardanoIndexer().invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.fullSignedTxCbor));
+      await indexer.invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.fullSignedTxCbor));
     } catch (invalidateErr: unknown) {
-      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
+      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${messageOf(invalidateErr)}`);
     }
     return submission;
   });
 
+  inFlight.add(params.signingRequestId);
   try {
-    await server().getCardanoClient().submitTransaction(params.fullSignedTxCbor);
-  } catch (submitErr: unknown) {
-    // Already-submitted means the tx reached the mempool (e.g. first backend accepted it, response
-    // lost, fallback saw the duplicate): finalize as 'submitted' rather than recording a spurious 'failed'.
-    if (submitErr instanceof TransactionAlreadySubmittedError) {
-      logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
-        'Submit reported already-submitted; finalizing as submitted (tx already in mempool)');
-      return finalizeSubmitted();
-    }
-    try {
-      await detachedTx('mark signing request failed', (db: cds.Transaction) => db.run(
-        UPDATE.entity(SigningRequests as never).set({ status: 'failed' }).where({ id: params.signingRequestId })
-      ));
-    } catch (markErr: unknown) {
-      logger.error({ err: markErr, signingRequestId: params.signingRequestId },
-        'Could not durably mark signing request failed after submit error');
-    }
-    throw submitErr;
-  }
+    const { outcome, error } = await attemptSubmit(params.fullSignedTxCbor, params.txHash, send, indexer, client);
 
-  return finalizeSubmitted();
+    if (outcome === 'unknown') {
+      logger.warn({ signingRequestId: params.signingRequestId, txHash: params.txHash, error: messageOf(error) },
+        'Submit got no verdict; the signing request stays submitting');
+      throw new SubmitOutcomeUnknownError(params.txHash, error);
+    }
+
+    if (outcome === 'rejected') {
+      try {
+        await detachedTx('mark signing request failed', (db: cds.Transaction) => db.run(
+          UPDATE.entity(SigningRequests as never).set({ status: 'failed', errorMessage: messageOf(error) })
+            .where({ id: params.signingRequestId, status: 'submitting' })
+        ));
+      } catch (markErr: unknown) {
+        logger.error({ err: markErr, signingRequestId: params.signingRequestId },
+          'Could not durably mark signing request failed after submit error');
+      }
+      throw error;
+    }
+
+    if (error) {
+      logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash },
+        'Submit failed but the node or the chain has the transaction; finalizing as submitted');
+    }
+    return await finalizeSubmitted();
+  } finally {
+    inFlight.delete(params.signingRequestId);
+  }
+}
+
+// Commits what one attempt proves for a recorded submission. Returns only when the node accepted
+// the transaction now. A transaction it already had ends as 409, like a resubmit.
+async function settleRecorded(row: RecordedSubmission, send: boolean, indexer: SubmissionIndexer, client: SubmissionClient): Promise<void> {
+  inFlight.add(row.id);
+  try {
+    const { outcome, error } = await attemptSubmit(row.signedTxCbor, row.txHash, send, indexer, client);
+
+    if (outcome === 'accepted' && error === undefined) {
+      logger.info({ txHash: row.txHash }, 'Transaction submitted to blockchain');
+      await detachedTx('record submission outcome', async (db) => {
+        await indexer.updateSubmissionStatus(db as never, row.id, 'submitted');
+        // best-effort: a cache failure must not roll back the submitted status
+        try {
+          const senders = row.buildId
+            ? await db.run(SELECT.from(AddressTransactionBuilds).columns('address_address').where({ txBuild_id: row.buildId })) as Array<{ address_address?: string | null }>
+            : [];
+          await indexer.invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(row.signedTxCbor),
+            senders.map(r => r.address_address).filter((a): a is string => !!a));
+        } catch (invalidateErr: unknown) {
+          logger.warn(`UTxO cache invalidation failed (submit unaffected): ${messageOf(invalidateErr)}`);
+        }
+      });
+      return;
+    }
+
+    const errMsg = messageOf(error);
+    try {
+      await detachedTx('record submission outcome', async (db) => {
+        // the row stays pending with the last error; a refusal ends only a row that is still pending
+        if (outcome === 'unknown') return indexer.updateSubmissionStatus(db as never, row.id, 'pending', errMsg);
+        if (outcome === 'rejected') return indexer.updateSubmissionStatus(db as never, row.id, 'failed', errMsg, 'pending');
+        // A resubmit keeps one row per transaction: its own row goes when an earlier one exists.
+        if (await indexer.dropDuplicateSubmission(db as never, row.id, row.txHash)) return;
+        return indexer.updateSubmissionStatus(db as never, row.id, 'submitted');
+      });
+    } catch (markErr: unknown) {
+      logger.error({ err: markErr, submissionId: row.id }, 'Could not record the submission outcome after a submit error');
+    }
+
+    if (outcome === 'unknown') {
+      logger.warn({ txHash: row.txHash, error: errMsg }, 'Submit got no verdict; the submission stays pending');
+      throw new SubmitOutcomeUnknownError(row.txHash, error);
+    }
+    if (outcome === 'rejected') {
+      logger.error({ txHash: row.txHash, error: errMsg }, 'Transaction submission failed');
+      throw error;
+    }
+    throw error instanceof TransactionAlreadySubmittedError ? error : new TransactionAlreadySubmittedError(row.txHash, error);
+  } finally {
+    inFlight.delete(row.id);
+  }
 }
 
 // 'pending' commits first and the network call runs outside any DB tx.
@@ -83,43 +229,10 @@ export async function submitAndFinalize(
 export async function submitRecorded(
   params: { signedTxCbor: string; txHash: string; buildId: string | null },
   indexer: SubmissionIndexer = server().getCardanoIndexer(),
-  client: Pick<CardanoClient, 'submitTransaction'> = server().getCardanoClient(),
+  client: SubmissionClient = server().getCardanoClient(),
 ): Promise<TransactionSubmission> {
   const record = await detachedTx('record transaction submission', (db) => indexer.persistTransactionSubmission(db as never, params));
-
-  try {
-    await client.submitTransaction(params.signedTxCbor);
-    logger.info({ txHash: params.txHash }, 'Transaction submitted to blockchain');
-  } catch (submitErr: unknown) {
-    const alreadySubmitted = submitErr instanceof TransactionAlreadySubmittedError;
-    const errMsg = submitErr instanceof Error ? submitErr.message : String(submitErr);
-    try {
-      // A resubmit keeps one row per transaction: its own row goes when an earlier one exists.
-      await detachedTx('record submission outcome', async (db) => {
-        if (!alreadySubmitted) return indexer.updateSubmissionStatus(db as never, record.id!, 'failed', errMsg);
-        if (await indexer.dropDuplicateSubmission(db as never, record.id!, params.txHash)) return;
-        return indexer.updateSubmissionStatus(db as never, record.id!, 'submitted');
-      });
-    } catch (markErr: unknown) {
-      logger.error({ err: markErr, submissionId: record.id }, 'Could not record the submission outcome after a submit error');
-    }
-    if (!alreadySubmitted) logger.error({ txHash: params.txHash, error: errMsg }, 'Transaction submission failed');
-    throw submitErr;
-  }
-
-  await detachedTx('record submission outcome', async (db) => {
-    await indexer.updateSubmissionStatus(db as never, record.id!, 'submitted');
-    // best-effort: a cache failure must not roll back the submitted status
-    try {
-      const senders = params.buildId
-        ? await db.run(SELECT.from(AddressTransactionBuilds).columns('address_address').where({ txBuild_id: params.buildId })) as Array<{ address_address?: string | null }>
-        : [];
-      await indexer.invalidateUtxoCacheForTx(db as never, extractTxCacheTargets(params.signedTxCbor),
-        senders.map(r => r.address_address).filter((a): a is string => !!a));
-    } catch (invalidateErr: unknown) {
-      logger.warn(`UTxO cache invalidation failed (submit unaffected): ${invalidateErr instanceof Error ? invalidateErr.message : String(invalidateErr)}`);
-    }
-  });
+  await settleRecorded({ id: record.id!, ...params }, true, indexer, client);
   return { ...record, status: 'submitted' };
 }
 
@@ -127,13 +240,16 @@ export async function submitRecorded(
 // If the caller rolls back, 'succeeded' never fires and nothing was claimed.
 export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, params: FinalizeParams): void {
   req.on('succeeded', () => {
+    // from the commit on the row is visible to the reconciler
+    inFlight.add(params.signingRequestId);
     setImmediate(() => {
       runWithoutAmbientTx(() => submitAndFinalize(SigningRequests, params))
         .then(() => {
           logger.info({ signingRequestId: params.signingRequestId, txHash: params.txHash }, 'Deferred submit finalized');
         })
         .catch((err: unknown) => {
-          // submitAndFinalize already durably marked the request 'failed'.
+          // submitAndFinalize already recorded the outcome and logged an open one.
+          if (err instanceof SubmitOutcomeUnknownError) return;
           logger.error({ err, signingRequestId: params.signingRequestId },
             'Deferred submit failed (signing request marked failed)');
         });
@@ -141,32 +257,52 @@ export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, p
   });
 }
 
-// Boot recovery for rows stuck at 'submitting' that have signed CBOR. Idempotent, since a tx
-// the node already holds finalizes as 'submitted'. Returns the number of rows attempted.
-export async function redriveInterruptedSubmissions(): Promise<number> {
-  const SigningRequests = 'odatano.cardano.SigningRequests';
+function olderThanWindow(sinceMs: number): boolean {
+  return Number.isFinite(sinceMs) && Date.now() - sinceMs > RESUBMIT_WINDOW_MS;
+}
 
-  const rows = await detachedTx('load interrupted deferred submissions', (db: cds.Transaction) =>
+// Resolves signing requests left at 'submitting' and submissions left at 'pending': after a crash
+// or a submit without a verdict. Runs at boot and on a timer. Returns the number of records tried.
+export async function redriveInterruptedSubmissions(deps: SubmissionDeps = liveDeps()): Promise<number> {
+  const requests = (await detachedTx('load open signing requests', (db: cds.Transaction) =>
     db.run(
-      SELECT.from(SigningRequests)
+      SELECT.from(SIGNING_REQUESTS)
+        .columns('id', 'build_id', 'txBodyHash', 'signedTxCbor', 'signerType', 'signerInfo', 'signedAt', 'createdAt')
         .where({ status: 'submitting' })
         .and('signedTxCbor is not null')
     )
   ) as Array<{
     id: string; build_id?: string | null; txBodyHash: string; signedTxCbor: string;
-    signerType?: string | null; signerInfo?: string | null;
-  }>;
+    signerType?: string | null; signerInfo?: string | null; signedAt?: string | null; createdAt?: string | null;
+  }>).filter((row) => !inFlight.has(row.id) && !unverifiable.has(row.id));
 
-  if (!rows.length) return 0;
-  logger.info(`Re-driving ${rows.length} interrupted deferred submission(s)`);
+  const submissions = (await detachedTx('load open submissions', (db: cds.Transaction) =>
+    db.run(
+      SELECT.from(TransactionSubmissions)
+        .columns('id', 'build_id', 'txHash', 'signedTxCbor', 'submittedAt')
+        .where({ status: 'pending' })
+    )
+  ) as Array<{ id: string; build_id?: string | null; txHash: string; signedTxCbor: string; submittedAt?: number | string | null }>)
+    .filter((row) => !inFlight.has(row.id));
+
+  if (!requests.length && !submissions.length) return 0;
+  logger.info(`Resolving ${requests.length} open signing request(s) and ${submissions.length} open submission(s)`);
 
   let attempted = 0;
-  for (const row of rows) {
+  for (const row of requests) {
+    let verificationResult: FinalizeParams['verificationResult'];
     try {
       // Re-verify from the persisted CBOR to recompute the witness metadata the finalize step persists.
-      const verificationResult = getExternalSignerModule().verifyOrThrow(row.signedTxCbor, row.txBodyHash);
-      attempted++;
-      await submitAndFinalize(SigningRequests, {
+      verificationResult = getExternalSignerModule().verifyOrThrow(row.signedTxCbor, row.txBodyHash);
+    } catch (err: unknown) {
+      unverifiable.add(row.id);
+      logger.error({ err, signingRequestId: row.id }, 'Stored signed transaction no longer verifies; the request stays submitting for inspection');
+      continue;
+    }
+    attempted++;
+    const send = !olderThanWindow(Date.parse(String(row.signedAt ?? row.createdAt ?? '')));
+    try {
+      await submitAndFinalize(SIGNING_REQUESTS, {
         signingRequestId: row.id,
         buildId: row.build_id ?? '',
         fullSignedTxCbor: row.signedTxCbor,
@@ -174,13 +310,47 @@ export async function redriveInterruptedSubmissions(): Promise<number> {
         verificationResult,
         signerType: row.signerType ?? undefined,
         signerInfo: row.signerInfo ?? undefined,
-      });
-      logger.info({ signingRequestId: row.id, txHash: row.txBodyHash }, 'Interrupted submission re-driven');
+      }, undefined, send, deps);
+      logger.info({ signingRequestId: row.id, txHash: row.txBodyHash }, 'Open signing request resolved as submitted');
     } catch (err: unknown) {
-      // Submit errors already marked the row 'failed'; verification errors leave it at
-      // 'submitting' for manual inspection.
-      logger.error({ err, signingRequestId: row.id }, 'Re-drive of interrupted submission failed');
+      if (err instanceof SubmitOutcomeUnknownError) continue;
+      logger.error({ err, signingRequestId: row.id }, 'Open signing request resolved as failed');
+    }
+  }
+
+  for (const row of submissions) {
+    attempted++;
+    const send = !olderThanWindow(Number(row.submittedAt) * 1000);
+    try {
+      await settleRecorded({ id: row.id, signedTxCbor: row.signedTxCbor, txHash: row.txHash, buildId: row.build_id ?? null },
+        send, deps.indexer, deps.client);
+      logger.info({ submissionId: row.id, txHash: row.txHash }, 'Open submission resolved as submitted');
+    } catch (err: unknown) {
+      if (err instanceof SubmitOutcomeUnknownError) continue;
+      const level = err instanceof TransactionAlreadySubmittedError ? 'info' : 'error';
+      logger[level]({ submissionId: row.id, txHash: row.txHash, error: messageOf(err) }, 'Open submission resolved');
     }
   }
   return attempted;
+}
+
+let reconcileTimer: ReturnType<typeof setInterval> | null = null;
+let reconcileRunning = false;
+
+/** Starts the periodic pass over open signing requests and submissions. Idempotent. */
+export function startSubmissionReconciler(): void {
+  if (reconcileTimer) return;
+  reconcileTimer = setInterval(() => {
+    if (reconcileRunning) return;
+    reconcileRunning = true;
+    runWithoutAmbientTx(() => redriveInterruptedSubmissions())
+      .catch((err: unknown) => logger.error({ err }, 'Submission reconcile pass failed'))
+      .finally(() => { reconcileRunning = false; });
+  }, RECONCILE_INTERVAL_MS);
+  reconcileTimer.unref();
+}
+
+export function stopSubmissionReconciler(): void {
+  if (reconcileTimer) clearInterval(reconcileTimer);
+  reconcileTimer = null;
 }

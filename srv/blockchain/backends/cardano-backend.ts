@@ -212,6 +212,29 @@ export function isEpochStateBackend(backend: CardanoBackend): backend is EpochSt
   return typeof (backend as EpochStateBackend).epochStateAt === 'function';
 }
 
+/** A reward account as the node's ledger holds it at one block. */
+export interface RewardAccountState {
+  stakeAddress: string;
+  withdrawableAmount: string | null; // lovelace; null = not reported
+  deposit: string | null;            // lovelace; null = not reported
+  poolId: string | null;
+  drepId: string | null;
+}
+
+/** Answers the accounts among `stakeAddresses` that the ledger reports. */
+export type AskRewardAccounts = (stakeAddresses: string[]) => Promise<RewardAccountState[]>;
+
+// Backend that reads reward accounts from the node's ledger at a block (Ogmios).
+// Every call of `ask` inside `read` sees the same ledger state.
+export interface RewardAccountStateBackend extends CardanoBackend {
+  rewardAccountsAt<T>(point: ChainPoint, read: (ask: AskRewardAccounts) => Promise<T>): Promise<T>;
+}
+
+/** Type guard: can this backend read reward accounts at a block? */
+export function isRewardAccountStateBackend(backend: CardanoBackend): backend is RewardAccountStateBackend {
+  return typeof (backend as RewardAccountStateBackend).rewardAccountsAt === 'function';
+}
+
 // Backend that lists every unit with a CIP-26 token-registry entry. The registry is off-chain
 // (a GitHub repository mirrored by Koios), so the crawler can never derive these fields.
 export interface TokenRegistryBackend extends CardanoBackend {

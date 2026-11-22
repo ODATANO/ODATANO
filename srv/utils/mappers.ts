@@ -38,7 +38,6 @@ import {
   UTxOAsset as UTxOAssetRow,
   Transaction as TransactionRow,
   TransactionInput as TransactionInputRow,
-  TransactionInputAsset as TransactionInputAssetRow,
   TransactionOutput as TransactionOutputRow,
   TransactionOutputAsset as TransactionOutputAssetRow,
   TransactionCertificate as TransactionCertificateRow,
@@ -59,6 +58,8 @@ import {
   LedgerProtocolParameter as ProtocolParameterRow,
   AddressTransaction as AddressTransactionRow
 } from '#cds-models/CardanoODataService';
+
+import type { TransactionInputAssetCopy as TransactionInputAssetRow } from '#cds-models/odatano/cardano';
 
 import type {
   TransactionBuild as TransactionBuildRow,
@@ -99,7 +100,7 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
     slot: providerTx.slot ?? null,
     txIndex: providerTx.index ?? null,
     fee: providerTx.fee != null ? providerTx.fee : '0',
-    deposit: providerTx.deposit != null ? providerTx.deposit : '0',
+    deposit: providerTx.deposit ?? null,
     size: providerTx.size ?? null,
     hasInputs: hasInputs,
     hasOutputs: hasOutputs,
@@ -107,8 +108,9 @@ export function mapTransaction(providerTx: TransactionProviderData): Transaction
   };
 }
 
-/** Provider transaction inputs to TransactionInputRows, keyed by position in the tx. */
-export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderData[]): TransactionInputRow[] {
+// Provider transaction inputs to TransactionInputRows, keyed by position in the tx.
+// byReference: an input whose spent output is stored points at it and keeps no copy of its assets.
+export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderData[], byReference = false): TransactionInputRow[] {
   return txInputs.map((input, idx: number) => {
     // Position in this tx's inputs; input.outputIndex is the spent UTxO's index, not a key here
     const inputIndex = idx;
@@ -129,6 +131,7 @@ export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderDat
       // outpoint of the consumed UTxO
       spentTxHash: input.txHash || null,
       spentOutputIndex: Number.isInteger(input.outputIndex) ? input.outputIndex : null,
+      spentTxSeq: byReference ? input.spentTxSeq ?? null : null,
       isCollateral: Boolean(input.isCollateral),
       isReference: Boolean(input.isReference),
       hasAddresses: hasAddress,
@@ -137,16 +140,18 @@ export function mapTransactionInputs(txSeq: number, txInputs: TxInputProviderDat
   });
 }
 
-/** Provider transaction input assets to TransactionInputAssetRows. */
+// Provider transaction input assets to the rows kept as a copy. Must be called with the same
+// byReference as mapTransactionInputs: an input that points at its output gets no copy.
 export function mapTransactionInputAssets(
   txSeq: number,
-  inputs: TxInputProviderData[]
+  inputs: TxInputProviderData[],
+  byReference = false
 ): TransactionInputAssetRow[] {
   return inputs.flatMap((input, idx) => {
     // must match mapTransactionInputs
     const inputIndex = idx;
 
-    if (!Array.isArray(input.amount)) return [];
+    if (!Array.isArray(input.amount) || (byReference && input.spentTxSeq != null)) return [];
 
     return input.amount.map(a => {
       const { policyId, assetName } = parseAssetUnit(a.unit);
@@ -208,7 +213,7 @@ export function ledgerInputOrder(inputs: TxInputProviderData[]): TxInputProvider
 }
 
 // The transaction as the ledger applied it, identical for every source. After a phase-2 failure only
-// collateral and reference inputs remain and the collateral return is the only output.
+// collateral and reference inputs and the collateral return remain: no mint, certificate or withdrawal.
 // Unknown validity keeps what the source reported.
 export function ledgerView<T extends TransactionProviderData>(tx: T): T {
   const inputs = ledgerInputOrder(tx.inputs ?? []);
@@ -219,6 +224,8 @@ export function ledgerView<T extends TransactionProviderData>(tx: T): T {
     inputs: failed ? inputs.filter(i => i.isCollateral || i.isReference) : inputs,
     outputs: (tx.outputs ?? []).filter(o => (failed ? o.isCollateral : !o.isCollateral)),
     mint: failed ? undefined : tx.mint,
+    certificates: failed && tx.certificates ? [] : tx.certificates,
+    withdrawals: failed && tx.withdrawals ? [] : tx.withdrawals,
   };
 }
 
@@ -534,8 +541,9 @@ export function mapEpoch(providerEpochData: EpochProviderData): EpochRow {
   };
 }
 
-/** Provider metadata labels to TransactionMetadataRows; non-uint64 labels are skipped. */
-export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[]): TransactionMetadataRow[] {
+// Provider metadata labels to TransactionMetadataRows; non-uint64 labels are skipped.
+// Without txSeq the column is left out, so an UPSERT keeps a stored position.
+export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderData[], txSeq?: number | null): TransactionMetadataRow[] {
   const rows: TransactionMetadataRow[] = [];
 
   for (const lbl of providerLabels) {
@@ -552,6 +560,7 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
       label: lbl.label.toString(),
       // Ogmios exposes numeric metadata as bigint; written as exact number tokens
       payload: lbl.json !== undefined ? stringifyJson(lbl.json) : null,
+      ...(txSeq == null ? {} : { txSeq }),
     });
   }
   return rows;
@@ -654,6 +663,12 @@ export function mapPool(providerPoolData: PoolProviderData, max_age: number): Po
     margin: Number(providerPoolData.margin),
     fixedCost: providerPoolData.fixedCost,
     rewardAccount: providerPoolData.rewardAccount,
+    metadataUrl: providerPoolData.metadataUrl ?? null,
+    metadataHash: providerPoolData.metadataHash ?? null,
+    name: providerPoolData.name ?? null,
+    ticker: providerPoolData.ticker ?? null,
+    homepage: providerPoolData.homepage ?? null,
+    description: providerPoolData.description ?? null,
     validFrom,
     validTo,
   };

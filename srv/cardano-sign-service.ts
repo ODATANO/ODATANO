@@ -2,7 +2,7 @@ import cds, { Request } from '@sap/cds';
 import { handleRequest} from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors,rejectMissing } from './utils/errors';
 import { mapError } from './utils/mappers';
-import { validateTransactionInputs, isValidBech32Address, extractPaymentCredential } from './utils/validators';
+import { validateTransactionInputs, isValidBech32Address, isValidBech32StakeAddress, extractPaymentCredential } from './utils/validators';
 import { parseTransaction } from './cbor';
 import { getCardanoIndexer, getHsmConfig } from './server';
 import { getExternalSignerModule } from './blockchain/signing/external-signer';
@@ -11,6 +11,7 @@ import { verifyDataSignature } from './blockchain/signing/cose-verifier';
 import { toSignedTransaction } from './utils/signing-helper';
 import { detachedTx } from './utils/tx-utils';
 import { pageOf } from './utils/paging';
+import { answerNumbersAsText } from './utils/result-numbers';
 import { submitAndFinalize, scheduleDeferredSubmit } from './blockchain/signing/submission-finalizer';
 import type { TransactionBuild } from '#cds-models/CardanoSignService';
 const { SELECT, UPDATE } = cds.ql;
@@ -93,6 +94,7 @@ function enforceHsmRole(req: Request, actionName: string): void {
 
 /** CardanoSignService handlers: external and HSM signing, verification, submission. */
 module.exports = (srv: cds.Service) => {
+  answerNumbersAsText(srv);
   logger.info('Module loaded - registering handlers');
 
   const {
@@ -289,14 +291,11 @@ module.exports = (srv: cds.Service) => {
         const requiredSigners = await resolveRequiredSigners(db, signingRequest, TransactionBuilds);
         const verificationResult = getExternalSignerModule().verifyOrThrow(fullSignedTxCbor, signingRequest.txBodyHash, { requiredSigners });
 
-        // Atomic claim. Deferred path also persists the signed CBOR + signer metadata so an
-        // interrupted submission can be re-driven after a restart.
+        // Atomic claim. The signed CBOR, the signer and the claim time go with it, so an
+        // interrupted or unresolved submission can be resolved later.
         const claimed = await db.run(
           UPDATE.entity(SigningRequests)
-            .set({
-              status: 'submitting',
-              ...(deferSubmit ? { signedTxCbor: fullSignedTxCbor, signerType, signerInfo } : {}),
-            })
+            .set({ status: 'submitting', signedTxCbor: fullSignedTxCbor, signerType, signerInfo, signedAt: now })
             .where({
               id: signingRequestId,
               status: { in: ['pending', 'verified'] },
@@ -357,7 +356,9 @@ module.exports = (srv: cds.Service) => {
     const { address, coseSignature, coseKey, expectedPayload } = req.data;
 
     if (!address) rejectMissing(req, 'VerifyDataSignature', 'address');
-    if (!isValidBech32Address(address)) rejectInvalid(req, 'VerifyDataSignature', 'Invalid bech32 address format', 'address');
+    if (!isValidBech32Address(address) && !isValidBech32StakeAddress(address)) {
+      rejectInvalid(req, 'VerifyDataSignature', 'Invalid bech32 address format', 'address');
+    }
     if (!coseSignature) rejectMissing(req, 'VerifyDataSignature', 'coseSignature');
     if (!coseKey) rejectMissing(req, 'VerifyDataSignature', 'coseKey');
 
@@ -500,12 +501,15 @@ module.exports = (srv: cds.Service) => {
           rejectInvalid(req, 'SignAndSubmitWithHsm', 'HSM signature verification failed', 'signedTxCbor');
         }
 
-        // Claim as 'submitting'; deferred path also persists signed CBOR + signer metadata
-        // for the boot-time redrive of interrupted submissions.
+        // Claim as 'submitting' with the signed CBOR, the signer and the claim time, so an
+        // interrupted or unresolved submission can be resolved later.
         await db.run(UPDATE.entity(SigningRequests).set({
           status: 'submitting',
           hsmKeyId: hsmKeyIdentifier,
-          ...(deferSubmit ? { signedTxCbor, signerType: 'hsm', signerInfo: `HSM key: ${hsmKeyIdentifier}` } : {}),
+          signedTxCbor,
+          signerType: 'hsm',
+          signerInfo: `HSM key: ${hsmKeyIdentifier}`,
+          signedAt: new Date().toISOString(),
         }).where({ id: signingRequestRecord.id }));
 
         return { signingRequestId: signingRequestRecord.id as string, signedTxCbor, txHash: build.txBodyHash as string, verificationResult, hsmKeyIdentifier };

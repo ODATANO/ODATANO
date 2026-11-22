@@ -69,8 +69,8 @@ export function authConfig(env = process.env) {
     if (!password) throw new Error('ODATANO_HTTP_PASSWORD is required with basic auth (local unauthenticated testing only: ODATANO_AUTH=dummy)');
     const user = String(env.ODATANO_HTTP_USER || 'odatano');
     // The single configured user IS the operator of this deployment, so it
-    // carries the Admin role unless ODATANO_HTTP_ROLES says otherwise.
-    const roles = String(env.ODATANO_HTTP_ROLES ?? 'Admin').split(',').map(r => r.trim()).filter(Boolean);
+    // carries every role unless ODATANO_HTTP_ROLES says otherwise.
+    const roles = String(env.ODATANO_HTTP_ROLES ?? 'Read,Transact,Sign,Admin').split(',').map(r => r.trim()).filter(Boolean);
     return { kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { [user]: { password, roles } } };
 }
 

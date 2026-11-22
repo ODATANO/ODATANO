@@ -150,7 +150,7 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
 
   it('keeps an inline datum with a definite map byte for byte, and the fee covers it', async () => {
     const { parseTransaction } = require('../../srv/cbor');
-    // Constr 0 [{1: 2}, chunked bytes 01]: Buildooor writes the map indefinite and the bytes unchunked
+    // Constr 0 [{1: 2}, chunked bytes 01]: a re-encoding would write the map indefinite and the bytes unchunked
     const datumCbor = 'd87982a101025f4101ff';
     const req = request();
     req.outputs = [{ address: SCRIPT_ADDRESS, lovelaceAmount: '2000000', inlineDatumCbor: datumCbor }];
@@ -158,17 +158,29 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     const parsed = parseTransaction(result.unsignedTxCbor);
     expect(parsed.outputs[0].inlineDatumHex).toBe(datumCbor);
     expect(parsed.txHash).toBe(result.txBodyHash);
-    // stamped redeemers and scriptDataHash survive the datum write
+    // stamped redeemers and scriptDataHash are in place
     expect(parsed.scriptDataHash).not.toBeNull();
     expect(result.redeemers).toHaveLength(3);
     expect(BigInt(result.feeLovelace)).toBeGreaterThanOrEqual(44n * BigInt(result.sizeBytes! + 106) + 155381n);
   });
 
   describe('witness datums of datum-hash UTxOs', () => {
-    const { scriptDataHashOf } = require('../../srv/blockchain/transaction-building/caller-datums');
+    const { Cbor, CborTag, CborUInt } = require('@harmoniclabs/cbor');
     const { blake2b_256 } = require('@harmoniclabs/crypto');
     const hex = (b: Uint8Array) => Buffer.from(b).toString('hex');
-    // Constr 0 [{1: 2}, 42] with a definite map and list; Buildooor writes it as d8799fbf0102ff182aff
+    // scriptDataHash over the redeemer and datum bytes as they stand in the transaction
+    const scriptDataHashOf = (txBytes: Buffer, views: Uint8Array): Uint8Array => {
+      const witnesses = Cbor.parse(txBytes, { keepRef: true }).array[1];
+      const valueBytes = (key: number): Buffer => {
+        const entry = witnesses.map.find((e: any) => e.k instanceof CborUInt && Number(e.k.num) === key);
+        if (!entry) return Buffer.alloc(0);
+        let value = entry.v;
+        while (value instanceof CborTag) value = value.data;
+        return txBytes.subarray(entry.k.subCborRef.end, value.subCborRef.end);
+      };
+      return blake2b_256(Buffer.concat([valueBytes(5), valueBytes(4), views]));
+    };
+    // Constr 0 [{1: 2}, 42] with a definite map and list; re-encoded it would be d8799fbf0102ff182aff
     const lockedDatum = 'd87982a10102182a';
     const hashLocked = (datum: string): UTxO => ({
       txHash: A, outputIndex: 0, address: SCRIPT_ADDRESS, amount: [{ unit: 'lovelace', quantity: '3000000' }],
@@ -245,13 +257,16 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
     // plain funds suffice: the deployed script stays untouched
     const withPlain = await builder.buildUnsignedPlutusTransaction(request({ outputs }), context({ utxos: [deployed, plain, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
     expect(inputsOf(withPlain)).not.toContain(deployed.txHash);
-    // the only UTxO that can fund the outputs carries the script: it is spent, 2000 bytes at 15 lovelace priced in
+    // the only UTxO that can fund the outputs carries the script: it is spent, its 2000 bytes are priced in
     const short = await builder.buildUnsignedPlutusTransaction(request({ outputs }), context({ utxos: [deployed, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
     expect(inputsOf(short)).toContain(deployed.txHash);
     const forced = await builder.buildUnsignedPlutusTransaction(request({ outputs, forceInputs: [{ txHash: deployed.txHash, outputIndex: 0 }] }), context({ utxos: [deployed, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
     expect(inputsOf(forced)).toContain(deployed.txHash);
     const unsized = await builder.buildUnsignedPlutusTransaction(request({ outputs, forceInputs: [{ txHash: deployed.txHash, outputIndex: 0 }] }), context({ utxos: [{ ...deployed, scriptRefSize: null }, scriptUtxo(A), scriptUtxo(B), scriptUtxo(C), collateral] }));
-    expect(BigInt(forced.feeLovelace) - BigInt(unsized.feeLovelace)).toBe(30000n);
+    // 15 lovelace per byte; the builder library counts up to 16 bytes more than the ledger
+    const scriptFee = BigInt(forced.feeLovelace) - BigInt(unsized.feeLovelace);
+    expect(scriptFee).toBeGreaterThanOrEqual(30000n);
+    expect(scriptFee).toBeLessThanOrEqual(30240n);
   });
 
   it('does not take a UTxO carrying a reference script as collateral', async () => {
@@ -404,12 +419,17 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
 
     it('withdraws from a key reward account without a script and counts the amount as funding', async () => {
       const req = request({ withdrawals: [{ rewardAddress: keyStake, lovelace: '5000000' }] });
-      const tx = Tx.fromCbor((await builder.buildUnsignedPlutusTransaction(req, context())).unsignedTxCbor);
+      const result = await builder.buildUnsignedPlutusTransaction(req, context());
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
       const entries = tx.body.withdrawals!.map;
       expect(entries).toHaveLength(1);
       expect(entries[0].rewardAccount.toString()).toBe(keyStake);
       expect(entries[0].amount).toBe(5000000n);
       expect((tx.witnesses.redeemers ?? []).filter((r: any) => r.tag === TxRedeemerTag.Withdraw)).toHaveLength(0);
+      // inputs + withdrawal = outputs + fee: the change carries the withdrawn rewards
+      const consumed = result.inputs.reduce((sum, i) => sum + BigInt(i.lovelace), 0n) + 5000000n;
+      const produced = result.outputs.reduce((sum, o) => sum + BigInt(o.lovelace), 0n) + BigInt(result.feeLovelace);
+      expect(consumed).toBe(produced);
     });
 
     it('rejects a staking reference script whose bytes are not available', async () => {
@@ -610,6 +630,20 @@ describe('BuildooorTxBuilder.buildUnsignedPlutusTransaction', () => {
 
       expect((tx.witnesses.redeemers ?? []).map((r: any) => r.tag)).toEqual([TxRedeemerTag.Withdraw]);
       expect(collateralIns(tx)).toEqual([collateral.txHash]);
+    });
+
+    it('pays several recipients in one transaction without a script', async () => {
+      const outputs = [2000000, 4000000, 6000000].map(amount => ({ address: OTHER, lovelaceAmount: String(amount) }));
+      const result = await builder.buildUnsignedPlutusTransaction(request({ scriptInputs: [], outputs }), keyOnly());
+      const tx = Tx.fromCbor(result.unsignedTxCbor);
+
+      expect(tx.body.outputs.slice(0, 3).map((o: any) => o.value.lovelaces)).toEqual([2000000n, 4000000n, 6000000n]);
+      expect(tx.witnesses.redeemers ?? []).toHaveLength(0);
+      expect(collateralIns(tx)).toEqual([]);
+      // inputs = outputs + fee
+      const consumed = result.inputs.reduce((sum, i) => sum + BigInt(i.lovelace), 0n);
+      const produced = result.outputs.reduce((sum, o) => sum + BigInt(o.lovelace), 0n) + BigInt(result.feeLovelace);
+      expect(consumed).toBe(produced);
     });
 
     it('leaves collateral out when no script runs', async () => {

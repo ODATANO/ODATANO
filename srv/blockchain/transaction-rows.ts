@@ -3,7 +3,7 @@ import type { Transaction as CapTransaction } from '@sap/cds';
 import {
   Transactions,
   TransactionInputs,
-  TransactionInputAssets,
+  TransactionInputAssetCopies,
   TransactionOutputs,
   TransactionOutputAssets,
   TransactionMetadata_ as TransactionMetadata,
@@ -39,7 +39,7 @@ export async function deleteTransactionRows(tx: CapTransaction, keys: TxKey[]): 
     const hashes = keyChunk.map(k => k.hash);
     const seqs = keyChunk.filter(k => k.txSeq != null).map(k => k.txSeq as number | string);
     if (seqs.length) {
-      await tx.run(DELETE.from(TransactionInputAssets).where({ input_txSeq: { in: seqs } }));
+      await tx.run(DELETE.from(TransactionInputAssetCopies).where({ input_txSeq: { in: seqs } }));
       await tx.run(DELETE.from(TransactionOutputAssets).where({ output_txSeq: { in: seqs } }));
       await tx.run(DELETE.from(TransactionInputs).where({ txSeq: { in: seqs } }));
       await tx.run(DELETE.from(TransactionOutputs).where({ txSeq: { in: seqs } }));

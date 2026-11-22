@@ -1,0 +1,14 @@
+{
+  "app/wallet": [
+    {
+      "id": "GHSA-w4pp-8pjf-rmxw",
+      "until": "2027-02-28",
+      "reason": "pacote inside the @ui5/cli shrinkwrap; build tooling, nothing from that tree ships"
+    },
+    {
+      "id": "GHSA-52v5-jr5w-gjxr",
+      "until": "2027-02-28",
+      "reason": "sigstore inside the @ui5/cli shrinkwrap; build tooling, nothing from that tree ships"
+    }
+  ]
+}

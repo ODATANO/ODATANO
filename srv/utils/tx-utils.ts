@@ -1,5 +1,6 @@
 import cds from '@sap/cds';
 import { BackendError } from './errors';
+import { detachedTxTimeoutMs } from '../config';
 import { ERROR_CODES } from './error-codes';
 
 // @cap-js/sqlite has a single pooled connection held by the request transaction.
@@ -10,16 +11,29 @@ const logger = cds.log('tx-utils');
 /** Default acquire budget for detached bookkeeping transactions. */
 export const DETACHED_TX_TIMEOUT_MS = 10_000;
 
-/** ODATANO_DETACHED_TX_TIMEOUT_MS override, else the default; read per call. */
 function effectiveTimeoutMs(): number {
-  const fromEnv = Number(process.env.ODATANO_DETACHED_TX_TIMEOUT_MS);
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : DETACHED_TX_TIMEOUT_MS;
+  return detachedTxTimeoutMs() ?? DETACHED_TX_TIMEOUT_MS;
 }
 
 // Clears cds.context so inner db.run calls use short transactions instead of joining an ambient one.
 // This keeps the single SQLite connection free during long awaits.
 export function runWithoutAmbientTx<T>(fn: () => Promise<T>): Promise<T> {
   return (cds as unknown as { _with: <R>(store: undefined, fn: () => Promise<R>) => Promise<R> })._with(undefined, fn);
+}
+
+/** True once the transaction has taken its database connection. */
+export function holdsConnection(tx: unknown): boolean {
+  const state = tx as { dbc?: unknown; ready?: unknown } | null | undefined;
+  return Boolean(state && (state.dbc || state.ready));
+}
+
+// Database reads that come before a provider call. An idle transaction stays idle: the read runs in
+// a short transaction of its own, so no connection is held while the provider answers.
+// A transaction that already holds its connection does the read itself.
+export function readOutside<T>(tx: cds.Transaction, read: (db: cds.Transaction) => Promise<T>): Promise<T> {
+  const idle = typeof (tx as { begin?: unknown }).begin === 'function' && !holdsConnection(tx);
+  // cds.tx resolves to what the callback resolves to; its typing wraps that in a second promise
+  return idle ? runWithoutAmbientTx(async () => await cds.tx(read)) : read(tx);
 }
 
 /** Thrown inside an orphaned `cds.tx` callback after its caller already timed out. */

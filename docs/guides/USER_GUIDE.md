@@ -93,6 +93,9 @@ POST /GetTransactionByHash
 POST /GetMetadataByTxHash
 {"txHash": "95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1"}
 
+POST /GetMetadataByLabel
+{"label": "674", "fromSlot": "744531", "limit": 100}
+
 POST /GetTransactionConfirmations
 {"txHash": "2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83"}
 
@@ -211,6 +214,7 @@ bad values in one request give one `400` with both in `details`.
 | `GetUTxOsByCredential` | read | tx hash, output index | 1000 | 5000 | ≥ 0 |
 | `GetAssetsByAddress` | read | asset unit | 1000 | 5000 | ≥ 0 |
 | `GetMetadataByTxHash` | read | metadata label | 1000 | 5000 | ≥ 0 |
+| `GetMetadataByLabel` | read | chain position, oldest first | 100 | 1000 | ≥ 0 |
 | `GetTransactionBuildsByAddress` | transaction | build id | 1000 | 5000 | ≥ 0 |
 | `GetSigningRequestsByAddress` | sign | signing request id | 1000 | 5000 | ≥ 0 |
 
@@ -560,6 +564,27 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
   }'
 ```
 
+#### From your own CAP handler: `deferSubmit`
+
+This concerns a CAP application that loads ODATANO as a plugin and calls the action in-process
+(`srv.send('SubmitVerifiedTransaction', …)`). A client that calls the action over HTTP is not affected.
+
+`SubmitVerifiedTransaction` and `SignAndSubmitWithHsm` keep their records in database transactions of
+their own. A handler that awaits one of them while its own request transaction is open can wait for a
+database connection that its own transaction holds. On SQLite, with one pooled connection, that wait
+never ends by itself. The action then fails after 10 seconds with 503 `ODATANO_NESTED_TX_TIMEOUT`
+(the time is `ODATANO_DETACHED_TX_TIMEOUT_MS`).
+
+Two ways to avoid it:
+
+- Pass `deferSubmit: true`. The signature is verified and the signing request is claimed on your
+  transaction, so a bad signature still fails your request. The action answers at once with the
+  transaction hash and status `pending`. The transaction is sent after your commit; if your request
+  rolls back, nothing is sent. Read the outcome from the signing request (`GetSigningRequest`) or the
+  submission (`CheckSubmissionStatus`).
+- Or call the action while your handler holds no database connection: before its first database
+  statement, or after reading in a transaction of its own (`cds.tx(…)`) that has committed.
+
 ### Available External Signing Actions (CardanoSignService)
 
 | Action | Description |
@@ -587,7 +612,14 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransacti
 
 `VerifyDataSignature` verifies a **signed message** (CIP-30 `signData` / COSE_Sign1), **not** a transaction. It is the Cardano equivalent of "Sign-In with Ethereum": prove a user controls a wallet address without spending anything on-chain.
 
-This is the only `CardanoSignService` action that does **not** require authentication (`@requires: 'any'`) -- by definition the caller is logging in and has no token yet. It is a stateless crypto check: no database write, no key access. Nonce issuance, replay protection, and session/JWT minting stay in your application.
+This is the only `CardanoSignService` action that does **not** require authentication (`@requires: 'any'`) -- by definition the caller is logging in and has no token yet. It is a stateless crypto check: no database write, no key access.
+
+The action answers one question: did the key of this address sign this message? Everything that makes a login safe stays in your application:
+
+- issue the message yourself, with a random nonce and your own domain or app name in it
+- give it an expiry and accept it once
+- pass it as `expectedPayload`, so a signature over any other message fails
+- mint the session or JWT only after `valid: true`
 
 **Typical flow:**
 
@@ -608,10 +640,10 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/VerifyDataSignature \
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `address` | yes | Bech32 address the wallet claimed to sign with (base or enterprise, key-hash credential) |
-| `coseSignature` | yes | Hex COSE_Sign1 CBOR -- the `signature` field from `signData` |
-| `coseKey` | yes | Hex COSE_Key CBOR -- the `key` field from `signData` |
-| `expectedPayload` | no | When set, the signed payload must equal this exactly (anti-replay). When omitted, the decoded payload is returned for you to check. |
+| `address` | yes | Bech32 address the wallet signed with: a base, pointer or enterprise address (its payment key signs), or a reward address `stake1…` (its stake key signs). Key-hash credentials only. |
+| `coseSignature` | yes | Hex COSE_Sign1 CBOR -- the `signature` field from `signData`. At most 65536 characters. |
+| `coseKey` | yes | Hex COSE_Key CBOR -- the `key` field from `signData`. At most 512 characters. |
+| `expectedPayload` | no | When set, the signed payload must equal this byte for byte (anti-replay). Required when the wallet signed the hash of the message (`hashed: true`, hardware wallets). When omitted, the decoded payload is returned for you to check. At most 16384 characters. |
 
 **Response:**
 ```json
@@ -619,11 +651,22 @@ curl -X POST http://localhost:4004/odata/v4/cardano-sign/VerifyDataSignature \
   "valid": true,
   "reason": "",
   "signedPayload": "MyApp login: 7f3a9c1e",
+  "signedPayloadHex": "4d79417070206c6f67696e3a203766336139633165",
   "signerVkh": "2b59938fe8ab0e76054925a575b1c50e406594300cf8f7b09328b863"
 }
 ```
 
-The action verifies three things: (1) the Ed25519 signature over the COSE `Sig_structure`, (2) that the signer's public key hashes (`blake2b-224`) to the address payment credential, and (3) optionally that the payload matches `expectedPayload`. A forged or mismatched signature returns HTTP 200 with `valid: false` and a `reason` -- only malformed inputs (missing/invalid address, missing CBOR) return a 400.
+`signedPayload` is empty when the signed bytes are not UTF-8; `signedPayloadHex` always carries them. For a hashed payload it is the blake2b-224 of the message.
+
+The action checks, in this order:
+
+1. the structure CIP-30 prescribes: `alg` EdDSA in the signed header, a COSE_Key of type OKP with `alg` EdDSA and curve Ed25519, no label twice, no detached payload
+2. that the `address` in the signed header is the address you passed
+3. that the signer's public key hashes (`blake2b-224`) to the credential of that address
+4. that the payload equals `expectedPayload`, when given
+5. the Ed25519 signature over the COSE `Sig_structure`
+
+A failed check returns HTTP 200 with `valid: false` and a `reason`. Only malformed inputs (missing or invalid address, missing CBOR, a value above its length limit) return a 400.
 
 ### HSM Signing (Server-Side)
 
@@ -690,13 +733,14 @@ See [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) for complete documenta
 
 Three things are required, in this order:
 
-1. **CAP 10 and Node >= 22.5** — `@odatano/core@2` declares `@sap/cds >=10` as a peer dependency;
+1. **CAP 10 and Node >= 22.5** — `@odatano/core@2` declares `@sap/cds ^10` as a peer dependency;
    a CAP 9 host cannot load it.
 2. **Run `cds deploy`.** 2.0 adds four tables (`CardanoSyncState`, `CardanoReorgLog`,
    `CardanoWorkerWallets`, `CardanoWalletJobs`) and a `dedupKey` column with a unique constraint.
    Skip this and the new services answer `no such table`, while `getStatus` / `GetWorkerStatus`
    return 500 — the pre-existing services keep working, so the omission is easy to miss.
-3. **Adapt numeric parsing.** CAP 10 serializes `Decimal`, `Int64` and `$count` as JSON **strings**.
+3. **Adapt numeric parsing.** CAP 10 serializes `Decimal`, `Int64` and `$count` as JSON **strings**, in
+   entity reads and in the results of actions and functions.
 
 The crawler and the wallet worker are **off by default**; an upgraded deployment behaves exactly as
 before until you enable them.
@@ -741,6 +785,7 @@ so the crawler also fills the tables that analytics need:
 | `AssetHistory` | every mint and burn in the range, one row per (unit, transaction) | on |
 | `Assets` | one row per native-asset unit seen: policyId, assetNameHex, decoded name, CIP-14 fingerprint, `decimals` from the CIP-68 reference datum for label-333/444 units | on (`bare`) |
 | `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | every pool and DRep once per epoch, plus treasury, reserves and stake totals | off |
+| `AccountEpochSnapshots` | the reward accounts the node reports, once per epoch: balance, amount credited, pool, DRep | off |
 | `TransactionCertificates`, `TransactionWithdrawals` | every certificate (stake, pool, DRep) and reward withdrawal in the range | off |
 | `TransactionRedeemers` | every redeemer: purpose, index, data (CBOR hex), execution units, the redeemed input or minted policy | on (Ogmios chain-sync) |
 | `TransactionDatums` | every witness-set datum: hash and the original CBOR bytes, which outputs with a datum hash and no inline datum refer to | on (Ogmios chain-sync) |
@@ -751,6 +796,7 @@ so the crawler also fills the tables that analytics need:
   "assetCatalogue": "bare",    // "off" | "bare" (free) | "enrich" (adds registry name/ticker/decimals)
   "assetEnrichRate": 2,        // units per second, "enrich" only
   "epochSnapshots": false,     // pool/DRep snapshots — Ogmios (node ledger) or Koios
+  "accountSnapshots": false,   // reward accounts with the epoch snapshot — Ogmios, needs epochSnapshots
   "certificates": false        // certificates + withdrawals — Ogmios chain-sync or Koios, not Blockfrost
 }
 ```
@@ -779,6 +825,35 @@ today's numbers under yesterday's epoch number. Either way, snapshots of a past 
 reconstructed; run the crawler live from the point you care about. A reorg removes the snapshots
 taken at rolled-back blocks, and the epoch is taken again. `getStatus().epochSnapshots` shows the
 source the next snapshot would use and the newest snapshotted epoch.
+
+`accountSnapshots` (`CRAWLER_ACCOUNT_SNAPSHOTS`, off) adds the reward accounts to the epoch snapshot,
+read from the node at the same block. It needs `epochSnapshots` and Ogmios. One row per account and
+epoch in `AccountEpochSnapshots`:
+
+| Field | Meaning |
+|---|---|
+| `withdrawableAmount` | balance of the reward account at the snapshot block |
+| `creditedAmount` | what the ledger added since the snapshot of the epoch before: the balance difference plus the withdrawals in between |
+| `deposit`, `poolId`, `drepId` | key deposit and the delegations at that block |
+
+The block of an epoch's snapshot is `EpochLedgerSnapshots.accountSnapshotSlot`.
+
+- **Which accounts.** The crawler asks the node about every account it knows: the stake keys of the
+  UTxO set (`utxoSet`) and the stake addresses of crawled certificates (`certificates`). With neither
+  switched on there is nothing to ask. The node answers for an account that is delegated to a pool or
+  to a DRep; a registered account without a delegation gets no row.
+- **Balance.** Ogmios 7.0 reports the balance only for an account delegated to a pool. For an account
+  delegated to a DRep alone `withdrawableAmount` is empty.
+- **Credited amount.** It is the staking reward of the epoch boundary, and also a treasury withdrawal
+  or a refunded proposal deposit paid to the account. It needs `certificates` (the withdrawals) and
+  the snapshot of the epoch before; otherwise, and when the result would be below zero, it is empty.
+- **Volume and time.** One row per reported account per epoch, about 1.3 million on mainnet. The node
+  is asked in requests of 2000 accounts; 5000 accounts took half a second on preview.
+- `getStatus().epochSnapshots` shows `accounts`, `lastAccountEpoch` and `lastAccountCount`.
+
+```http
+GET /AccountEpochSnapshots?$filter=stakeAddress eq 'stake1...'&$orderby=epoch desc
+```
 
 `certificates` (`CRAWLER_CERTIFICATES`) writes one `TransactionCertificates` row per certificate and
 kind — `stake_registration`, `stake_deregistration`, `pool_delegation`, `vote_delegation`,
@@ -837,8 +912,24 @@ POST /odata/v4/cardano-indexer/backfillTransactions   { "fromSlot": "…", "toSl
 GET  /odata/v4/cardano-indexer/getStatus()            # → transactionBackfill.status: running | done | failed
 ```
 
-It fills empty input fields only (outpoint, `utxoData`, a missing address with its assets) and
-writes `TransactionRedeemers` and `TransactionDatums` (`transactionBackfill.datums`).
+It fills empty input fields only (outpoint, `utxoData`, a missing address with its assets), the empty
+datum and reference-script fields of stored outputs (`transactionBackfill.outputs`), and writes
+`TransactionRedeemers` and `TransactionDatums` (`transactionBackfill.datums`).
+
+An output read through Koios by an earlier version has its `utxo_dataHash` but an empty
+`utxo_inlineDatum`, also where the datum is inline. Without Ogmios, repair these rows with a backfill
+that reads the affected transactions again from the backend:
+
+```
+POST /odata/v4/cardano-indexer/backfillOutputDatums
+GET  /odata/v4/cardano-indexer/getStatus()            # → datumBackfill: status, scanned, candidates, transactions, outputs, inputs, ledgerUtxos
+```
+
+It walks `TransactionOutputs` in key order, reads every transaction that holds an output with a datum
+hash and no inline datum, and writes the inline datum and the reference-script fields to the output, to
+the inputs that spent it and to its `LedgerUTxOs` row. Only empty fields change. An output whose datum
+is hash-only stays as it is and is read again on a repeat. Needs Koios, Blockfrost or a remote ODATANO;
+requires Admin.
 
 `paymentCredential` of rows written before the column existed is filled by a third backfill, which
 needs no backend: it walks `TransactionOutputs`, `TransactionInputs` and `LedgerUTxOs` once in key
@@ -865,9 +956,47 @@ POST /odata/v4/cardano-indexer/backfillAssetDecimals
 GET  /odata/v4/cardano-indexer/getStatus()            # → decimalsBackfill: status, scanned, candidates, filled
 ```
 
+`GetLatestTransactionsByAddress` takes `sinceTime` (unix seconds): only transactions with a later block
+time come back. Together with `waitMs` (at most 30000) the call watches the address: when nothing newer
+is known it reads again every 5 seconds and answers as soon as a transaction appears, or with an empty
+list when the time is up. Pass the newest `blockTime` you have seen as the next `sinceTime`. A waiting
+call holds no database connection; on a deployment without local address data each read is one backend
+call.
+
+```
+POST /GetLatestTransactionsByAddress
+{"address": "addr_test1...", "sinceTime": "1791301263", "waitMs": 25000}
+```
+
+`GetMetadataByLabel` returns the stored metadata of one label in chain order: crawled transactions and
+transactions read earlier, never a backend. Each row carries `txSeq` (slot * 65536 + transaction index);
+read on from a slot with `fromSlot`. Rows written before the `txSeq` column existed get it from a backfill
+that needs no backend and walks the stored transactions by slot window. Requires Admin.
+
+```
+POST /odata/v4/cardano-indexer/backfillMetadataPositions
+GET  /odata/v4/cardano-indexer/getStatus()            # → metadataBackfill: status, atSlot, toSlot, rows
+```
+
 The CIP-26 registry fields (`registryName`, `registryTicker`, `registryDecimals`, `registryDescription`,
 `registryUrl`, `registryLogo`) are off-chain data: the lazy path takes them from the backend when it
-writes a row, the crawler's catalogue rows carry none. A fifth backfill fills them for every unit the
+writes a row, the crawler's catalogue rows carry none. Two sources fill them, a backend (below) or the
+registry's own repository:
+
+```bash
+# mainnet: cardano-token-registry, folder mappings. preview and preprod: metadata-registry-testnet, folder registry
+git clone --depth 1 https://github.com/cardano-foundation/cardano-token-registry /data/token-registry
+```
+```
+POST /odata/v4/cardano-indexer/backfillAssetRegistry
+{"source": "file", "path": "/data/token-registry/mappings"}
+GET  /odata/v4/cardano-indexer/getStatus()            # → registryBackfill: units, filled, absent, skipped, failed
+```
+
+`path` is a folder the server can read (a mounted volume in the image). Every entry file is read once and
+written to the `Assets` rows of its unit; no backend and no network is involved. `absent` counts registry
+units the database has no `Assets` row for, which the import does not create; `skipped` counts entries
+that describe a script instead of an asset. Pull the repository and run it again to pick up new entries. A fifth backfill fills them for every unit the
 registry lists (Koios `asset_token_registry`, about 8,000 units on mainnet): each unit is read from the
 backend at 4 per second and every slice of the unit receives the values, `decimals` only where it is
 still empty. Needs Koios; the crawler may keep running; a repeat refreshes the values. Requires Admin.
@@ -1014,6 +1143,15 @@ epoch, so the crawler writes the row from its own blocks, with start and end tim
 slots and `output` / `activeStake` left empty. With a provider, the provider's row is kept and only
 the totals are replaced.
 
+The crawler writes the totals when it passes an epoch. `backfillEpochs` writes them again for every
+epoch the crawl covers in full, and creates the row of an epoch that has none. It reads the stored
+blocks only and may be repeated. Requires Admin.
+
+```
+POST /odata/v4/cardano-indexer/backfillEpochs
+GET  /odata/v4/cardano-indexer/getStatus()            # → epochBackfill: status, atEpoch, toEpoch, updated, created
+```
+
 `Blocks.slotLeader` is the bech32 id of the pool that produced the block on every backend. Crawls
 before this version stored the Ogmios issuer key (64 hex characters) or the Koios VRF key
 (`vrf_vk1…`) instead, which the pool counts above do not match. `scripts/migrate-slot-leader.mjs`
@@ -1028,6 +1166,52 @@ psql -f slot-leader.sql
 
 A VRF key of a pool that is no longer registered is listed as unmapped and left as it is;
 `--extra-map` takes such values as `<old value> <pool id>` lines.
+
+### Input assets
+
+The assets of a transaction input (`TransactionInputs/assets`, `TransactionInputAssets`) are the assets
+of the output it spent. An input reads them from one of two places, never from both:
+
+- a stored copy of them, kept with the input (`TransactionInputAssetCopies`), or
+- the spent output itself, which the input points at (`TransactionInputs.spentTxSeq`).
+
+The answer is the same either way; the cost differs:
+
+| | Copy | Reference to the output |
+|---|---|---|
+| Storage | Every asset of every spent output is stored twice | Stored once |
+| Reading one transaction | One lookup | One lookup per input |
+| Reading the inputs of many transactions in a row | One contiguous range | One lookup per input, scattered over the chain |
+
+Measured on a mainnet database (PostgreSQL, 1.5 billion copy rows, 402 GB): the input assets of 400
+transactions read in 7 to 36 ms from the copies, and in 0.5 to 0.8 s from the outputs when the pages are
+not cached. At the tip the difference is small.
+
+What decides which place an input uses:
+
+- **New blocks.** `inputAssetCopies` (`CRAWLER_INPUT_ASSET_COPIES`, off): off points an input at its
+  spent output when that output is stored, and keeps a copy otherwise. On keeps a copy for every input.
+- **Transactions indexed on demand** and blocks stored by an earlier version have copies.
+- **`pruneInputAssetCopies(fromSlot, toSlot, slotWindow)`** (Admin) moves the inputs of a slot range from copies to
+  their output. The slots are those of the spending transaction, and both are required. An input moves
+  only when its spent output is stored and holds exactly the assets of the copy; then the copy is
+  deleted. Progress in `getStatus().copyPrune`: `referenced` inputs moved, `kept` inputs left as they
+  were, `deleted` copy rows. An input is left when its spent output is not stored, such as an output
+  from before the start of the crawl, or differs from the copy. Disk space is free once the table is
+  rewritten (`VACUUM FULL odatano_cardano_transactioninputassetcopies` on PostgreSQL, which locks the
+  table while it runs). The walk also rewrites every input it moves: on PostgreSQL run
+  `VACUUM (PARALLEL 0) odatano_cardano_transactioninputs` between slot ranges, so the next range reuses
+  that space. Without it the inputs table and two of its indexes grow by the rows rewritten. A plain
+  `VACUUM` uses parallel workers on this table and is faster, but in a container it needs a `shm_size`
+  above `maintenance_work_mem`, else it ends with `could not resize shared memory segment`.
+- **`restoreInputAssetCopies(fromSlot, toSlot, slotWindow)`** (Admin) is the way back: it writes the copies again
+  from the outputs. Progress in `getStatus().copyRestore`.
+
+Both walks run on PostgreSQL and SQLite, detached, one transaction per window of slots (`slotWindow`,
+20 000 unless given); the crawler may keep running. Progress moves once per window, and a larger window
+does not make the walk faster. A window that would leave an input with copies and
+a reference is rolled back and ends the walk. A consumer that reads long ranges of inputs, such as an analytics job that
+recomputes history, wants copies for the range it reads; older history can be pruned.
 
 ### The crawled chain as the authority
 
@@ -1063,11 +1247,11 @@ The wallet worker executes transactions **asynchronously** on behalf of server-s
   "walletWorker": {
     "enabled": true,
     "wallets": [
-      { "walletId": "treasury", "signerType": "software", "keyEnv": "TREASURY_SIGNING_KEY" },
+      { "walletId": "treasury", "signerType": "software", "keyEnv": "TREASURY_SIGNING_KEY", "requiresRole": "Treasurer" },
       { "walletId": "minter",   "signerType": "hsm" }
     ],
     "confirmationDepth": 3,          // job is 'confirmed' at this depth
-    "confirmationTimeoutMs": 600000, // unseen past this → failed:TX_DROPPED (safe to retry)
+    "confirmationTimeoutMs": 600000, // unseen past this → failed:TX_DROPPED (the job keeps its idempotencyKey)
     "defaultMaxAttempts": 3          // transient build/submit failures retry with backoff
   }
 }}}
@@ -1083,31 +1267,45 @@ Content-Type: application/json
 
 {
   "walletId": "treasury",
-  "kind": "simpleAda",                       // simpleAda | metadata | multiAsset | mint | plutusSpend | submitSigned
+  "kind": "simpleAda",                       // simpleAda | metadata | multiAsset | mint | plutusSpend | payout | submitSigned
   "requestJson": "{\"recipientAddress\":\"addr_test1...\",\"lovelaceAmount\":\"2000000\"}",
-  "idempotencyKey": "invoice-4711"           // optional: same key = same job (safe retries)
+  "idempotencyKey": "invoice-4711"           // optional: same key + same request = same job (safe retries)
 }
 ```
 
 `requestJson` carries the **same payload shape as the corresponding Build\* action** of the transaction service (e.g. `assetsJson`, `mintActionsJson`, `metadataJson`, the Plutus-spend fields); `senderAddress`/`changeAddress` are overridden with the wallet's address. The response returns a `jobId` immediately.
 
+**`payout`** pays several recipients in one transaction. Its `requestJson` takes `outputsJson`, a JSON array in the form `BuildPlutusTransaction` uses, with at most 150 entries:
+
+```json
+{
+  "outputsJson": "[{\"address\":\"addr_test1...\",\"lovelaceAmount\":\"2000000\"},{\"address\":\"addr_test1...\",\"lovelaceAmount\":\"3500000\"}]"
+}
+```
+
+- The outputs keep their order. The change goes back to the wallet after them.
+- An entry may carry `assets` and a datum, like an output of `BuildPlutusTransaction`. Each output needs its min-ADA.
+- All recipients are paid or none. A job whose transaction would exceed the maximum transaction size fails, and nothing is sent.
+- Optional: `forceInputsJson`, `protectInputsJson`, `validityStartMs`, `validityEndMs`.
+
 ```http
 GET  /odata/v4/cardano-worker/GetJobStatus(jobId=<uuid>)   # function -> GET, param in the URL
+GET  /odata/v4/cardano-worker/GetJobStatus(jobId=<uuid>,waitMs=25000)   # answers when the job is confirmed, failed or cancelled
 POST /odata/v4/cardano-worker/CancelJob        # pending jobs only
 GET  /odata/v4/cardano-worker/GetWorkerStatus()            # running, wallets, executing, awaitingConfirmation, pendingJobs
 POST /odata/v4/cardano-worker/PauseWorker      # Admin scope
 POST /odata/v4/cardano-worker/ResumeWorker     # Admin scope
 ```
 
-**Job lifecycle:** `pending → building → submitting → submitted → confirmed`, with `failed` (terminal, `errorCode` set) and `cancelled` branches. Transient failures during build/sign (provider outage, rate limit, HSM hiccup) retry with exponential backoff up to `maxAttempts`; deterministic rejections (validation, insufficient funds) fail immediately. `failed` and `cancelled` jobs release their `idempotencyKey` for a retry. After a chain rollback the worker re-submits the **same signed CBOR** — never a rebuild — so a double payment cannot occur.
+**Job lifecycle:** `pending → building → submitting → submitted → confirmed`, with `failed` (terminal, `errorCode` set) and `cancelled` branches. Transient failures during build/sign (provider outage, rate limit, HSM hiccup) retry with exponential backoff up to `maxAttempts`; deterministic rejections (validation, insufficient funds) fail immediately. A job that fails before its transaction is sent, and a `cancelled` job, release the `idempotencyKey` for a retry. After a chain rollback the worker re-submits the **same signed CBOR** — never a rebuild — so a double payment cannot occur.
 
-**`idempotencyKey`:** a key is *owned* by one job at a time, enforced by a unique constraint in the database rather than by a lookup — so two retries that arrive at the same moment, on two app instances, still produce exactly one job (the loser of the race gets the winner's `jobId` back with `deduplicated: true`). `failed` and `cancelled` jobs release the key so the next retry really re-executes; `confirmed` jobs keep it, so a late duplicate resolves to the completed job instead of paying again.
+**`idempotencyKey`:** a key is *owned* by one job at a time, enforced by a unique constraint in the database rather than by a lookup — so two retries that arrive at the same moment, on two app instances, still produce exactly one job (the loser of the race gets the winner's `jobId` back with `deduplicated: true`). A job that fails before its transaction is sent, and a `cancelled` job, release the key so the next retry really re-executes. `confirmed` jobs keep it, so a late duplicate resolves to the completed job instead of paying again. A job that fails after its transaction may have been sent (`TX_DROPPED`, `SUBMIT_REJECTED`) keeps the key as well: the signed bytes exist and could still reach the chain, so a retry with that key returns the failed job. Paying again is then a new job with a new key. The same key with a different request is refused with 409 `ODATANO_IDEMPOTENCY_KEY_CONFLICT`; the comparison ignores the order of JSON keys.
 
-**`submitting` (double-payment guard):** the signed transaction and its hash are written to the job row *before* the transaction is handed to a backend. A crash or an ambiguous submit therefore never leaves a job that merely looks un-submitted: the row stays `submitting`, which keeps holding the `idempotencyKey` (your retry gets the same job back, not a new payment) and blocks the wallet queue. The worker resolves it by re-submitting those exact bytes and, if that is rejected, by checking whether the transaction is already on-chain. Such a job only fails once the chain proves the transaction is absent and unusable (`SUBMIT_REJECTED`, or `TX_DROPPED` past the confirmation timeout). A job sitting in `submitting` while a backend is unreachable is intentional — it is waiting for an answer that is safe to act on.
+**`submitting` (double-payment guard):** the signed transaction and its hash are written to the job row *before* the transaction is handed to a backend. A crash or an ambiguous submit therefore never leaves a job that merely looks un-submitted: the row stays `submitting`, which keeps holding the `idempotencyKey` (your retry gets the same job back, not a new payment) and blocks the wallet queue. The worker resolves it by re-submitting those exact bytes and, if that is rejected, by checking whether the transaction is already on-chain. Such a job only fails once the transaction is not on-chain and the node rejects it for good (`SUBMIT_REJECTED`), or it stays unseen past the confirmation timeout (`TX_DROPPED`). It keeps its `idempotencyKey` in both cases. A job sitting in `submitting` while a backend is unreachable is intentional — it is waiting for an answer that is safe to act on.
 
 **Operations:** job state lives in the DB (`CardanoWalletJobs`); multiple app instances coordinate via per-wallet leases — held by a heartbeat for as long as a job runs and re-checked immediately before the transaction is sent, so exactly one instance ever spends a given wallet, however long a build takes. Rolling deployments are safe. Confirmation tracking uses the crawler's block feed when the crawler is enabled, and falls back to polling otherwise. `PauseWorker`/`ResumeWorker` and the crawler actions require the **CardanoAdmin** role (`$XSAPPNAME.Admin` scope).
 
-**Authorization:** `SubmitWalletJob` requires an authenticated user, and submitting a job for a wallet with `signerType: "hsm"` additionally requires the role configured in `HSM_REQUIRES_ROLE` / `hsm.requiresRole` — the same gate that protects the synchronous `SignWithHsm` actions. Callers without that role get **403**, so the async job path cannot be used to spend an HSM wallet around the sign service's role check. Software wallets remain gated on authentication alone; restrict the service further at the app-router/XSUAA level if the deployment needs that.
+**Authorization:** `SubmitWalletJob` requires the `Transact` role, and submitting a job for a wallet with `signerType: "hsm"` additionally requires the role configured in `HSM_REQUIRES_ROLE` / `hsm.requiresRole` — the same gate that protects the synchronous `SignWithHsm` actions. Callers without that role get **403**, so the async job path cannot be used to spend an HSM wallet around the sign service's role check. A wallet entry may carry `requiresRole`: then only callers with that role can queue jobs for the wallet (**403** otherwise), on an HSM wallet in addition to the HSM role. A software wallet without `requiresRole` accepts jobs from every authenticated user, so set it wherever more than the operator can log in. `WorkerWallets` shows the role of each wallet.
 
 ---
 
@@ -1136,7 +1334,9 @@ worker.on('jobFailed', ({ data }) => {
 ```
 
 `jobConfirmed` / `jobFailed` fire once per job, on the terminal outcome only — they replace a
-`GetJobStatus` poll loop. `blockIndexed` fires per crawled block, so treat it as a stream, not a
+`GetJobStatus` poll loop. Over HTTP the same is `GetJobStatus` with `waitMs` (at most 30000): the
+call answers as soon as the job is confirmed, failed or cancelled, or after that time with the state
+the job has then. Keep `waitMs` below the timeout of the proxies in front of the service. `blockIndexed` fires per crawled block, so treat it as a stream, not a
 notification.
 
 Three guarantees worth relying on:

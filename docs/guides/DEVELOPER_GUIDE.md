@@ -22,15 +22,15 @@
 
 ### Service Surface
 
-**50 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
+**52 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets (a view over TransactionInputAssetCopies and the spent outputs), TransactionInputAssetCopies, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, AccountEpochSnapshots (crawler-fed, `crawler.accountSnapshots`), TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
 
-**21 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData
+**22 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetMetadataByLabel, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData
 
-**13 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
+**14 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, BuildPlutusTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
 
 **9 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
 
-**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` / `backfillAssetDecimals` / `backfillAssetRegistry` (actions, Admin)
+**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness`, `getReadiness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` / `backfillAssetDecimals` / `backfillAssetRegistry` / `backfillOutputDatums` / `backfillMetadataPositions` (actions, Admin)
 
 **Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
 
@@ -152,7 +152,7 @@ srv/
     signing-helper.ts           # CIP-30 witness combination (M3)
     backend-request-handler.ts  # DB transaction wrapper
 
-db/schema.cds                   # 50 entities with temporal support
+db/schema.cds                   # 52 entities with temporal support
 test/                           # unit and integration tests (vitest), see test/README.md
 ```
 ---
@@ -193,11 +193,12 @@ CAP automatically detects packages with a `cds-plugin.js` file at their root. Wh
 │   ├── cardano-indexer-service.js  # Compiled handler
 │   ├── cardano-worker-service.cds  # CardanoWorkerService definition
 │   ├── cardano-worker-service.js   # Compiled handler
-│   ├── server.js                # AppContext, loadConfigFromEnv()
+│   ├── server.js                # AppContext, start and shutdown
+│   ├── config.js                # Every setting: loadConfigFromEnv() and the other loaders
 │   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
 │   └── utils/                   # Validators, errors, mappers
 ├── db/
-│   └── schema.cds               # 50 entities (namespace: odatano.cardano)
+│   └── schema.cds               # 52 entities (namespace: odatano.cardano)
 └── config/                      # Network genesis configurations
 ```
 
@@ -230,7 +231,7 @@ cds.on('shutdown', async () => {
 });
 ```
 
-### Dual-Mode Config Loading (srv/server.ts)
+### Dual-Mode Config Loading (srv/config.ts)
 
 `loadConfigFromEnv()` supports both plugin and standalone modes:
 
@@ -305,6 +306,8 @@ import type { CardanoClientConfig, Network, BackendName } from '@odatano/core';
 | `getTransactionConfirmations(txHash)` | Blocks on top of a transaction, 0 while it is not on chain; needs `initialize()` |
 | `applyScriptParameters(scriptHex, params)` | Apply parameters to a parameterized Plutus script |
 | `plutusScriptHash(scriptHex, version)` | Script hash for `plutusV2` or `plutusV3` |
+| `agentAccessOf(service, event)` | What an agent token may do with an operation: `read`, `grant`, `operator`, or `closed` for a service closed to tokens |
+| `agentGrantableActions()` | Names of the operations a grant may list |
 
 ### Building & Publishing the Plugin
 
@@ -449,7 +452,7 @@ getCardanoIndexer(): CardanoIndexer
 getCardanoClient(): CardanoClient
 
 // Test utilities
-createTestContext(backends, txBuilderName?, protocolParams?): Promise<AppContext>
+createTestContext(backends, protocolParams?): Promise<AppContext>
 resetAppContext(context: AppContext | null): void  // Throws if NODE_ENV=production
 shutdownAppContext(): Promise<void>
 ```
@@ -758,9 +761,9 @@ kill -9 <PID>
 
 **Tests failing:**
 ```bash
-# Ensure server is running
-npm run cds:watch  # Terminal 1
-npm test           # Terminal 2 (wait 3s)
+# The tests start their own server and create db.sqlite new.
+# Stop a running `cds watch` first: it holds the file.
+npm test
 ```
 
 **Slow responses:**
@@ -784,6 +787,16 @@ npm test           # Terminal 2 (wait 3s)
 5. **Implement timeouts** to prevent hanging requests
 6. **Check cache/db first for immutable data** to reduce API calls
 7. **Document changes** in relevant files
+8. **Declare agent access** on every new action and function in the service model:
+   `@odatano.agent: 'read'` (every token), `'grant'` (only when the grant lists it, one budget unit per
+   call) or `'operator'` (no token). An operation without it is refused for agent tokens.
+9. **Ask the backend before the first write.** SQLite has one connection, and a transaction takes it
+   with its first statement. A database read that comes before a backend call goes through
+   `readOutside(tx, read)` (`srv/utils/tx-utils.ts`), and an index method has a `fetch` half that
+   reads and a `store` half that writes. A handler stores only after every backend call returned.
+10. **Start a new service implementation with `answerNumbersAsText(srv)`** (`srv/utils/result-numbers.ts`).
+    CAP reads `Int64` and `Decimal` from the database as text; this renders the rows a handler builds
+    the same way.
 
 ---
 

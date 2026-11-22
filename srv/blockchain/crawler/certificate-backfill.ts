@@ -4,10 +4,11 @@ import type { CardanoClient } from '../cardano-client';
 import type { ChainPoint, ChainSyncHandle } from '../backends/cardano-backend';
 import type { BlockData, Transaction } from '../../utils/types';
 import { mapTransactionCertificates, mapTransactionWithdrawals } from '../../utils/mappers';
+import { chunk, IN_CHUNK } from '../../utils/collections';
 import { readCursor } from './sync-state';
 import { Block, TransactionCertificates, TransactionWithdrawals } from '#cds-models/odatano/cardano';
 
-const { SELECT, UPSERT } = cds.ql;
+const { SELECT, UPSERT, DELETE } = cds.ql;
 const logger = cds.log('CertificateBackfill');
 
 // Fill certificates and withdrawals for already crawled blocks from a second chain-sync stream.
@@ -27,6 +28,8 @@ export interface CertificateBackfillProgress {
   transactions: number;
   certificates: number;
   withdrawals: number;
+  /** Stored rows removed: certificates and withdrawals of transactions whose script phase failed. */
+  removed: number;
 }
 
 export interface CertificateBackfillOptions {
@@ -159,7 +162,7 @@ export async function streamCrawledBlocks<T>(
 
 export async function backfillCertificates(opts: CertificateBackfillOptions): Promise<CertificateBackfillResult> {
   const { fromSlot, toSlot } = opts;
-  const progress: CertificateBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0 };
+  const progress: CertificateBackfillProgress = { atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0, removed: 0 };
   let started = false;
 
   const intersection = await streamCrawledBlocks(
@@ -167,6 +170,7 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
     (_block, txs) => ({
       certs: txs.flatMap((t) => mapTransactionCertificates(t.hash, t.certificates ?? [])),
       withdrawals: txs.flatMap((t) => mapTransactionWithdrawals(t.hash, t.withdrawals ?? [])),
+      failed: txs.filter((t) => t.spendsCollaterals).map((t) => t.hash),
     }),
     async (tx, blocks) => {
       const certs = blocks.flatMap((b) => b.payload.certs);
@@ -179,6 +183,11 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
       progress.withdrawals += withdrawals.length;
       if (certs.length) await tx.run(UPSERT.into(TransactionCertificates).entries(certs));
       if (withdrawals.length) await tx.run(UPSERT.into(TransactionWithdrawals).entries(withdrawals));
+      // the ledger applied neither for a failed script phase; an earlier version stored them
+      for (const part of chunk(blocks.flatMap((b) => b.payload.failed), IN_CHUNK)) {
+        progress.removed += Number(await tx.run(DELETE.from(TransactionCertificates).where({ tx_hash: { in: part } }))) || 0;
+        progress.removed += Number(await tx.run(DELETE.from(TransactionWithdrawals).where({ tx_hash: { in: part } }))) || 0;
+      }
     },
     (atSlot) => {
       started = true;
@@ -187,6 +196,6 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
     },
   );
   if (!started) progress.atSlot = intersection === 'origin' ? 0 : intersection.slot;
-  logger.info(`Certificate backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.certificates} certificates, ${progress.withdrawals} withdrawals`);
+  logger.info(`Certificate backfill ${fromSlot}..${toSlot}: ${progress.blocks} blocks, ${progress.certificates} certificates, ${progress.withdrawals} withdrawals, ${progress.removed} rows of failed transactions removed`);
   return { ...progress, fromSlot, toSlot, intersection };
 }

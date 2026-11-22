@@ -2,6 +2,7 @@ import type { CardanoTxBuilder } from "./cardano-tx";
 import type { TxBuildRequest, TxBuildMintRequest, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, PlutusTxOutput, TxBuildContext, TxBuildResult, UTxO as OdatanoUtxo, JSONValue, LedgerProtocolParameters, TxEvaluator, MintAction } from "../../utils/types";
 import { TxBuilder, getScriptDataHash, costModelsToLanguageViewCbor, ExBudget, isCostModels, toCostModelV1, toCostModelV2, toCostModelV3, type CostModels, type ITxBuildArgs, type ITxBuildOptions, type ITxBuildWithdrawal, type ITxBuildCert } from "@harmoniclabs/buildooor";
 import { toHex } from "@harmoniclabs/uint8array-utils";
+import { blake2b_256 } from "@harmoniclabs/crypto";
 import { assertAdaOnly, getLovelace, isCollateralCandidate, mapBuilderError, parseAssetUnit, jsonToPlutusData } from "../../utils/tx-build-helper";
 import { ConfigError, InsufficientFundsError, TransactionValidationError, ScriptValidationError } from "../../utils/errors";
 import { resolveIndexPlaceholders, sortInputsLikeBuildooor, sortWithdrawalsLikeLedger, type InputRef } from "../../utils/plutus-placeholders";
@@ -46,10 +47,7 @@ import {
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 import { DataI, dataFromCbor, dataToCbor, type Data } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
-import { type CallerDatums, callerDatumGrowth, callerDatumsGrowth, writeCallerDatums, datumHashOf, witnessDatumsGrowth, writeWitnessDatums } from "./caller-datums";
 import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
-import { installReferenceScriptFeePatch } from './buildooor-fee-patch';
-import { installRedeemerTagPatch } from '../../cbor/redeemer-tag-patch';
 import { sizePlaceholderScript } from '../../utils/reference-script';
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
@@ -62,6 +60,8 @@ interface LocalEvalFailure {
   tag: TxRedeemerTag;
   index: number;
   logs: string[];
+  /** The machine's own error message, null when it gave none. */
+  error: string | null;
 }
 
 /** Execution units as bigints, like ExBudget. */
@@ -74,12 +74,19 @@ type RawCostModelArrays = Partial<Record<'PlutusScriptV1' | 'PlutusScriptV2' | '
  * Records local script failures instead of aborting, so `_buildScriptTx` can let Ogmios decide.
  */
 function makeScriptBuildOpts(failures: LocalEvalFailure[]): ITxBuildOptions {
+  // The machine's message comes with the result, which Buildooor reports before onScriptInvalid.
+  const machineErrors = new Map<string, string>();
   return {
+    onScriptResult: (rdmr: TxRedeemer, result: unknown): void => {
+      const msg = (result as { msg?: unknown } | null)?.msg;
+      if (typeof msg === 'string' && msg) machineErrors.set(redeemerKey(rdmr.tag, rdmr.index), msg);
+    },
     onScriptInvalid: (rdmr: TxRedeemer, logs: string[]): void => {
-      failures.push({ tag: rdmr.tag, index: rdmr.index, logs: logs.slice() });
+      const error = machineErrors.get(redeemerKey(rdmr.tag, rdmr.index)) ?? null;
+      failures.push({ tag: rdmr.tag, index: rdmr.index, logs: logs.slice(), error });
       logger.warn(
         `Plutus script failed local evaluation (redeemer ${txRedeemerTagToString(rdmr.tag)}:${rdmr.index}); ` +
-        `deferring to Ogmios evaluation if available. Logs: [${logs.join(', ')}]`
+        `deferring to Ogmios evaluation if available. Machine error: ${error ?? 'none reported'}. Logs: [${logs.join(', ')}]`
       );
     }
   };
@@ -165,15 +172,6 @@ function ledgerScript(script: Script): Script {
 
 const hasRefScript = (u: OdatanoUtxo): boolean => Boolean(u.scriptRef || u.scriptRefCbor);
 
-// Hash32 inherits Hash.clone(), which returns a plain Hash; TxOut rejects that as datum when
-// Buildooor clones outputs, so a datum-hash output could never be built. Hash28 has its own clone.
-if (!Object.prototype.hasOwnProperty.call(Hash32.prototype, 'clone')) {
-  Hash32.prototype.clone = function (this: Hash32): Hash32 { return new Hash32(this.toString()); };
-}
-
-installReferenceScriptFeePatch();
-installRedeemerTagPatch();
-
 /** CardanoTxBuilder implementation on top of Buildooor. */
 export class BuildooorTxBuilder implements CardanoTxBuilder {
   public readonly name = 'BuildooorTxBuilder';
@@ -237,24 +235,25 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       if (req.outputDatum !== undefined && req.outputDatumCbor !== undefined) {
         throw new TransactionValidationError('outputDatum and outputDatumCbor exclude each other; pass one');
       }
-      const callerDatum = req.outputDatumCbor !== undefined ? Buffer.from(req.outputDatumCbor, 'hex') : undefined;
+      // a datum given as CBOR keeps its bytes
+      const datum = req.outputDatumCbor !== undefined ? dataFromCbor(req.outputDatumCbor) : undefined;
       const refScript = this._parseReferenceScript(req.referenceScript);
       const recipientOut = (lovelace: bigint): TxOut => {
         const value = this._buildLedgerValue(lovelace, req.assets);
-        return callerDatum
-          ? new TxOut({ address: recipientAddress, value, datum: dataFromCbor(callerDatum), ...(refScript && { refScript }) })
+        return datum
+          ? new TxOut({ address: recipientAddress, value, datum, ...(refScript && { refScript }) })
           : this._buildTxOut(recipientAddress, value, req.outputDatum, refScript);
       };
 
       let recipient = recipientOut(amount);
-      const minLovelace = this._minOutputLovelace(recipient, callerDatum);
+      const minLovelace = this._minOutputLovelace(recipient);
       if (amount < minLovelace) {
         if (!req.ensureMinAda) {
           throw new TransactionValidationError(
             `recipient output needs at least ${minLovelace.toString()} lovelace (has ${amount.toString()}); raise lovelaceAmount or set ensureMinAda`
           );
         }
-        recipient = recipientOut(this._minOutputLovelace(recipient, callerDatum, true));
+        recipient = recipientOut(this._minOutputLovelace(recipient, true));
       }
       const outputValue = recipient.value;
       const outputs = [recipient];
@@ -273,8 +272,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         ? this._mapOdatanoMetadataToLedgerMetadata(req.metadataJson)
         : undefined;
       const validity = this._resolveValiditySlots(req, 'passthrough');
-      const callerDatums: CallerDatums = new Map(callerDatum ? [[0, callerDatum]] : []);
-      const tx = await this._buildWithCallerDatums({ inputs, outputs, changeAddress, ...(metadata && { metadata }), ...validity }, callerDatums);
+      const tx = await this.txBuilder.build({ inputs, outputs, changeAddress, ...(metadata && { metadata }), ...validity });
 
       logger.debug(`Built unsigned transaction successfully.`);
       return this._buildResult(req, ctx, this._extractTxDetails(tx), { forcedInputsUsed: forcedInputs.length });
@@ -719,14 +717,12 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       const sortedWithdrawals = this._ledgerWithdrawalOrder(withdrawalEntries);
       const resolveCtx = { sortedInputs, sortedReferenceInputs, sortedWithdrawals };
 
-      const witnessDatums: Uint8Array[] = [];
       const scriptInputs = scriptEntries.map(({ si, utxo, script, refLedgerUtxo }, i) => {
         const redeemer = si.redeemerCbor ? dataFromCbor(si.redeemerCbor) : jsonToPlutusData(resolveIndexPlaceholders(si.redeemer, resolveCtx));
         let datum: Data | "inline" = "inline";
         if (si.datumCbor) {
           const bytes = Buffer.from(si.datumCbor, 'hex');
           this._checkWitnessDatum(utxo, bytes, `scriptInputs[${i}].datumCbor`, '');
-          witnessDatums.push(bytes);
           datum = dataFromCbor(bytes);
         } else if (si.datum !== undefined) {
           datum = jsonToPlutusData(resolveIndexPlaceholders(si.datum, resolveCtx));
@@ -740,7 +736,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       });
 
       const outputs: TxOut[] = [];
-      const callerDatums = this._appendPlutusOutputs(outputs, req.outputs.map(o => ({
+      this._appendPlutusOutputs(outputs, req.outputs.map(o => ({
         ...o,
         inlineDatum: o.inlineDatum !== undefined ? resolveIndexPlaceholders(o.inlineDatum, resolveCtx) : undefined,
       })));
@@ -777,7 +773,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
         ...(withdrawals.length > 0 && { withdrawals }),
         ...(certificates.length > 0 && { certificates })
       };
-      const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction, callerDatums, witnessDatums);
+      const tx = await this._buildScriptTx(buildParams, ctx.evaluateTransaction);
 
       const details = this._extractTxDetails(tx);
       const maxTxSize = Number(this.txBuilder.protocolParamters.maxTxSize);
@@ -808,48 +804,31 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     }
   }
 
-  /** Appends the outputs in order and returns the CBOR inline datums by output index. */
-  private _appendPlutusOutputs(outputs: TxOut[], list: PlutusTxOutput[]): CallerDatums {
-    const callerDatums: CallerDatums = new Map();
+  /** Appends the outputs in order. A CBOR inline datum keeps its bytes. */
+  private _appendPlutusOutputs(outputs: TxOut[], list: PlutusTxOutput[]): void {
     for (let i = 0; i < list.length; i++) {
       const o = list[i];
       const value = this._buildLedgerValue(BigInt(o.lovelaceAmount), o.assets);
       const refScript = this._parseReferenceScript(o.referenceScript);
-      const callerDatum = o.inlineDatumCbor ? Buffer.from(o.inlineDatumCbor, 'hex') : undefined;
-      const datum = o.datumHash ? new Hash32(o.datumHash) : callerDatum ? dataFromCbor(callerDatum) : undefined;
+      const datum = o.datumHash ? new Hash32(o.datumHash) : o.inlineDatumCbor ? dataFromCbor(o.inlineDatumCbor) : undefined;
       const txOut = datum
         ? new TxOut({ address: Address.fromString(o.address), value, datum, ...(refScript && { refScript }) })
         : this._buildTxOut(Address.fromString(o.address), value, o.inlineDatum, refScript);
-      const minLovelaces = this._minOutputLovelace(txOut, callerDatum);
+      const minLovelaces = this._minOutputLovelace(txOut);
       if (BigInt(o.lovelaceAmount) < minLovelaces) {
         throw new TransactionValidationError(
           `outputs[${i}] needs at least ${minLovelaces.toString()} lovelace (has ${o.lovelaceAmount}); raise its lovelaceAmount`
         );
       }
-      if (callerDatum) callerDatums.set(outputs.length, callerDatum);
       outputs.push(txOut);
     }
-    return callerDatums;
   }
 
-  // Min-ADA also counts caller datum bytes that are longer than Buildooor's encoding.
-  // `forAnyAmount` sizes the coin field for the largest amount, so the result stays valid.
-  private _minOutputLovelace(txOut: TxOut, callerDatum?: Uint8Array, forAnyAmount = false): bigint {
-    const base = forAnyAmount
+  // `forAnyAmount` sizes the coin field for the largest amount, so the result holds for any amount.
+  private _minOutputLovelace(txOut: TxOut, forAnyAmount = false): bigint {
+    return forAnyAmount
       ? this.txBuilder.minimizeLovelaces(txOut).value.lovelaces
       : this.txBuilder.getMinimumOutputLovelaces(txOut);
-    const growth = callerDatum ? Math.max(0, callerDatumGrowth(callerDatum)) : 0;
-    return base + BigInt(growth) * BigInt(this.txBuilder.protocolParamters.utxoCostPerByte);
-  }
-
-  /** Build, then write the caller's datum bytes; when they are longer, a second build raises the fee. */
-  private async _buildWithCallerDatums(args: ITxBuildArgs, datums: CallerDatums): Promise<LedgerTx> {
-    const tx = await this.txBuilder.build(args);
-    const growth = callerDatumsGrowth(datums);
-    if (growth === 0) return writeCallerDatums(tx, datums);
-    // Fee floor: the extra bytes plus a pad for change-size wobble
-    const fee = BigInt(tx.body.fee.toString()) + BigInt(growth + 10) * this._txFeePerByte();
-    return writeCallerDatums(await this.txBuilder.build({ ...args, fee }), datums);
   }
 
   //---------------------------------------------------------------------------
@@ -922,7 +901,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   // Buildooor stamps local CEK budgets and ignores caller units. So build once, evaluate via Ogmios,
   // rebuild with a fee floor for the target units, then stamp them and recompute scriptDataHash.
   private async _buildScriptTx(
-    buildParams: ITxBuildArgs, evaluator?: TxEvaluator, callerDatums: CallerDatums = new Map(), witnessDatums: Uint8Array[] = []
+    buildParams: ITxBuildArgs, evaluator?: TxEvaluator
   ): Promise<LedgerTx> {
     const pass1Failures: LocalEvalFailure[] = [];
     const tx1 = await this.txBuilder.build(buildParams, makeScriptBuildOpts(pass1Failures));
@@ -932,7 +911,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const rdmrs1 = tx1.witnesses.redeemers ?? [];
     if (rdmrs1.length === 0) {
       // Defensive: callers always attach a script; nothing to evaluate or stamp.
-      return callerDatums.size === 0 ? tx1 : this._buildWithCallerDatums(buildParams, callerDatums);
+      return tx1;
     }
 
     // The first-pass CBOR equals a dedicated evaluation build (passed ExUnits are ignored anyway).
@@ -950,15 +929,13 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     const feeFloor = BigInt(tx1.body.fee.toString())
       + this._exUnitsPriceDelta(rdmrs1, targets1)
       + this._exUnitsSizeDelta(rdmrs1, targets1) * this._txFeePerByte()
-      + BigInt(callerDatumsGrowth(callerDatums) + witnessDatumsGrowth(witnessDatums)) * this._txFeePerByte()
       + 10n * this._txFeePerByte();
 
     const pass2Failures: LocalEvalFailure[] = [];
     const tx2 = await this.txBuilder.build({ ...buildParams, fee: feeFloor }, makeScriptBuildOpts(pass2Failures));
     const rdmrs2 = tx2.witnesses.redeemers ?? [];
     const targets2 = this._resolveTargetExUnits(rdmrs2, evaluatedUnits, pass2Failures);
-    const tx = writeCallerDatums(this._stampExecUnits(tx2, targets2), callerDatums);
-    return writeWitnessDatums(tx, witnessDatums, this._languageViews(tx));
+    return this._stampExecUnits(tx2, targets2);
   }
 
   // Cushioned Ogmios budgets keyed `tag:index`. Undefined when the evaluation is unusable.
@@ -1032,7 +1009,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
             `and no Ogmios evaluation is available to certify its execution units. Refusing to return a ` +
             `transaction with unreliable execution units. Signing and submitting it would forfeit the collateral. ` +
             `Configure an Ogmios backend for authoritative script evaluation, or fix the script/datum/redeemer. ` +
-            `Script logs: [${failure.logs.join(', ')}]`
+            `Machine error: ${failure.error ?? 'none reported'}. Script logs: [${failure.logs.join(', ')}]`
           );
         }
         return evaluated;
@@ -1111,7 +1088,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   // Inline-datum UTxOs need no witness datum.
   private _checkWitnessDatum(utxo: OdatanoUtxo, datum: Uint8Array, field: string, hint: string): void {
     if (!utxo.datumHash || utxo.inlineDatum) return;
-    const hash = datumHashOf(datum);
+    const hash = toHex(blake2b_256(datum));
     if (hash !== utxo.datumHash.toLowerCase()) {
       throw new TransactionValidationError(
         `${field} hashes to ${hash}, but ${utxo.txHash}#${utxo.outputIndex} is locked with datum hash ${utxo.datumHash}${hint}`
@@ -1613,8 +1590,11 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   private _mapLedgerParametersToBuildooorParams(protocolParameters: LedgerProtocolParameter): ProtocolParameters {
     const pp = protocolParameters;
     const d = defaultProtocolParameters;
+    const major = toUInt(pp.protocolMajorVer);
     const mapped: ProtocolParameters = {
       ...d,
+      // Buildooor prices builtins by protocol version. Without one it takes the latest it knows.
+      protocolVersion: major ? { major, minor: toUInt(pp.protocolMinorVer) ?? 0 } : undefined,
       txFeePerByte: toUInt(pp.minFeeA) ?? d.txFeePerByte,
       txFeeFixed: toUInt(pp.minFeeB) ?? d.txFeeFixed,
       utxoCostPerByte: toUInt(pp.coinsPerUtxoSize) ?? d.utxoCostPerByte,

@@ -25,7 +25,7 @@ export function createTxServiceTestSuite(testConfig: TestConfiguration) {
       setupNocks();
       setupKoiosMocks();
 
-      const testContext = await createTestContext([testConfig.backendName], testConfig.txBuilderName);
+      const testContext = await createTestContext([testConfig.backendName]);
       resetAppContext(testContext);
     });
 

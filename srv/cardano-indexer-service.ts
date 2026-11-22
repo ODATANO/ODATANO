@@ -8,10 +8,21 @@ import { backfillCertificates, type CertificateBackfillProgress } from './blockc
 import { backfillTransactions, type TransactionBackfillProgress } from './blockchain/crawler/transaction-backfill';
 import { backfillUtxoCredentials, type CredentialBackfillProgress } from './blockchain/crawler/credential-backfill';
 import { backfillAssetDecimals, type DecimalsBackfillProgress } from './blockchain/crawler/asset-decimals-backfill';
-import { backfillAssetRegistry, type RegistryBackfillProgress } from './blockchain/crawler/asset-registry-backfill';
+import {
+  backfillAssetRegistry, backfillAssetRegistryFromFiles, registryEntryFiles, type RegistryBackfillProgress,
+} from './blockchain/crawler/asset-registry-backfill';
+import { backfillOutputDatums, type OutputDatumBackfillProgress } from './blockchain/crawler/output-datum-backfill';
+import { backfillMetadataPositions, type MetadataPositionProgress } from './blockchain/crawler/metadata-position-backfill';
+import {
+  pruneInputAssetCopies, restoreInputAssetCopies, type InputCopyPruneProgress, type InputCopyRestoreProgress,
+} from './blockchain/crawler/input-asset-copies';
+import type { EpochBackfillProgress } from './blockchain/cardano-indexer';
 import { isBlockHash } from './utils/validators';
-import { getCardanoClient, getCardanoIndexer, loadCrawlerConfigFromEnv } from './server';
+import { getCardanoClient, getCardanoIndexer, readinessParts } from './server';
+import { loadCrawlerConfigFromEnv } from './config';
 import { buildLiveness } from './utils/liveness';
+import { buildReadiness } from './utils/readiness';
+import { answerNumbersAsText } from './utils/result-numbers';
 import { EpochLedgerSnapshots } from '#cds-models/odatano/cardano';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 
@@ -34,7 +45,7 @@ interface CertificateBackfillState extends CertificateBackfillProgress {
 /** Set while a start request is validated, so a second request cannot start a parallel run. */
 let certificateBackfillStarting = false;
 let certificateBackfill: CertificateBackfillState = {
-  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
+  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0, removed: 0,
   startedAt: null, finishedAt: null, error: null,
 };
 
@@ -49,9 +60,40 @@ interface TransactionBackfillState extends TransactionBackfillProgress {
 }
 let transactionBackfillStarting = false;
 let transactionBackfill: TransactionBackfillState = {
-  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
+  status: 'none', fromSlot: 0, toSlot: 0, atSlot: 0, blocks: 0, transactions: 0, inputs: 0, outputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
   startedAt: null, finishedAt: null, error: null,
 };
+
+/** The output datum repair of this process, same lifecycle as the backfills. */
+interface DatumBackfillState extends OutputDatumBackfillProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+const NO_DATUM_PROGRESS: OutputDatumBackfillProgress = { scanned: 0, candidates: 0, transactions: 0, missing: 0, outputs: 0, inputs: 0, ledgerUtxos: 0 };
+let datumBackfill: DatumBackfillState = { status: 'none', ...NO_DATUM_PROGRESS, startedAt: null, finishedAt: null, error: null };
+
+/** The metadata position fill of this process, same lifecycle as the backfills. */
+interface MetadataBackfillState extends MetadataPositionProgress {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+let metadataBackfill: MetadataBackfillState = { status: 'none', atSlot: 0, toSlot: 0, rows: 0, startedAt: null, finishedAt: null, error: null };
+
+/** Lifecycle fields every detached walk of this process carries. */
+interface WalkState {
+  status: 'none' | 'running' | 'done' | 'failed';
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+const IDLE: WalkState = { status: 'none', startedAt: null, finishedAt: null, error: null };
+let epochBackfill: EpochBackfillProgress & WalkState = { ...IDLE, atEpoch: 0, toEpoch: 0, updated: 0, created: 0 };
+let copyPrune: InputCopyPruneProgress & WalkState = { ...IDLE, atSlot: 0, toSlot: 0, referenced: 0, kept: 0, deleted: 0 };
+let copyRestore: InputCopyRestoreProgress & WalkState = { ...IDLE, atSlot: 0, toSlot: 0, restored: 0, rows: 0 };
 
 /** The payment-credential fill of this process, same lifecycle as the backfills. */
 interface CredentialBackfillState extends CredentialBackfillProgress {
@@ -82,9 +124,8 @@ interface RegistryBackfillState extends RegistryBackfillProgress {
   finishedAt: string | null;
   error: string | null;
 }
-let registryBackfill: RegistryBackfillState = {
-  status: 'none', units: 0, processed: 0, filled: 0, failed: 0, startedAt: null, finishedAt: null, error: null,
-};
+const REGISTRY_IDLE: RegistryBackfillProgress = { units: 0, processed: 0, filled: 0, failed: 0, absent: 0, skipped: 0 };
+let registryBackfill: RegistryBackfillState = { ...REGISTRY_IDLE, status: 'none', startedAt: null, finishedAt: null, error: null };
 
 type BackfillData = { fromSlot?: string | number | null; toSlot?: string | number | null };
 
@@ -99,17 +140,10 @@ async function backfillRange(db: Parameters<typeof readCursor>[0], data: Backfil
   return { fromSlot, toSlot };
 }
 
-function utxoSetConfigured(): boolean {
+/** A crawler switch as configured; false when the configuration is invalid. */
+function crawlerOption(name: 'utxoSet' | 'epochSnapshots' | 'accountSnapshots'): boolean {
   try {
-    return Boolean(loadCrawlerConfigFromEnv()?.utxoSet);
-  } catch {
-    return false;
-  }
-}
-
-function epochSnapshotsConfigured(): boolean {
-  try {
-    return Boolean(loadCrawlerConfigFromEnv()?.epochSnapshots);
+    return Boolean(loadCrawlerConfigFromEnv()?.[name]);
   } catch {
     return false;
   }
@@ -137,9 +171,17 @@ export function isCrawlerStalled(cursor: SyncCursor | null, now = Date.now()): b
 
 /** CardanoIndexerService handlers. They read the crawler cursor and start or stop the crawler. */
 module.exports = (srv: cds.Service) => {
+  answerNumbersAsText(srv);
 
   // getLiveness: unauthenticated probe. No handleRequest and no app context.
   srv.on('getLiveness', async () => buildLiveness());
+
+  // getReadiness: unauthenticated probe. A missing part answers 503 with the same body.
+  srv.on('getReadiness', async (req: Request) => {
+    const readiness = await buildReadiness(readinessParts());
+    if (readiness.status !== 'ready') req.http?.res.status(503);
+    return readiness;
+  });
 
   // getStatus: run state and sync progress. Numeric fields are strings, as CAP 10 serializes them.
   srv.on('getStatus', async (req: Request) => {
@@ -148,6 +190,9 @@ module.exports = (srv: cds.Service) => {
       const lastSnapshot = await db.run(
         SELECT.one.from(EpochLedgerSnapshots).columns('epoch', 'source', 'snapshotSlot').orderBy('epoch desc')
       ) as { epoch?: number; source?: string | null; snapshotSlot?: number | string | null } | undefined;
+      const lastAccounts = await db.run(
+        SELECT.one.from(EpochLedgerSnapshots).columns('epoch', 'accountCount').where({ accountCount: { '!=': null } }).orderBy('epoch desc')
+      ) as { epoch?: number; accountCount?: number | null } | undefined;
       const lastHeight = cursor?.lastHeight ?? 0;
       const tipHeight = cursor?.tipHeight ?? 0;
       const progress = tipHeight > 0 ? Math.min(100, (lastHeight / tipHeight) * 100) : 0;
@@ -165,7 +210,7 @@ module.exports = (srv: cds.Service) => {
         lastIndexedAt: cursor?.lastIndexedAt ?? null,
         stalled: isCrawlerStalled(cursor),
         utxoSet: {
-          enabled: utxoSetConfigured(),
+          enabled: crawlerOption('utxoSet'),
           status: utxoSetImportInFlight ? 'importing' : (cursor?.utxoSet?.status ?? 'none'),
           anchorSlot: cursor?.utxoSet?.anchorSlot == null ? null : String(cursor.utxoSet.anchorSlot),
           anchorHash: cursor?.utxoSet?.anchorHash ?? null,
@@ -180,6 +225,7 @@ module.exports = (srv: cds.Service) => {
           blocks: certificateBackfill.blocks,
           certificates: certificateBackfill.certificates,
           withdrawals: certificateBackfill.withdrawals,
+          removed: certificateBackfill.removed,
           startedAt: certificateBackfill.startedAt,
           finishedAt: certificateBackfill.finishedAt,
           error: certificateBackfill.error,
@@ -192,6 +238,7 @@ module.exports = (srv: cds.Service) => {
           blocks: transactionBackfill.blocks,
           transactions: transactionBackfill.transactions,
           inputs: transactionBackfill.inputs,
+          outputs: transactionBackfill.outputs,
           redeemers: transactionBackfill.redeemers,
           datums: transactionBackfill.datums,
           rewritten: transactionBackfill.rewritten,
@@ -203,12 +250,20 @@ module.exports = (srv: cds.Service) => {
         credentialBackfill: { ...credentialBackfill },
         decimalsBackfill: { ...decimalsBackfill },
         registryBackfill: { ...registryBackfill },
+        datumBackfill: { ...datumBackfill },
+        metadataBackfill: { ...metadataBackfill, atSlot: String(metadataBackfill.atSlot), toSlot: String(metadataBackfill.toSlot) },
+        epochBackfill: { ...epochBackfill },
+        copyPrune: { ...copyPrune, atSlot: String(copyPrune.atSlot), toSlot: String(copyPrune.toSlot) },
+        copyRestore: { ...copyRestore, atSlot: String(copyRestore.atSlot), toSlot: String(copyRestore.toSlot) },
         epochSnapshots: {
-          enabled: epochSnapshotsConfigured(),
+          enabled: crawlerOption('epochSnapshots'),
           source: epochSnapshotSource(),
           lastEpoch: lastSnapshot?.epoch ?? null,
           lastSource: lastSnapshot?.source ?? null,
           lastSlot: lastSnapshot?.snapshotSlot == null ? null : String(lastSnapshot.snapshotSlot),
+          accounts: crawlerOption('accountSnapshots'),
+          lastAccountEpoch: lastAccounts?.epoch ?? null,
+          lastAccountCount: lastAccounts?.accountCount ?? null,
         },
       };
     });
@@ -227,7 +282,7 @@ module.exports = (srv: cds.Service) => {
       return await handleRequest(req, async (db) => {
         const { fromSlot, toSlot } = await backfillRange(db, data);
         certificateBackfill = {
-          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0,
+          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, certificates: 0, withdrawals: 0, removed: 0,
           startedAt: new Date().toISOString(), finishedAt: null, error: null,
         };
         void backfillCertificates({
@@ -268,7 +323,7 @@ module.exports = (srv: cds.Service) => {
       return await handleRequest(req, async (db) => {
         const { fromSlot, toSlot } = await backfillRange(db, data);
         transactionBackfill = {
-          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, inputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
+          status: 'running', fromSlot, toSlot, atSlot: fromSlot, blocks: 0, transactions: 0, inputs: 0, outputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0,
           startedAt: new Date().toISOString(), finishedAt: null, error: null,
         };
         void backfillTransactions({
@@ -330,16 +385,28 @@ module.exports = (srv: cds.Service) => {
     return { accepted: true, message: 'Asset-decimals backfill started; poll getStatus().decimalsBackfill.' };
   });
 
-  // backfillAssetRegistry: writes the CIP-26 registry fields of every registered unit. The registry
-  // is off-chain, so this needs a backend that lists it. Progress is in getStatus().registryBackfill.
+  // backfillAssetRegistry: writes the CIP-26 registry fields of every registered unit. The registry is
+  // off-chain: it comes from a backend that lists it, or from the entry files of its repository.
   srv.on('backfillAssetRegistry', async (req: Request) => {
+    const data = (req.data ?? {}) as { source?: string | null; path?: string | null };
+    const source = data.source ?? 'koios';
     if (registryBackfill.status === 'running') return rejectInvalid(req, 'backfillAssetRegistry', 'An asset-registry backfill is already running');
-    if (!getCardanoClient().getTokenRegistryBackend()) return rejectInvalid(req, 'backfillAssetRegistry', 'No backend lists the token registry (needs Koios)');
-    registryBackfill = { status: 'running', units: 0, processed: 0, filled: 0, failed: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
-    void backfillAssetRegistry({
-      client: getCardanoClient(), indexer: getCardanoIndexer(),
-      onProgress: (p) => { Object.assign(registryBackfill, p); },
-    })
+    if (source === 'file') {
+      if (!data.path) return rejectMissing(req, 'backfillAssetRegistry', 'path');
+      try {
+        await registryEntryFiles(data.path);
+      } catch (err) {
+        return rejectInvalid(req, 'backfillAssetRegistry', err instanceof Error ? err.message : String(err), 'path');
+      }
+    } else if (!getCardanoClient().getTokenRegistryBackend()) {
+      return rejectInvalid(req, 'backfillAssetRegistry', 'No backend lists the token registry (needs Koios, or source file)');
+    }
+    registryBackfill = { ...REGISTRY_IDLE, status: 'running', startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    const onProgress = (p: RegistryBackfillProgress) => { Object.assign(registryBackfill, p); };
+    const run = source === 'file' && data.path
+      ? backfillAssetRegistryFromFiles({ directory: data.path, onProgress })
+      : backfillAssetRegistry({ client: getCardanoClient(), indexer: getCardanoIndexer(), onProgress });
+    void run
       .then((r) => { Object.assign(registryBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -347,6 +414,104 @@ module.exports = (srv: cds.Service) => {
         logger.error(`Asset-registry backfill failed: ${message}`);
       });
     return { accepted: true, message: 'Asset-registry backfill started; poll getStatus().registryBackfill.' };
+  });
+
+  // backfillOutputDatums: reads transactions again whose outputs hold a datum hash and no inline
+  // datum. Needs a backend that serves transactions. Progress is in getStatus().datumBackfill.
+  srv.on('backfillOutputDatums', async (req: Request) => {
+    if (datumBackfill.status === 'running') return rejectInvalid(req, 'backfillOutputDatums', 'An output-datum backfill is already running');
+    if (!getCardanoClient().supports('getTransaction')) {
+      return rejectInvalid(req, 'backfillOutputDatums', 'No configured backend serves transactions. With Ogmios only, run backfillTransactions over the crawled range');
+    }
+    datumBackfill = { status: 'running', ...NO_DATUM_PROGRESS, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    void backfillOutputDatums({
+      client: getCardanoClient(),
+      onProgress: (p) => { Object.assign(datumBackfill, p); },
+    })
+      .then((r) => { Object.assign(datumBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(datumBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Output-datum backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Output-datum backfill started; poll getStatus().datumBackfill.' };
+  });
+
+  // backfillMetadataPositions: writes the chain position to metadata rows that lack it.
+  // Needs no backend and runs detached. Progress is in getStatus().metadataBackfill.
+  srv.on('backfillMetadataPositions', async (req: Request) => {
+    if (metadataBackfill.status === 'running') return rejectInvalid(req, 'backfillMetadataPositions', 'A metadata-position backfill is already running');
+    metadataBackfill = { status: 'running', atSlot: 0, toSlot: 0, rows: 0, startedAt: new Date().toISOString(), finishedAt: null, error: null };
+    void backfillMetadataPositions({
+      onProgress: (p) => { Object.assign(metadataBackfill, p); },
+    })
+      .then((r) => { Object.assign(metadataBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(metadataBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Metadata-position backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Metadata-position backfill started; poll getStatus().metadataBackfill.' };
+  });
+
+  // backfillEpochs: rebuilds the epoch rows of the crawled range from the stored blocks.
+  // Needs no backend and runs detached.
+  srv.on('backfillEpochs', async (req: Request) => {
+    if (epochBackfill.status === 'running') return rejectInvalid(req, 'backfillEpochs', 'An epoch backfill is already running');
+    epochBackfill = { ...IDLE, status: 'running', startedAt: new Date().toISOString(), atEpoch: 0, toEpoch: 0, updated: 0, created: 0 };
+    void getCardanoIndexer().backfillEpochs((p) => { Object.assign(epochBackfill, p); })
+      .then((r) => { Object.assign(epochBackfill, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(epochBackfill, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Epoch backfill failed: ${message}`);
+      });
+    return { accepted: true, message: 'Epoch backfill started; poll getStatus().epochBackfill.' };
+  });
+
+  // Slot range of a walk over input asset copies. Both bounds are required: the caller names what
+  // moves. Null after the request was rejected.
+  const copyRange = (req: Request, action: string): { fromSlot: number; toSlot: number; slotWindow?: number } | null => {
+    const data = (req.data ?? {}) as { fromSlot?: unknown; toSlot?: unknown; slotWindow?: unknown };
+    if (data.fromSlot == null) { rejectMissing(req, action, 'fromSlot'); return null; }
+    if (data.toSlot == null) { rejectMissing(req, action, 'toSlot'); return null; }
+    const range = { fromSlot: Number(data.fromSlot), toSlot: Number(data.toSlot) };
+    if (range.fromSlot > range.toSlot) { rejectInvalid(req, action, 'fromSlot must not be after toSlot', 'fromSlot'); return null; }
+    return data.slotWindow == null ? range : { ...range, slotWindow: Number(data.slotWindow) };
+  };
+  const copyWalkRunning = () => copyPrune.status === 'running' || copyRestore.status === 'running';
+
+  // pruneInputAssetCopies: moves the inputs of a slot range from asset copies to the output they
+  // spent and deletes those copies. Needs no backend and runs detached.
+  srv.on('pruneInputAssetCopies', async (req: Request) => {
+    const range = copyRange(req, 'pruneInputAssetCopies');
+    if (!range) return;
+    if (copyWalkRunning()) return rejectInvalid(req, 'pruneInputAssetCopies', 'A prune or restore of input asset copies is already running');
+    copyPrune = { ...IDLE, status: 'running', startedAt: new Date().toISOString(), atSlot: 0, toSlot: 0, referenced: 0, kept: 0, deleted: 0 };
+    void pruneInputAssetCopies({ ...range, onProgress: (p) => { Object.assign(copyPrune, p); } })
+      .then((r) => { Object.assign(copyPrune, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(copyPrune, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Prune of input asset copies failed: ${message}`);
+      });
+    return { accepted: true, message: 'Prune of input asset copies started; poll getStatus().copyPrune.' };
+  });
+
+  // restoreInputAssetCopies: the way back, copies written from the outputs.
+  srv.on('restoreInputAssetCopies', async (req: Request) => {
+    const range = copyRange(req, 'restoreInputAssetCopies');
+    if (!range) return;
+    if (copyWalkRunning()) return rejectInvalid(req, 'restoreInputAssetCopies', 'A prune or restore of input asset copies is already running');
+    copyRestore = { ...IDLE, status: 'running', startedAt: new Date().toISOString(), atSlot: 0, toSlot: 0, restored: 0, rows: 0 };
+    void restoreInputAssetCopies({ ...range, onProgress: (p) => { Object.assign(copyRestore, p); } })
+      .then((r) => { Object.assign(copyRestore, r, { status: 'done', finishedAt: new Date().toISOString() }); })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        Object.assign(copyRestore, { status: 'failed', finishedAt: new Date().toISOString(), error: message.slice(0, 500) });
+        logger.error(`Restore of input asset copies failed: ${message}`);
+      });
+    return { accepted: true, message: 'Restore of input asset copies started; poll getStatus().copyRestore.' };
   });
 
   // importUtxoSet: one-off snapshot import that anchors crawler.utxoSet.

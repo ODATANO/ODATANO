@@ -190,6 +190,32 @@ export function isNotFoundOnAllBackends(err: unknown): boolean {
     && err.errors.every((e) => e instanceof NotFoundError || e.statusCode === 404);
 }
 
+function isBackendVerdict(err: unknown): boolean {
+  return err instanceof BackendError && !(err instanceof AllBackendsFailedError)
+    && err.statusCode >= 400 && err.statusCode < 500 && err.statusCode !== 429;
+}
+
+// True when every backend that was asked refused the transaction itself. A timeout, a 5xx or a
+// rate limit is no verdict: the transaction may have been accepted before the answer was lost.
+export function isSubmitRejection(err: unknown): boolean {
+  if (err instanceof AllBackendsFailedError) return err.errors.length > 0 && err.errors.every(isBackendVerdict);
+  return isBackendVerdict(err);
+}
+
+/** A submit failed without a verdict (503). The record stays open and the server keeps resolving it. */
+export class SubmitOutcomeUnknownError extends BackendError {
+  constructor(public readonly txHash: string, originalError?: unknown) {
+    const cause = originalError instanceof Error ? ` (${originalError.message})` : '';
+    super(
+      `Submit of transaction ${txHash} got no verdict${cause}. It may still reach the chain: read its status before sending a replacement.`,
+      503,
+      ERROR_CODES.SUBMIT_OUTCOME_UNKNOWN,
+      undefined,
+      originalError
+    );
+  }
+}
+
 /** Simplified shape of HTTP errors from various client libraries. */
 export interface HttpErrorLike {
   message?: string;

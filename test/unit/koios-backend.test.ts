@@ -564,6 +564,35 @@ describe('KoiosBackend', () => {
       expect(result.liveSize).toBeNull();
     });
 
+    it('maps the registered metadata file and its fields', async () => {
+      const meta_json = { name: 'Input Output Global (IOHK) - Private', ticker: 'IOGP', homepage: 'https://iohk.io', description: 'Our mission' };
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
+        .reply(200, [{
+          pool_id_bech32: POOL_ID,
+          meta_url: 'https://pools.iohk.io/IOGP.json',
+          meta_hash: '37eb004c0dd8a221ac3598ca1c6d6257fb5207ae9857b7c163ae0f39259d6cc0',
+          meta_json,
+        }]);
+
+      expect(await backend.getPool(POOL_ID)).toMatchObject({
+        metadataUrl: 'https://pools.iohk.io/IOGP.json',
+        metadataHash: '37eb004c0dd8a221ac3598ca1c6d6257fb5207ae9857b7c163ae0f39259d6cc0',
+        ...meta_json,
+      });
+    });
+
+    it('leaves the fields empty for a pool without a file, and for a file that breaks the limits', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/pool_info').reply(200, [{ pool_id_bech32: POOL_ID, meta_url: null, meta_hash: null, meta_json: null }]);
+      expect(await backend.getPool(POOL_ID)).toMatchObject({ metadataUrl: null, metadataHash: null, name: null, ticker: null });
+
+      nock(KOIOS_BASE_URL).post('/api/v1/pool_info').reply(200, [{
+        pool_id_bech32: POOL_ID, meta_url: 'https://p.example/a.json', meta_hash: 'ab'.repeat(32),
+        meta_json: { name: 'n'.repeat(51), ticker: 'OK', homepage: 'https://p.example', description: 'd' },
+      }]);
+      expect(await backend.getPool(POOL_ID)).toMatchObject({ metadataUrl: 'https://p.example/a.json', name: null, ticker: null, homepage: null, description: null });
+    });
+
     it('reports blocksEpoch as null — Koios has no per-epoch figure, and a 0 would read as a real zero', async () => {
       nock(KOIOS_BASE_URL)
         .post('/api/v1/pool_info', { _pool_bech32_ids: [POOL_ID] })
@@ -692,6 +721,30 @@ describe('KoiosBackend', () => {
       expect(result.size).toBe(1);
       expect(result.has(txHash1)).toBe(true);
       expect(result.has(txHash2)).toBe(false);
+    });
+
+    it('asks /tx_info for scripts and bytecode and stores the inline datum bytes of an output', async () => {
+      const txHash = 'a'.repeat(64);
+      const bodies: Record<string, unknown>[] = [];
+      const row = {
+        tx_hash: txHash, block_hash: 'c'.repeat(64), block_height: 1, tx_timestamp: 1, absolute_slot: 1, tx_block_index: 0,
+        fee: '1', deposit: '0', tx_size: 1, inputs: [], metadata: null,
+        outputs: [{
+          payment_addr: { bech32: TEST_ADDR }, tx_hash: txHash, tx_index: 0, value: '2000000', asset_list: [],
+          datum_hash: 'e'.repeat(64), inline_datum: { bytes: 'd87980', value: { constructor: 0, fields: [] } }, reference_script: null,
+        }],
+      };
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/tx_info', (b) => { bodies.push(b); return true; })
+        .times(2)
+        .reply(200, [row]);
+
+      const batch = await backend.getTransactionsBatch([txHash]);
+      const single = await backend.getTransaction(txHash);
+
+      for (const body of bodies) expect(body).toMatchObject({ _scripts: true, _bytecode: true });
+      expect(batch.get(txHash)!.outputs[0].inlineDatum).toBe('d87980');
+      expect(single.outputs[0].inlineDatum).toBe('d87980');
     });
 
     it('does not ask /tx_info for certificates unless the crawl configured it', async () => {
@@ -1149,6 +1202,25 @@ describe('KoiosBackend', () => {
       expect(result.registryName).toBeNull();
       expect(result.initialMintTime).toBeNull();
       expect(result.mintOrBurnCount).toBe(1);
+    });
+
+    it('maps an empty registry string to null', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/asset_info')
+        .reply(200, [{
+          policy_id: POLICY,
+          asset_name: ASSET_NAME_HEX,
+          fingerprint: 'asset1xyz',
+          total_supply: '1',
+          token_registry_metadata: { name: 'Hosky Token', ticker: '', description: { value: '' }, decimals: 0 },
+        }]);
+
+      const result = await backend.getAssetInfo(UNIT);
+
+      expect(result.registryName).toBe('Hosky Token');
+      expect(result.registryTicker).toBeNull();
+      expect(result.registryDescription).toBeNull();
+      expect(result.registryDecimals).toBe(0);
     });
 
     it('throws NotFoundError for empty result', async () => {

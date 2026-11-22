@@ -33,16 +33,16 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
   it('builds package artifacts during prepare without duplicate pack hooks', () => {
     expect(packageJson.scripts.prepare).toBe('npm run build:package');
     expect((packageJson.scripts as Record<string, string | undefined>).prepack).toBeUndefined();
-    expect(packageJson.dependencies['@harmoniclabs/cardano-ledger-ts']).toBe('^0.5.6');
+    expect(packageJson.dependencies['@harmoniclabs/cardano-ledger-ts']).toBe('^0.6.1');
     expect(packageJson.overrides.esbuild).toBe('0.28.1');
     expect(packageJson.overrides.ws).toBe('7.5.11');
-    expect(routerPackageJson.dependencies['@sap/approuter']).toBe('22.0.3');
+    expect(routerPackageJson.dependencies['@sap/approuter']).toBe('23.4.0');
     // The router must not depend on the root package: a `file:../..` dependency makes
     // the MTA production install run the root `prepare` build without devDependencies.
     expect((routerPackageJson.dependencies as Record<string, string | undefined>)['@odatano/core']).toBeUndefined();
     expect((routerPackageJson.dependencies as Record<string, string | undefined>).odatano).toBeUndefined();
-    expect(routerPackageJson.overrides['form-data']).toBe('4.0.6');
-    expect(routerPackageJson.overrides.ws).toBe('7.5.11');
+    // The approuter pins its own patched dependencies, so the router carries no overrides.
+    expect((routerPackageJson as Record<string, unknown>).overrides).toBeUndefined();
   });
 
   it('gates crawler control actions with the XSUAA Admin scope', async () => {
@@ -93,6 +93,21 @@ describe('src/plugin.ts — bootstrap fault tolerance', () => {
       caught = e;
     }
     expect(caught).toBeUndefined();
+  });
+
+  it('registers every service model of the package, so a consumer project serves all of them', async () => {
+    vi.doMock('../../src/index', () => ({ initialize: vi.fn(), shutdown: vi.fn() }));
+    await import('../../src/plugin');
+
+    const srvDir = path.resolve(__dirname, '../../srv');
+    const shipped = (await import('node:fs')).readdirSync(srvDir)
+      .filter((file) => file.endsWith('-service.cds') || file === 'cardano-service.cds')
+      .map((file) => `@odatano/core/srv/${file.replace(/\.cds$/, '')}`);
+    const kinds = (cds.env.requires as unknown as { kinds: Record<string, { model: string[] }> }).kinds;
+    const registered = kinds['odatano-core'].model;
+
+    expect(shipped).toHaveLength(7);
+    expect([...registered].sort()).toEqual(['@odatano/core/db/schema', ...shipped].sort());
   });
 
   it('does not throw on shutdown when never initialized', async () => {

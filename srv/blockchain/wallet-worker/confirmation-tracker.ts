@@ -15,7 +15,7 @@ import {
   bumpWalletStats,
   clearConfirmationPoint,
   markConfirmed,
-  markFailed,
+  markFailedAfterSend,
   recordConfirmationPoint,
 } from './job-store';
 
@@ -279,7 +279,7 @@ export class ConfirmationTracker {
       await cds.tx(async (tx) => {
         transitioned = outcome === 'confirmed'
           ? await markConfirmed(tx, job.jobId)
-          : await markFailed(tx, job.jobId, errorCode ?? 'FAILED', err ?? new Error('unknown'));
+          : await markFailedAfterSend(tx, job.jobId, errorCode ?? 'FAILED', err ?? new Error('unknown'));
         if (transitioned) {
           await bumpWalletStats(tx, job.walletId, outcome);
           if (outcome === 'confirmed') {

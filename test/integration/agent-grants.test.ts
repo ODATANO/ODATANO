@@ -1,7 +1,7 @@
 /**
  * Agent grants end to end against the real CAP server and SQLite: the transport lane,
  * Admin-only administration, token self-service, the enforcement hook (allow list,
- * wallet pinning, daily budget) and row-level narrowing.
+ * closed worker service, daily budget) and row-level narrowing.
  */
 
 import cds from '@sap/cds';
@@ -29,6 +29,10 @@ const WALLET = 'agent-wallet';
 const REQUEST = JSON.stringify({ recipientAddress: TEST_FIXTURES.validBech32Address, lovelaceAmount: '2000000' });
 const AGENT = '/odata/v4/cardano-agent';
 const WORKER = '/odata/v4/cardano-worker';
+const SIGN = '/odata/v4/cardano-sign';
+// CreateSigningRequest on this build is the metered action: it needs no backend.
+const BUILD_ID = 'agent-itest-build';
+const NO_BUILD = '00000000-0000-4000-8000-00000000b11d';
 
 type Axios = (path: string, ...rest: unknown[]) => Promise<{ status: number; data: any }>;
 
@@ -65,6 +69,15 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     await cds.tx(async (tx) => {
       await tx.run(DELETE.from('odatano.cardano.CardanoAgentGrantUsage'));
       await tx.run(DELETE.from('odatano.cardano.CardanoAgentGrants'));
+      await tx.run(DELETE.from('odatano.cardano.SigningRequests').where({ build_id: BUILD_ID }));
+      await tx.run(DELETE.from('odatano.cardano.TransactionBuilds').where({ id: BUILD_ID }));
+      const now = Date.now();
+      await tx.run(cds.ql.INSERT.into('odatano.cardano.TransactionBuilds').entries({
+        id: BUILD_ID, network: TEST_FIXTURES.network, senderAddress: TEST_FIXTURES.addressWithFunds,
+        unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor, txBodyHash: TEST_FIXTURES.txBodyHash,
+        status: 'built', builderType: 'buildooor', createdAt: now,
+        validFrom: new Date(now).toISOString(), validTo: new Date(now + 300000).toISOString(),
+      }));
       await tx.run(DELETE.from('odatano.cardano.CardanoWalletJobs'));
       await tx.run(DELETE.from('odatano.cardano.CardanoWorkerWallets'));
       await tx.run(cds.ql.INSERT.into('odatano.cardano.CardanoWorkerWallets').entries({
@@ -99,13 +112,12 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
   it('lets only an Admin issue grants, returns the token once and stores its hash only', async () => {
     await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['VerifySignature'] }, asBob), 403);
 
-    const issued = await issue({ allowedActions: ['BuildSimpleAdaTransaction', 'SubmitWalletJob'], walletId: WALLET, maxJobsPerDay: 3, agentLabel: 'itest' });
+    const issued = await issue({ allowedActions: ['BuildSimpleAdaTransaction', 'CreateSigningRequest'], maxJobsPerDay: 3, agentLabel: 'itest' });
     expect(issued.token).to.match(/^odat_[0-9a-f]{64}$/);
 
     const row = await cds.tx((tx) => tx.run(SELECT.one.from('odatano.cardano.CardanoAgentGrants').where({ ID: issued.grantId })));
     expect(row.tokenHash).to.have.lengthOf(64);
     expect(row.tokenHash).to.not.equal(issued.token);
-    expect(row.walletId).to.equal(WALLET);
 
     // The projection never exposes the hash, and bob may not read it at all.
     const { data } = await GET(`${AGENT}/AgentGrants`);
@@ -114,10 +126,13 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     await expectStatus(GET(`${AGENT}/AgentGrants`, asBob), 403);
   });
 
-  it('refuses non-grantable actions and a wallet action without a wallet at creation', async () => {
+  it('refuses non-grantable actions, the wallet actions and a wallet binding at creation', async () => {
     await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['PauseWorker'] }), 400);
     await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['SignWithHsm'] }), 400);
     await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['SubmitWalletJob'] }), 400);
+    await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['CancelJob'] }), 400);
+    // not a parameter of the action: CAP's input validation refuses it
+    await expectStatus(POST(`${AGENT}/CreateAgentGrant`, { allowedActions: ['VerifySignature'], walletId: WALLET }), 400);
   });
 
   // ---- the token at work --------------------------------------------------------
@@ -175,51 +190,42 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     expect(JSON.stringify(body)).to.include('BuildSimpleAdaTransaction');
   });
 
-  it('pins wallet jobs to the grant wallet, records them under the agent principal, and scopes reads to them', async () => {
-    const issued = await issue({ allowedActions: ['SubmitWalletJob', 'CancelJob'], walletId: WALLET, allowedJobKinds: ['simpleAda'] });
+  it('closes the worker service to tokens: jobs, status and reads are 403, the operator is unaffected', async () => {
+    const issued = await issue({ allowedActions: ['VerifySignature'] });
 
-    // Foreign wallet: refused. Absent wallet: injected.
-    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { walletId: 'treasury', kind: 'simpleAda', requestJson: REQUEST }, withToken(issued.token)), 403);
-    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { kind: 'mint', requestJson: REQUEST }, withToken(issued.token)), 403);
-    const { data: job } = await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST }, withToken(issued.token));
-    expect(job.status).to.equal('pending');
+    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST }, withToken(issued.token)), 403);
+    await expectStatus(GET(`${WORKER}/WalletJobs`, withToken(issued.token)), 403);
+    await expectStatus(GET(`${WORKER}/WorkerWallets`, withToken(issued.token)), 403);
+    await expectStatus(GET(`${WORKER}/GetWorkerStatus()`, withToken(issued.token)), 403);
 
-    const row = await cds.tx((tx) => tx.run(SELECT.one.from('odatano.cardano.CardanoWalletJobs').where({ ID: job.jobId })));
-    expect(row.walletId).to.equal(WALLET);
-    expect(row.createdBy).to.equal(`agent:${issued.grantId}`);
-
-    // A job the operator queued is invisible to the token; its own job is visible.
     const { data: operatorJob } = await POST(`${WORKER}/SubmitWalletJob`, { walletId: WALLET, kind: 'simpleAda', requestJson: REQUEST });
-    const { data: visible } = await GET(`${WORKER}/WalletJobs`, withToken(issued.token));
-    expect(visible.value.map((j: { ID: string }) => j.ID)).to.deep.equal([job.jobId]);
-    await expectStatus(GET(`${WORKER}/GetJobStatus(jobId=${operatorJob.jobId})`, withToken(issued.token)), 404);
-    const { data: own } = await GET(`${WORKER}/GetJobStatus(jobId=${job.jobId})`, withToken(issued.token));
-    expect(own.jobId).to.equal(job.jobId);
+    expect(operatorJob.status).to.equal('pending');
+    await expectStatus(GET(`${WORKER}/GetJobStatus(jobId=${operatorJob.jobId})`, withToken(issued.token)), 403);
+    await expectStatus(POST(`${WORKER}/CancelJob`, { jobId: operatorJob.jobId }, withToken(issued.token)), 403);
 
-    // Cancel: own job yes, operator's job 404 (no existence oracle).
-    await expectStatus(POST(`${WORKER}/CancelJob`, { jobId: operatorJob.jobId }, withToken(issued.token)), 404);
-    const { data: cancelled } = await POST(`${WORKER}/CancelJob`, { jobId: job.jobId }, withToken(issued.token));
-    expect(cancelled.value ?? cancelled).to.equal(true);
+    const jobs = await cds.tx((tx) => tx.run(SELECT.from('odatano.cardano.CardanoWalletJobs')));
+    expect(jobs.map((j: { ID: string; status: string }) => [j.ID, j.status])).to.deep.equal([[operatorJob.jobId, 'pending']]);
   });
 
   it('meters allow-listed calls per UTC day and answers 429 once the budget is spent', async () => {
-    const issued = await issue({ allowedActions: ['SubmitWalletJob'], walletId: WALLET, maxJobsPerDay: 2 });
-    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'a' }, withToken(issued.token));
-    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'b' }, withToken(issued.token));
-    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'c' }, withToken(issued.token)), 429);
+    const issued = await issue({ allowedActions: ['CreateSigningRequest'], maxJobsPerDay: 2 });
+    await POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token));
+    await POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token));
+    await expectStatus(POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token)), 429);
 
     const { data: status } = await GET(`${AGENT}/GetGrantStatus()`, withToken(issued.token));
     expect(status.jobsUsedToday).to.equal(2);
     // Reads stay free.
-    await GET(`${WORKER}/WalletJobs`, withToken(issued.token));
+    await GET(`${AGENT}/AgentGrants`, withToken(issued.token));
   });
 
   it('gives the unit back when the handler refuses the input', async () => {
-    const issued = await issue({ allowedActions: ['SubmitWalletJob'], walletId: WALLET, maxJobsPerDay: 1 });
-    // Invalid requestJson → 400 from the handler → refund.
-    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: 'not json' }, withToken(issued.token)), 400);
-    const { data: job } = await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST }, withToken(issued.token));
-    expect(job.status).to.equal('pending');
+    const issued = await issue({ allowedActions: ['CreateSigningRequest'], maxJobsPerDay: 1 });
+    // Unknown build: 400 from the handler, so the unit is refunded off the request's tick.
+    await expectStatus(POST(`${SIGN}/CreateSigningRequest`, { buildId: NO_BUILD }, withToken(issued.token)), 400);
+    await new Promise((r) => setTimeout(r, 100));
+    const { data: request } = await POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token));
+    expect(request.status).to.equal('pending');
   });
 
   it('keeps every existing surface unchanged for ordinary principals', async () => {
@@ -255,9 +261,9 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     await expectStatus(POST(`${AGENT}/RotateAgentGrantToken`, { grantId: NOBODY }), 404);
   });
 
-  it('updates a grant partially, clears with an explicit null, keeps the wallet immutable, 404 unknown, 409 GRANT_REVOKED', async () => {
+  it('updates a grant partially, clears with an explicit null, 404 unknown, 409 GRANT_REVOKED', async () => {
     const issued = await issue({
-      allowedActions: ['BuildSimpleAdaTransaction', 'SubmitWalletJob'], walletId: WALLET, allowedJobKinds: ['simpleAda'], maxJobsPerDay: 3, agentLabel: 'before',
+      allowedActions: ['BuildSimpleAdaTransaction', 'CreateSigningRequest'], maxJobsPerDay: 3, agentLabel: 'before',
     });
     const row = () => cds.tx((tx) => tx.run(SELECT.one.from(GRANTS).where({ ID: issued.grantId })));
 
@@ -268,24 +274,23 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     let r = await row();
     expect(r.agentLabel).to.equal('after');
     expect(Number(r.maxJobsPerDay)).to.equal(9);
-    expect(JSON.parse(r.allowedJobKinds)).to.deep.equal(['simpleAda']);
-    expect(r.walletId).to.equal(WALLET);
+    expect(JSON.parse(r.allowedActions)).to.deep.equal(['BuildSimpleAdaTransaction', 'CreateSigningRequest']);
 
     // An explicit null clears; the token sees the new shape.
-    await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedJobKinds: null, maxJobsPerDay: null });
+    await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, maxJobsPerDay: null });
     r = await row();
-    expect(r.allowedJobKinds).to.equal(null);
     expect(r.maxJobsPerDay).to.equal(null);
     const { data: status } = await GET(`${AGENT}/GetGrantStatus()`, withToken(issued.token));
     expect(status.agentLabel).to.equal('after');
     expect(status.maxJobsPerDay).to.equal(null);
 
-    // Merged-row validation and immutability.
+    // Merged-row validation; a wallet action or a wallet binding cannot be added.
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: [] }), 400);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: ['PauseWorker'] }), 400);
+    await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: ['SubmitWalletJob'] }), 400);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, validUntil: '2000-01-01T00:00:00Z' }), 400);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, walletId: 'other' }), 400);
-    expect((await row()).walletId).to.equal(WALLET);
+    expect(JSON.parse((await row()).allowedActions)).to.deep.equal(['BuildSimpleAdaTransaction', 'CreateSigningRequest']);
 
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, asBob), 403);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, withToken(issued.token)), 403);
@@ -297,11 +302,11 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
   });
 
   it('records usage per service and action, refunds a refused call, and narrows a token to its own grant', async () => {
-    const issued = await issue({ allowedActions: ['SubmitWalletJob'], walletId: WALLET, maxJobsPerDay: 5 });
-    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'u1' }, withToken(issued.token));
-    await POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: REQUEST, idempotencyKey: 'u2' }, withToken(issued.token));
-    // Invalid requestJson → 400 from the handler → budget and usage unit refunded (off the request's tick).
-    await expectStatus(POST(`${WORKER}/SubmitWalletJob`, { kind: 'simpleAda', requestJson: 'not json' }, withToken(issued.token)), 400);
+    const issued = await issue({ allowedActions: ['CreateSigningRequest'], maxJobsPerDay: 5 });
+    await POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token));
+    await POST(`${SIGN}/CreateSigningRequest`, { buildId: BUILD_ID }, withToken(issued.token));
+    // Unknown build → 400 from the handler → budget and usage unit refunded (off the request's tick).
+    await expectStatus(POST(`${SIGN}/CreateSigningRequest`, { buildId: NO_BUILD }, withToken(issued.token)), 400);
     await new Promise((r) => setTimeout(r, 100));
 
     const since = new Date(Date.now() - 86_400_000).toISOString();
@@ -310,7 +315,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
 
     const { data: usage } = await GET(usageUrl(issued.grantId));
     expect(usage.grantId).to.equal(issued.grantId);
-    expect(usage.calls).to.deep.equal([{ service: 'CardanoWorkerService', action: 'SubmitWalletJob', count: 2, refunded: 1 }]);
+    expect(usage.calls).to.deep.equal([{ service: 'CardanoSignService', action: 'CreateSigningRequest', count: 2, refunded: 1 }]);
     expect(Number(usage.total)).to.equal(2);
     expect(Number(usage.jobsUsedToday)).to.equal(2);
     expect(Number(usage.maxJobsPerDay)).to.equal(5);

@@ -14,9 +14,9 @@ const SCRIPT_ADDRESS = 'addr_test1wps7xts4e28ykdmg0uq86y6x050wsse86q42eytg6ljz5t
 const PARAMS = { minFeeA: 44, minFeeB: 155381, coinsPerUtxoSize: '4310', maxTxSize: 16384 } as any;
 const UNIT = 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea' + '546f6b656e4d';
 
-// Constr 0 [{1: 2}, 42] with a definite map and list; Buildooor would write both indefinite
+// Constr 0 [{1: 2}, 42] with a definite map and list; a re-encoding would write both indefinite
 const DEFINITE_DATUM = 'd87982a10102182a';
-// Constr 0 [chunked bytes 01, []]: longer as given than in Buildooor's encoding
+// Constr 0 [chunked bytes 01, []]: longer as given than re-encoded
 const LONGER_DATUM = 'd8799f5f4101ff80ff';
 
 const funding: UTxO = {
@@ -46,7 +46,7 @@ describe('BuildooorTxBuilder.buildUnsignedTransfer with outputDatumCbor', () => 
     expect(BigInt(result.feeLovelace)).toBeGreaterThanOrEqual(ledgerMinFee(result.sizeBytes!));
   });
 
-  it('raises the fee when the given datum is longer than Buildooor would write it', async () => {
+  it('covers a datum longer than its canonical encoding with the fee', async () => {
     const result = await builder.buildUnsignedTransfer(request({ outputDatumCbor: LONGER_DATUM }), context());
     const parsed = parseTransaction(result.unsignedTxCbor);
     expect(parsed.outputs[0].inlineDatumHex).toBe(LONGER_DATUM);

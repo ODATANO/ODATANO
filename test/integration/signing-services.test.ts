@@ -21,7 +21,6 @@ vi.setConfig({ testTimeout: 30000, hookTimeout: 30000 });
 // Skip server auto-init - mock tests create their own context after setting up nock mocks
 process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
-process.env.TX_BUILDERS = 'buildooor';
 
 describe('Signing Services Integration Tests', () => {
   const test = cds.test(__dirname + '/../../');

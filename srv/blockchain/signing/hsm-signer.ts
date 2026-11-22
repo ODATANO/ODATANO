@@ -1,6 +1,7 @@
 import cds from '@sap/cds';
 import { HsmConfig, HsmSignResult } from '../../utils/types';
 import { HsmError } from '../../utils/errors';
+import { coreCdsConfig } from '../../config';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { Cbor, CborArray, CborBytes, CborMap, CborUInt } from '@harmoniclabs/cbor';
 import { fromHex, toHex } from '@harmoniclabs/uint8array-utils';
@@ -104,7 +105,7 @@ export class HsmSigner {
         this.config.pin = '';
         if (process.env.HSM_PIN) delete process.env.HSM_PIN;
         try {
-          const hsmCds = (cds.env?.requires as Record<string, { hsm?: { pin?: string } }>)?.['odatano-core']?.hsm;
+          const hsmCds = coreCdsConfig().hsm;
           if (hsmCds && 'pin' in hsmCds) hsmCds.pin = '';
         } catch { /* best effort */ }
       }

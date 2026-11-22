@@ -29,6 +29,8 @@ export interface WorkerWalletConfig {
   signerType: WorkerSignerTypeValue;
   /** software only. Env var with the Ed25519 key as 64 hex chars or AES-256-GCM `iv:authTag:ciphertext` in base64. */
   keyEnv?: string;
+  /** Role a caller needs to queue jobs for this wallet. Absent = any authenticated user. */
+  requiresRole?: string;
 }
 
 /** Replaces the vkey witnesses in the raw CBOR witness set with this one. Other entries and encoding stay. */

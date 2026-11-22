@@ -3,6 +3,7 @@ import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
 import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
+import { validPoolMetadata } from '../pool-metadata';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 import {
   Transaction,
@@ -263,7 +264,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   async getPool(poolId: string): Promise<PoolData> {
     return handleBackendRequest(
       async () => {
-        const poolData = await this.api.poolsById(poolId);
+        const [poolData, registered] = await Promise.all([this.api.poolsById(poolId), this.api.poolMetadata(poolId)]);
+        const metadata = validPoolMetadata(registered);
         return {
           poolId: poolData.pool_id,
           vrfKeyHash: poolData.vrf_key,
@@ -280,6 +282,12 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           margin: poolData.margin_cost,
           fixedCost: poolData.fixed_cost || '0',
           rewardAccount: poolData.reward_account,
+          metadataUrl: registered.url ?? null,
+          metadataHash: registered.hash ?? null,
+          name: metadata?.name ?? null,
+          ticker: metadata?.ticker ?? null,
+          homepage: metadata?.homepage ?? null,
+          description: metadata?.description ?? null,
         }
       },
       this.name

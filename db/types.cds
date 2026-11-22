@@ -188,6 +188,7 @@ type WalletJobKind    : String(12) enum {
     multiAsset = 'multiAsset'; // BuildMultiAssetTransaction payload
     mint = 'mint'; // BuildMintTransaction payload
     plutusSpend = 'plutusSpend'; // BuildPlutusSpendTransaction payload
+    payout = 'payout'; // several recipients in one transaction (outputsJson)
     submitSigned = 'submitSigned'; // externally signed CBOR, managed submit and confirm only
 }
 
@@ -213,6 +214,13 @@ type UtxoSetImportSource : String(12) enum {
     file = 'file';
     aggregates = 'aggregates';
     scripts = 'scripts';
+}
+
+@title      : 'Asset Registry Source'
+@description: 'Enum type for where backfillAssetRegistry reads the token registry from'
+type AssetRegistrySource : String(12) enum {
+    koios = 'koios';
+    file = 'file';
 }
 
 // -----------------------------------------------------

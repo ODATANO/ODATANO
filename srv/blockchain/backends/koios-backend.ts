@@ -4,6 +4,7 @@ import { CardanoBackend, PaginatingBackend, EnumeratingBackend, TokenRegistryBac
 import { handleBackendRequest } from '../../utils/backend-request-handler';
 import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError, ScriptValidationError, normalizeBackendError, isPostgrestServerErrorCode } from '../../utils/errors';
 import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
+import { validPoolMetadata } from '../pool-metadata';
 import { CARDANO_DEFAULTS } from '../../utils/const';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
 
@@ -161,6 +162,9 @@ interface KoiosPoolInfoRow {
   margin?: number | null;
   fixed_cost?: string | null;
   reward_addr?: string | null;
+  meta_url?: string | null;
+  meta_hash?: string | null;
+  meta_json?: { name?: string; ticker?: string; homepage?: string; description?: string } | null;
 }
 
 /** Koios `/drep_info` row across both schema generations (see _mapKoiosDrep). */
@@ -346,8 +350,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           _assets: true,
           _withdrawals: false,
           _certs: false,
-          _scripts: false,
-          _bytecode: false,
+          // Koios sends inline datum bytes and reference scripts only with both flags.
+          _scripts: true,
+          _bytecode: true,
         };
 
         const { data } = await this.api.post('/tx_info', body);
@@ -654,6 +659,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
 
   /** Map one Koios /pool_info row to the canonical PoolData. */
   private _mapKoiosPool(poolData: KoiosPoolInfoRow, fallbackId: string): PoolData {
+    const metadata = validPoolMetadata(poolData.meta_json);
     return {
       poolId: poolData.pool_id_bech32 || poolData.pool_id_hex || fallbackId,
       vrfKeyHash: poolData.vrf_key_hash || '',
@@ -674,6 +680,12 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       margin: poolData.margin || 0,
       fixedCost: poolData.fixed_cost || '0',
       rewardAccount: poolData.reward_addr || '',
+      metadataUrl: poolData.meta_url ?? null,
+      metadataHash: poolData.meta_hash ?? null,
+      name: metadata?.name ?? null,
+      ticker: metadata?.ticker ?? null,
+      homepage: metadata?.homepage ?? null,
+      description: metadata?.description ?? null,
     };
   }
 
@@ -699,13 +711,11 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         // Koios token_registry_metadata fields are typically strings, but the
         // CIP-26 registry entries may be wrapped in {value, signatures}. Accept either form.
         const regRaw = (a.token_registry_metadata ?? null) as Record<string, unknown> | null;
+        // Koios sends an empty string for a registry field the entry does not carry.
         const regStr = (key: string): string | null => {
           const v = regRaw?.[key];
-          if (typeof v === 'string') return v;
-          if (v && typeof v === 'object' && typeof (v as { value?: unknown }).value === 'string') {
-            return (v as { value: string }).value;
-          }
-          return null;
+          const text = v && typeof v === 'object' ? (v as { value?: unknown }).value : v;
+          return typeof text === 'string' && text !== '' ? text : null;
         };
         const regNum = (key: string): number | null => {
           const v = regRaw?.[key];
@@ -1091,8 +1101,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
             // certificates + withdrawals only when the crawl will write them (larger payload)
             _withdrawals: this.crawlCertificates,
             _certs: this.crawlCertificates,
-            _scripts: false,
-            _bytecode: false,
+            _scripts: true,
+            _bytecode: true,
           });
 
           if (data && Array.isArray(data)) {

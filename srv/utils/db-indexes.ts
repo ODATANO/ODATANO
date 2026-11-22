@@ -25,6 +25,9 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_blocks_height_desc', table: 'odatano_cardano_Blocks', columns: 'height DESC', postgres: 'height DESC NULLS LAST' },
   { name: 'odatano_cardano_blocks_slot', table: 'odatano_cardano_Blocks', columns: 'slot' },
   { name: 'odatano_cardano_blocks_epoch', table: 'odatano_cardano_Blocks', columns: 'epochNumber' },
+  // the first block at or after a point in time (`$filter=time ge …&$orderby=time`)
+  // CAP sorts a nullable column as ASC NULLS FIRST or DESC NULLS LAST on PostgreSQL; this serves both
+  { name: 'odatano_cardano_blocks_time', table: 'odatano_cardano_Blocks', columns: 'time', postgres: 'time NULLS FIRST' },
   // block counts per pool (Pools.blocksEpoch / blocksMinted from crawled blocks)
   { name: 'odatano_cardano_blocks_slotleader', table: 'odatano_cardano_Blocks', columns: 'slotLeader, slot' },
   // Transactions of a block in block order (rollback `blockHash in`, GetBlockTransactions)
@@ -34,6 +37,7 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_transactions_txseq', table: 'odatano_cardano_Transactions', columns: 'txSeq' },
   // GetMetadataByTxHash, rollback
   { name: 'odatano_cardano_transactionmetadata_tx', table: 'odatano_cardano_TransactionMetadata', columns: 'tx_hash' },
+  { name: 'odatano_cardano_transactionmetadata_label_seq', table: 'odatano_cardano_TransactionMetadata', columns: 'id, txSeq' },
   // rollback `txHash in` (key is unit, txHash); newest events of a unit
   { name: 'odatano_cardano_assethistory_tx', table: 'odatano_cardano_AssetHistory', columns: 'txHash' },
   { name: 'odatano_cardano_assethistory_unit_height', table: 'odatano_cardano_AssetHistory', columns: 'unit, blockHeight DESC', postgres: 'unit, blockHeight DESC NULLS LAST' },
@@ -59,6 +63,8 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_transactioncertificates_pool', table: 'odatano_cardano_TransactionCertificates', columns: 'poolId' },
   { name: 'odatano_cardano_transactioncertificates_drep', table: 'odatano_cardano_TransactionCertificates', columns: 'drepId' },
   { name: 'odatano_cardano_transactionwithdrawals_stake', table: 'odatano_cardano_TransactionWithdrawals', columns: 'stakeAddress' },
+  // all accounts of one epoch; the key starts with the stake address
+  { name: 'odatano_cardano_accountepochsnapshots_epoch', table: 'odatano_cardano_AccountEpochSnapshots', columns: 'epoch' },
   // crawler-fed UTxO set: open rows per address, "who spent", stake-key rollups, asset holders
   { name: 'odatano_cardano_ledgerutxos_address', table: 'odatano_cardano_LedgerUTxOs', columns: 'address, spentTxHash' },
   // newest created and spent rows of an address (latest transactions from the UTxO set)
@@ -70,14 +76,16 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_ledgeraddresses_paycred', table: 'odatano_cardano_LedgerAddresses', columns: 'paymentCredential' },
   { name: 'odatano_cardano_ledgerutxoassets_unit', table: 'odatano_cardano_LedgerUTxOAssets', columns: 'unit' },
   { name: 'odatano_cardano_ledgeraddressassets_unit', table: 'odatano_cardano_LedgerAddressAssets', columns: 'unit' },
-  // wallet worker: due jobs in dispatch order, active jobs of one wallet
-  { name: 'odatano_cardano_cardanowalletjobs_due', table: 'odatano_cardano_CardanoWalletJobs', columns: 'status, priority, createdAt' },
-  { name: 'odatano_cardano_cardanowalletjobs_wallet', table: 'odatano_cardano_CardanoWalletJobs', columns: 'walletId, status, createdAt' },
+  // wallet worker: jobs by status, and the jobs of one wallet with its next due job in dispatch order
+  { name: 'odatano_cardano_cardanowalletjobs_status', table: 'odatano_cardano_CardanoWalletJobs', columns: 'status' },
+  { name: 'odatano_cardano_cardanowalletjobs_next', table: 'odatano_cardano_CardanoWalletJobs', columns: 'walletId, status, priority, createdAt' },
 ]);
 
 /** Indexes a composite entry above replaces; dropped at start. */
 export const DROPPED_DB_INDEXES: readonly string[] = Object.freeze([
   'odatano_cardano_transactions_block',
+  'odatano_cardano_cardanowalletjobs_due',
+  'odatano_cardano_cardanowalletjobs_wallet',
 ]);
 
 /** The statement for one entry; exported so tests pin the shape. */

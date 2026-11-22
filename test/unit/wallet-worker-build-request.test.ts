@@ -17,7 +17,7 @@ vi.mock('@sap/cds', () => {
 });
 
 import { Script } from '@harmoniclabs/cardano-ledger-ts';
-import { prepareWorkerBuildRequest } from '../../srv/blockchain/wallet-worker/build-request';
+import { MAX_PAYOUT_OUTPUTS, preparePayoutRequest, prepareWorkerBuildRequest } from '../../srv/blockchain/wallet-worker/build-request';
 import { applyScriptParameters } from '../../srv/utils/tx-build-helper';
 import { scriptHashToEnterpriseAddress } from '../../srv/utils/mappers';
 import { BackendError } from '../../srv/utils/errors';
@@ -375,6 +375,48 @@ describe('prepareWorkerBuildRequest: plutusSpend', () => {
   it('rejects lockOnScript without scriptParamsJson', () => {
     expectRejects(() => prepareWorkerBuildRequest('plutusSpend', { ...spendBase, lockOnScript: true }, 'preview'),
       /lockOnScript requires scriptParamsJson/);
+  });
+});
+
+describe('preparePayoutRequest', () => {
+  const output = (lovelaceAmount: string, extra: Record<string, unknown> = {}) => ({ address: ADDR, lovelaceAmount, ...extra });
+  const payout = (outputs: unknown, extra: Record<string, unknown> = {}) =>
+    preparePayoutRequest({ network: 'preview', senderAddress: ADDR, changeAddress: ADDR, outputsJson: JSON.stringify(outputs), ...extra });
+
+  it('keeps the recipients in order and runs no script', () => {
+    const unit = scriptUnit('546f6b656e');
+    const result = payout([output('2000000'), output('3000000', { assets: [{ unit, quantity: '5' }] })]);
+
+    expect(result).toMatchObject({ network: 'preview', senderAddress: ADDR, changeAddress: ADDR, scriptInputs: [] });
+    expect(result.outputs.map(o => o.lovelaceAmount)).toEqual(['2000000', '3000000']);
+    expect(result.outputs[1].assets).toEqual([{ unit, quantity: '5' }]);
+  });
+
+  it('passes forced and protected inputs and the validity window on', () => {
+    const ref = [{ txHash: TX_HASH, outputIndex: 1 }];
+    const result = payout([output('2000000')], {
+      forceInputsJson: JSON.stringify(ref), protectInputsJson: JSON.stringify(ref), validityEndMs: '1800000000000',
+    });
+    expect(result.forceInputs).toEqual(ref);
+    expect(result.protectInputs).toEqual(ref);
+    expect(result.validityEndMs).toBe('1800000000000');
+  });
+
+  it('rejects a job without recipients', () => {
+    expectRejects(() => preparePayoutRequest({ senderAddress: ADDR }), /outputsJson is required/);
+    expectRejects(() => payout([]), /at least one output/);
+    expectRejects(() => preparePayoutRequest({ senderAddress: ADDR, outputsJson: [output('2000000')] }), /must be a JSON string/);
+  });
+
+  it('rejects a bad recipient, naming its position', () => {
+    expectRejects(() => payout([output('2000000'), { address: 'nope', lovelaceAmount: '1' }]), /outputs\[1\]\.address/);
+    expectRejects(() => payout([output('0')]), /outputs\[0\]\.lovelaceAmount/);
+  });
+
+  it('takes up to the payout limit of recipients, not one more', () => {
+    const many = (n: number) => Array.from({ length: n }, () => output('2000000'));
+    expect(payout(many(MAX_PAYOUT_OUTPUTS)).outputs).toHaveLength(MAX_PAYOUT_OUTPUTS);
+    expectRejects(() => payout(many(MAX_PAYOUT_OUTPUTS + 1)), new RegExp(`exceeds maximum of ${MAX_PAYOUT_OUTPUTS} entries`));
   });
 });
 

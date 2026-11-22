@@ -1,10 +1,10 @@
 import cds from '@sap/cds';
-import { CardanoClient, CardanoClientConfig, Network,BackendName,TransactionBuilderName } from './blockchain/cardano-client';
+import { CardanoClient, CardanoClientConfig, BackendName } from './blockchain/cardano-client';
 import { CardanoIndexer } from './blockchain/cardano-indexer';
 import { CardanoTransactionBuilder } from './blockchain/cardano-tx-builder';
 import type { LedgerProtocolParameters, HsmConfig } from './utils/types';
 import { HsmSigner, getHsmSigner, setHsmSigner } from './blockchain/signing/hsm-signer';
-import { ConfigError, ProviderUnavailableError } from './utils/errors';
+import { ProviderUnavailableError } from './utils/errors';
 import { setActiveNetwork } from './utils/network-context';
 import { installDbSanitizer } from './utils/db-sanitize';
 import { ensureDbIndexes } from './utils/db-indexes';
@@ -14,124 +14,14 @@ import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
 import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker';
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
-import type { WorkerWalletConfig } from './blockchain/wallet-worker/signers';
 import { activateAgentGrants } from './utils/agent-grants-config';
-import { registerLegacyServicePaths } from './utils/legacy-service-paths';
-
-import { env } from 'process';
+import {
+  autoInitSkipped, loadConfigFromEnv, loadCrawlerConfigFromEnv, loadHsmConfigFromEnv,
+  loadPoolMetadataFetchFromEnv, loadWalletWorkerConfigFromEnv,
+} from './config';
 
 const logger = cds.log('ODATANO');
 
-const VALID_NETWORKS: Network[] = ['mainnet', 'preview', 'preprod'];
-
-/** `cds.requires.odatano-core` as the host app wrote it; nested sections stay raw and are coerced on read. */
-interface OdatanoCoreCdsConfig {
-  network?: string;
-  backends?: string[] | string;
-  blockfrostApiKey?: string;
-  blockfrostCustomBackend?: string;
-  koiosApiKey?: string;
-  ogmiosUrl?: string;
-  odatanoUrl?: string;
-  odatanoApiKey?: string;
-  primaryTimeoutMs?: number;
-  fallbackTimeoutMs?: number;
-  indexTtlMs?: number;
-  hsm?: HsmCdsSection;
-  crawler?: CrawlerCdsSection;
-  walletWorker?: WalletWorkerCdsSection;
-}
-
-/** Numbers and booleans may arrive as strings; the loaders coerce and validate them. */
-type CdsNumber = number | string;
-type CdsBoolean = boolean | string;
-
-interface CrawlerCdsSection {
-  enabled?: CdsBoolean;
-  startSlot?: CdsNumber;
-  startHeight?: CdsNumber;
-  startBlockHash?: string;
-  source?: string;
-  batchSize?: CdsNumber;
-  confirmationDepth?: CdsNumber;
-  pollIntervalMs?: CdsNumber;
-  assetHistory?: CdsBoolean;
-  assetCatalogue?: string;
-  assetEnrichRate?: CdsNumber;
-  epochSnapshots?: CdsBoolean;
-  certificates?: CdsBoolean;
-  utxoSet?: CdsBoolean;
-  authoritative?: CdsBoolean;
-}
-
-interface WalletWorkerCdsSection {
-  enabled?: CdsBoolean;
-  wallets?: unknown;
-  maxConcurrentWallets?: CdsNumber;
-  confirmationDepth?: CdsNumber;
-  confirmationTimeoutMs?: CdsNumber;
-  pollIntervalMs?: CdsNumber;
-  defaultMaxAttempts?: CdsNumber;
-  resubmitOnRollback?: CdsBoolean;
-}
-
-interface HsmCdsSection {
-  enabled?: boolean;
-  pkcs11Module?: string;
-  slot?: number;
-  pin?: string;
-  keyId?: string;
-  keyLabel?: string;
-  requiresRole?: string;
-}
-
-function coreCdsConfig(): OdatanoCoreCdsConfig {
-  const requires = cds.env?.requires as Record<string, OdatanoCoreCdsConfig | undefined> | undefined;
-  return requires?.['odatano-core'] ?? {};
-}
-const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios', 'odatano'];
-
-const CRAWLER_LIMITS = {
-  batchSize: { min: 1, max: 100 },
-  confirmationDepth: { min: 0, max: 2160 },
-  pollIntervalMs: { min: 1000, max: 3_600_000 },
-  assetEnrichRate: { min: 1, max: 20 },
-} as const;
-
-const VALID_ASSET_CATALOGUE_MODES = ['off', 'bare', 'enrich'] as const;
-
-/** Parse a boolean crawler flag that defaults to `fallback` when unset. */
-function crawlerBoolean(raw: unknown, name: string, fallback: boolean): boolean {
-  if (raw === undefined || raw === null) return fallback;
-  if (raw === true || raw === 'true') return true;
-  if (raw === false || raw === 'false') return false;
-  throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be true or false.`);
-}
-
-/** Parse an integer without allowing JavaScript's lossy/implicit coercions. */
-function crawlerInteger(
-  raw: unknown,
-  name: string,
-  min: number,
-  max: number,
-  defaultValue?: number,
-): number | undefined {
-  if (raw == null) return defaultValue;
-  if (
-    (typeof raw !== 'number' && typeof raw !== 'string')
-    || (typeof raw === 'string' && raw.trim() === '')
-  ) {
-    throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be an integer between ${min} and ${max}.`);
-  }
-
-  const parsed = typeof raw === 'number' ? raw : Number(raw);
-  if (!Number.isSafeInteger(parsed) || parsed < min || parsed > max) {
-    throw new ConfigError(`Invalid ${name} "${String(raw)}". Must be an integer between ${min} and ${max}.`);
-  }
-  return parsed;
-}
-
-/** Blockchain components created once at bootstrap and shared across services. */
 interface AppContext {
   cardanoClient: CardanoClient;
   cardanoIndexer: CardanoIndexer;
@@ -172,6 +62,7 @@ async function initializeAppContext(
   if (installDbSanitizer()) logger.debug('DB NUL sanitizer installed');
 
   const cardanoIndexer = new CardanoIndexer(cardanoClient, cardanoTxBuilder);
+  cardanoIndexer.setPoolMetadataFetch(loadPoolMetadataFetchFromEnv());
 
   // HSM signer failure is non-fatal
   if (hsmConfig?.enabled) {
@@ -195,13 +86,9 @@ async function initializeAppContext(
   };
 }
 
-/** Agent-grant feature switch; its own module so src/plugin.ts can read it at load. */
-export { loadAgentGrantsConfig, activateAgentGrants } from './utils/agent-grants-config';
-
 // Standalone mode never loads src/plugin.ts, so swap the auth impl here as well
 // (bin/serve.js imports this file before the middlewares exist). Idempotent.
 activateAgentGrants();
-registerLegacyServicePaths();
 
 /** Throws 503 when uninitialized, with a bootstrap failure appended as cause. */
 export function getAppContext(): AppContext {
@@ -234,6 +121,11 @@ export function getHsmConfig(): HsmConfig | undefined {
   return hsmConfigInstance;
 }
 
+/** What getReadiness() reports about this process: the app context and, when configured, the HSM session. */
+export function readinessParts(): { context: boolean; hsm: boolean | null } {
+  return { context: appContext !== null, hsm: hsmConfigInstance ? getHsmSigner()?.isConnected() === true : null };
+}
+
 // Plugin path. Idempotent, so a second call never creates a duplicate CardanoClient.
 // Tests reinitialize with resetAppContext() or createTestContext().
 export async function initializeFromConfig(config: CardanoClientConfig, protocolParams?: LedgerProtocolParameters, hsmConfig?: HsmConfig): Promise<void> {
@@ -263,29 +155,9 @@ export function resetAppContext(context: AppContext | null): void {
   logger.debug('Application context reset');
 }
 
-// Isolated test context with the given backends.
-// _txBuilderName is ignored and kept for signature compatibility.
-export async function createTestContext(
-  backends: BackendName[],
-  _txBuilderName: TransactionBuilderName = 'buildooor',
-  protocolParams?: LedgerProtocolParameters
-): Promise<AppContext> {
-  const config: CardanoClientConfig = {
-    network: (env.NETWORK as Network) || 'preview',
-    backends,
-    blockfrostApiKey: env.BLOCKFROST_API_KEY || '',
-    blockfrostCustomBackend: env.BLOCKFROST_CUSTOM_BACKEND || undefined,
-    koiosApiKey: env.KOIOS_API_KEY || '',
-    ogmiosUrl: env.OGMIOS_URL || '',
-    odatanoUrl: env.ODATANO_URL || undefined,
-    odatanoApiKey: env.ODATANO_API_KEY || undefined,
-    transactionBuilders: ['buildooor'],
-    primaryTimeoutMs: Number(env.PRIMARY_TIMEOUT_MS) || 30000,   // || intentional: NaN (missing env var) falls back to default
-    fallbackTimeoutMs: Number(env.FALLBACK_TIMEOUT_MS) || 60000,
-    indexTtlMs: Number(env.INDEX_TTL_MS) || 3600000,
-  };
-
-  return await initializeAppContext(config, protocolParams);
+/** Isolated test context: the configuration of the environment with the given backends. */
+export async function createTestContext(backends: BackendName[], protocolParams?: LedgerProtocolParameters): Promise<AppContext> {
+  return await initializeAppContext({ ...loadConfigFromEnv(), backends }, protocolParams);
 }
 
 let shutdownInFlight: Promise<void> | null = null;
@@ -297,6 +169,11 @@ export function shutdownAppContext(): Promise<void> {
 }
 
 async function runShutdown(): Promise<void> {
+  if (submissionReconcilerStarted) {
+    submissionFinalizer().stopSubmissionReconciler();
+    submissionReconcilerStarted = false;
+  }
+
   // Worker and crawler first: their in-flight writes must not hit a torn-down client.
   try {
     await stopWalletWorker();
@@ -327,240 +204,9 @@ async function runShutdown(): Promise<void> {
 }
 
 
-// cds.env.requires["odatano-core"] wins over process.env, which wins over the default.
-// Throws ConfigError for an invalid value.
-export function loadConfigFromEnv(): CardanoClientConfig {
-  const cdsConfig = coreCdsConfig();
-
-  const network = (cdsConfig.network || env.NETWORK || 'preview') as Network;
-  if (!VALID_NETWORKS.includes(network)) {
-    throw new ConfigError(`Invalid NETWORK "${cdsConfig.network || env.NETWORK}". Must be one of: ${VALID_NETWORKS.join(', ')}`);
-  }
-
-  const backendsRaw = cdsConfig.backends ?? env.BACKENDS;
-  const backendStrings: string[] = Array.isArray(backendsRaw) ? backendsRaw
-    : backendsRaw ? String(backendsRaw).split(',').map(b => b.trim()) : ['koios'];
-  const invalidBackends = backendStrings.filter(b => !(VALID_BACKENDS as readonly string[]).includes(b));
-  if (invalidBackends.length > 0) {
-    throw new ConfigError(`Invalid BACKENDS: "${invalidBackends.join(', ')}". Must be one of: ${VALID_BACKENDS.join(', ')}`);
-  }
-  const backends = backendStrings as BackendName[];
-
-  // Buildooor is the sole transaction builder; txBuilders/TX_BUILDERS config is ignored.
-  const txBuilders: TransactionBuilderName[] = ['buildooor'];
-
-  const primaryTimeout = cdsConfig.primaryTimeoutMs ?? env.PRIMARY_TIMEOUT_MS;
-  const fallbackTimeout = cdsConfig.fallbackTimeoutMs ?? env.FALLBACK_TIMEOUT_MS;
-
-  // `!= null`, not truthiness: a CDS-config 0 must reach the <= 0 check.
-  if (primaryTimeout != null && isNaN(Number(primaryTimeout))) {
-    throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a number.`);
-  }
-  if (primaryTimeout != null && Number(primaryTimeout) <= 0) {
-    throw new ConfigError(`Invalid PRIMARY_TIMEOUT_MS "${primaryTimeout}". Must be a positive number.`);
-  }
-  if (fallbackTimeout != null && isNaN(Number(fallbackTimeout))) {
-    throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a number.`);
-  }
-  if (fallbackTimeout != null && Number(fallbackTimeout) <= 0) {
-    throw new ConfigError(`Invalid FALLBACK_TIMEOUT_MS "${fallbackTimeout}". Must be a positive number.`);
-  }
-
-  const blockfrostApiKey = cdsConfig.blockfrostApiKey || env.BLOCKFROST_API_KEY || '';
-  const blockfrostCustomBackend = cdsConfig.blockfrostCustomBackend || env.BLOCKFROST_CUSTOM_BACKEND || '';
-  if (blockfrostCustomBackend && !/^https?:\/\//i.test(blockfrostCustomBackend)) {
-    throw new ConfigError(
-      `Invalid BLOCKFROST_CUSTOM_BACKEND "${blockfrostCustomBackend}". Must be an http(s) URL ` +
-      `(e.g. http://localhost:3010/api/v0).`
-    );
-  }
-  const koiosApiKey = cdsConfig.koiosApiKey || env.KOIOS_API_KEY || '';
-  const ogmiosUrl = cdsConfig.ogmiosUrl || env.OGMIOS_URL || '';
-  const odatanoUrl = cdsConfig.odatanoUrl || env.ODATANO_URL || '';
-  const odatanoApiKey = cdsConfig.odatanoApiKey || env.ODATANO_API_KEY || '';
-  if (odatanoUrl && !/^https?:\/\//i.test(odatanoUrl)) {
-    throw new ConfigError(`Invalid ODATANO_URL "${odatanoUrl}". Must be an http(s) URL (e.g. https://api.preprod.odatano.dev).`);
-  }
-  if (backends.includes('odatano') && !odatanoUrl && network === 'mainnet') {
-    throw new ConfigError('ODATANO_URL is required for the odatano backend on mainnet.');
-  }
-  if (backends.includes('odatano') && !odatanoApiKey) {
-    logger.warn('ODATANO_API_KEY is not set but odatano is listed in BACKENDS; the public API refuses calls without a key');
-  }
-
-  if (backends.includes('blockfrost') && !blockfrostApiKey && !blockfrostCustomBackend) {
-    logger.warn('Neither BLOCKFROST_API_KEY nor BLOCKFROST_CUSTOM_BACKEND is set but blockfrost is listed in BACKENDS');
-  } else if (backends.includes('blockfrost') && blockfrostCustomBackend) {
-    logger.info(`Blockfrost will use customBackend: ${blockfrostCustomBackend}`);
-  }
-  if (backends.includes('ogmios') && !ogmiosUrl) {
-    logger.warn('OGMIOS_URL is not set but ogmios is listed in BACKENDS');
-  }
-
-  return {
-    network,
-    backends,
-    blockfrostApiKey,
-    blockfrostCustomBackend: blockfrostCustomBackend || undefined,
-    koiosApiKey,
-    ogmiosUrl,
-    odatanoUrl: odatanoUrl || undefined,
-    odatanoApiKey: odatanoApiKey || undefined,
-    transactionBuilders: txBuilders,
-    primaryTimeoutMs: Number(primaryTimeout) || 30000,   // || intentional: NaN (missing config) falls back to default
-    fallbackTimeoutMs: Number(fallbackTimeout) || 60000,
-    indexTtlMs: Number(cdsConfig.indexTtlMs ?? env.INDEX_TTL_MS) || 3600000,
-  };
-}
-
-/** From cds.requires.odatano-core.hsm or HSM_* env vars. Undefined when HSM is off. */
-export function loadHsmConfigFromEnv(): HsmConfig | undefined {
-  const cdsConfig = coreCdsConfig();
-  const hsmCds: HsmCdsSection = cdsConfig.hsm ?? {};
-
-  const hsmEnabled = hsmCds.enabled === true || env.HSM_ENABLED === 'true';
-  if (!hsmEnabled) return undefined;
-
-  const pkcs11Module = hsmCds.pkcs11Module || env.HSM_PKCS11_MODULE || '';
-  if (!pkcs11Module) {
-    throw new ConfigError('HSM_PKCS11_MODULE is required when HSM is enabled');
-  }
-
-  const pin = hsmCds.pin || env.HSM_PIN || '';
-  if (!pin) {
-    throw new ConfigError('HSM_PIN is required when HSM is enabled');
-  }
-
-  const slot = Number(hsmCds.slot ?? env.HSM_SLOT ?? 0);
-  if (!Number.isInteger(slot) || slot < 0) {
-    throw new ConfigError(`Invalid HSM slot: "${hsmCds.slot ?? env.HSM_SLOT}": must be a non-negative integer`);
-  }
-
-  // Fail closed: the HSM holds a real signing key, so an explicit role gate is mandatory.
-  const requiresRole = hsmCds.requiresRole || env.HSM_REQUIRES_ROLE || '';
-  if (!requiresRole) {
-    throw new ConfigError('HSM_REQUIRES_ROLE (or cds.requires.odatano-core.hsm.requiresRole) is required when HSM is enabled. Set it to the XSUAA scope name allowed to invoke HSM signing actions');
-  }
-
-  return {
-    enabled: true,
-    pkcs11Module,
-    slot,
-    pin,
-    keyId: hsmCds.keyId || env.HSM_KEY_ID,
-    keyLabel: hsmCds.keyLabel || env.HSM_KEY_LABEL,
-    requiresRole,
-  };
-}
-
-/** From cds.requires.odatano-core.crawler or CRAWLER_* env vars. Off by default. */
-export function loadCrawlerConfigFromEnv(): CrawlerConfig {
-  const cdsConfig = coreCdsConfig();
-  const c: CrawlerCdsSection = cdsConfig.crawler ?? {};
-
-  // A CDS value, including an explicit `false`, wins over the environment.
-  const enabledRaw = c.enabled !== undefined ? c.enabled : env.CRAWLER_ENABLED;
-  let enabled = false;
-  if (enabledRaw === true || enabledRaw === 'true') {
-    enabled = true;
-  } else if (enabledRaw !== undefined && enabledRaw !== false && enabledRaw !== 'false') {
-    throw new ConfigError(`Invalid CRAWLER_ENABLED "${String(enabledRaw)}". Must be true or false.`);
-  }
-
-  const startSlot = crawlerInteger(
-    c.startSlot ?? env.CRAWLER_START_SLOT,
-    'CRAWLER_START_SLOT',
-    0,
-    Number.MAX_SAFE_INTEGER,
-  );
-  const startHeight = crawlerInteger(
-    c.startHeight ?? env.CRAWLER_START_HEIGHT,
-    'CRAWLER_START_HEIGHT',
-    0,
-    Number.MAX_SAFE_INTEGER,
-  );
-
-  const startBlockHashRaw = c.startBlockHash ?? env.CRAWLER_START_HASH;
-  if (startBlockHashRaw != null && (typeof startBlockHashRaw !== 'string' || !/^[0-9a-f]{64}$/i.test(startBlockHashRaw.trim()))) {
-    throw new ConfigError('Invalid CRAWLER_START_HASH. Must be exactly 64 hexadecimal characters.');
-  }
-  const startBlockHash = startBlockHashRaw?.trim() || undefined;
-  const source = (c.source ?? env.CRAWLER_SOURCE ?? 'auto') as CrawlerConfig['source'];
-  const batchSize = crawlerInteger(
-    c.batchSize ?? env.CRAWLER_BATCH_SIZE,
-    'CRAWLER_BATCH_SIZE',
-    CRAWLER_LIMITS.batchSize.min,
-    CRAWLER_LIMITS.batchSize.max,
-    20,
-  )!;
-  const confirmationDepth = crawlerInteger(
-    c.confirmationDepth ?? env.CRAWLER_CONFIRMATION_DEPTH,
-    'CRAWLER_CONFIRMATION_DEPTH',
-    CRAWLER_LIMITS.confirmationDepth.min,
-    CRAWLER_LIMITS.confirmationDepth.max,
-    3,
-  )!;
-  const pollIntervalMs = crawlerInteger(
-    c.pollIntervalMs ?? env.CRAWLER_POLL_INTERVAL_MS,
-    'CRAWLER_POLL_INTERVAL_MS',
-    CRAWLER_LIMITS.pollIntervalMs.min,
-    CRAWLER_LIMITS.pollIntervalMs.max,
-    20_000,
-  )!;
-
-  if (enabled && (startSlot == null || Number.isNaN(startSlot) || !startBlockHash)) {
-    throw new ConfigError(
-      'Crawler is enabled but no start block is configured. Set crawler.startSlot + crawler.startBlockHash ' +
-      '(or CRAWLER_START_SLOT + CRAWLER_START_HASH).'
-    );
-  }
-  if (!['ogmios', 'pagination', 'auto'].includes(source)) {
-    throw new ConfigError(`Invalid CRAWLER_SOURCE "${source}". Must be one of: ogmios, pagination, auto.`);
-  }
-
-  // Analytics coverage: mint/burn and the bare catalogue are free by-products of a crawled
-  // block and on by default; enrichment and epoch snapshots cost provider calls and are opt-in.
-  const assetHistory = crawlerBoolean(
-    c.assetHistory ?? env.CRAWLER_ASSET_HISTORY, 'CRAWLER_ASSET_HISTORY', true,
-  );
-  const assetCatalogue = (c.assetCatalogue ?? env.CRAWLER_ASSET_CATALOGUE ?? 'bare') as CrawlerConfig['assetCatalogue'];
-  if (!VALID_ASSET_CATALOGUE_MODES.includes(assetCatalogue)) {
-    throw new ConfigError(
-      `Invalid CRAWLER_ASSET_CATALOGUE "${assetCatalogue}". Must be one of: ${VALID_ASSET_CATALOGUE_MODES.join(', ')}.`
-    );
-  }
-  const assetEnrichRate = crawlerInteger(
-    c.assetEnrichRate ?? env.CRAWLER_ASSET_ENRICH_RATE,
-    'CRAWLER_ASSET_ENRICH_RATE',
-    CRAWLER_LIMITS.assetEnrichRate.min,
-    CRAWLER_LIMITS.assetEnrichRate.max,
-    2,
-  )!;
-  const epochSnapshots = crawlerBoolean(
-    c.epochSnapshots ?? env.CRAWLER_EPOCH_SNAPSHOTS, 'CRAWLER_EPOCH_SNAPSHOTS', false,
-  );
-  // Certificates + withdrawals are block content (no extra request) but opt-in to keep write volume stable.
-  const certificates = crawlerBoolean(
-    c.certificates ?? env.CRAWLER_CERTIFICATES, 'CRAWLER_CERTIFICATES', false,
-  );
-  // UTxO set: opt-in, inert until a snapshot has been imported (importUtxoSet).
-  const utxoSet = crawlerBoolean(
-    c.utxoSet ?? env.CRAWLER_UTXO_SET, 'CRAWLER_UTXO_SET', false,
-  );
-  // Crawled chain answers misses with 404 instead of a provider call.
-  const authoritative = crawlerBoolean(
-    c.authoritative ?? env.CRAWLER_AUTHORITATIVE, 'CRAWLER_AUTHORITATIVE', false,
-  );
-
-  return {
-    enabled, startSlot, startBlockHash, startHeight, source, batchSize, confirmationDepth, pollIntervalMs,
-    assetHistory, assetCatalogue, assetEnrichRate, epochSnapshots, certificates, utxoSet, authoritative,
-  };
-}
-
 /** Start the crawler if enabled and the app context is ready. Never throws; idempotent. */
 export async function startCrawlerIfConfigured(): Promise<void> {
-  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  if (autoInitSkipped() || !appContext) return;
   let config: CrawlerConfig;
   try {
     config = loadCrawlerConfigFromEnv();
@@ -583,121 +229,9 @@ export async function startCrawlerIfConfigured(): Promise<void> {
   }
 }
 
-const WALLET_WORKER_LIMITS = {
-  maxConcurrentWallets: { min: 1, max: 64 },
-  confirmationDepth: { min: 1, max: 2160 },
-  confirmationTimeoutMs: { min: 30_000, max: 86_400_000 },
-  pollIntervalMs: { min: 500, max: 3_600_000 },
-  maxAttempts: { min: 1, max: 10 },
-} as const;
-
-/** From cds.requires.odatano-core.walletWorker or WALLET_WORKER_* env vars. Off by default. */
-export function loadWalletWorkerConfigFromEnv(): WalletWorkerConfig {
-  const cdsConfig = coreCdsConfig();
-  const w: WalletWorkerCdsSection = cdsConfig.walletWorker ?? {};
-
-  const enabledRaw = w.enabled !== undefined ? w.enabled : env.WALLET_WORKER_ENABLED;
-  let enabled = false;
-  if (enabledRaw === true || enabledRaw === 'true') {
-    enabled = true;
-  } else if (enabledRaw !== undefined && enabledRaw !== false && enabledRaw !== 'false') {
-    throw new ConfigError(`Invalid WALLET_WORKER_ENABLED "${String(enabledRaw)}". Must be true or false.`);
-  }
-
-  let walletsRaw: unknown = w.wallets ?? undefined;
-  if (walletsRaw === undefined && env.WALLET_WORKER_WALLETS) {
-    try {
-      walletsRaw = JSON.parse(env.WALLET_WORKER_WALLETS);
-    } catch {
-      throw new ConfigError('Invalid WALLET_WORKER_WALLETS: must be a JSON array of { walletId, signerType, keyEnv? }.');
-    }
-  }
-  const wallets: WorkerWalletConfig[] = [];
-  if (walletsRaw !== undefined) {
-    if (!Array.isArray(walletsRaw)) {
-      throw new ConfigError('Invalid walletWorker.wallets: must be an array of { walletId, signerType, keyEnv? }.');
-    }
-    for (const entry of walletsRaw) {
-      const walletId = typeof entry?.walletId === 'string' ? entry.walletId.trim() : '';
-      const signerType = entry?.signerType;
-      if (!walletId || (signerType !== 'hsm' && signerType !== 'software')) {
-        throw new ConfigError(`Invalid wallet entry ${JSON.stringify(entry)}: walletId and signerType (hsm|software) are required.`);
-      }
-      if (signerType === 'software' && (typeof entry.keyEnv !== 'string' || !entry.keyEnv.trim())) {
-        throw new ConfigError(`Wallet "${walletId}" is signerType=software but has no keyEnv (name of the env var holding the signing key).`);
-      }
-      if (wallets.some((existing) => existing.walletId === walletId)) {
-        throw new ConfigError(`Duplicate walletId "${walletId}" in walletWorker.wallets.`);
-      }
-      wallets.push({ walletId, signerType, keyEnv: entry.keyEnv });
-    }
-  }
-
-  const maxConcurrentWallets = crawlerInteger(
-    w.maxConcurrentWallets ?? env.WALLET_WORKER_MAX_CONCURRENT,
-    'WALLET_WORKER_MAX_CONCURRENT',
-    WALLET_WORKER_LIMITS.maxConcurrentWallets.min,
-    WALLET_WORKER_LIMITS.maxConcurrentWallets.max,
-    4,
-  )!;
-  const confirmationDepth = crawlerInteger(
-    w.confirmationDepth ?? env.WALLET_WORKER_CONFIRMATION_DEPTH,
-    'WALLET_WORKER_CONFIRMATION_DEPTH',
-    WALLET_WORKER_LIMITS.confirmationDepth.min,
-    WALLET_WORKER_LIMITS.confirmationDepth.max,
-    3,
-  )!;
-  const confirmationTimeoutMs = crawlerInteger(
-    w.confirmationTimeoutMs ?? env.WALLET_WORKER_CONFIRMATION_TIMEOUT_MS,
-    'WALLET_WORKER_CONFIRMATION_TIMEOUT_MS',
-    WALLET_WORKER_LIMITS.confirmationTimeoutMs.min,
-    WALLET_WORKER_LIMITS.confirmationTimeoutMs.max,
-    600_000,
-  )!;
-  const pollIntervalMs = crawlerInteger(
-    w.pollIntervalMs ?? env.WALLET_WORKER_POLL_INTERVAL_MS,
-    'WALLET_WORKER_POLL_INTERVAL_MS',
-    WALLET_WORKER_LIMITS.pollIntervalMs.min,
-    WALLET_WORKER_LIMITS.pollIntervalMs.max,
-    2_000,
-  )!;
-  const defaultMaxAttempts = crawlerInteger(
-    w.defaultMaxAttempts ?? env.WALLET_WORKER_MAX_ATTEMPTS,
-    'WALLET_WORKER_MAX_ATTEMPTS',
-    WALLET_WORKER_LIMITS.maxAttempts.min,
-    WALLET_WORKER_LIMITS.maxAttempts.max,
-    3,
-  )!;
-
-  const resubmitRaw = w.resubmitOnRollback !== undefined ? w.resubmitOnRollback : env.WALLET_WORKER_RESUBMIT_ON_ROLLBACK;
-  let resubmitOnRollback = true;
-  if (resubmitRaw === false || resubmitRaw === 'false') {
-    resubmitOnRollback = false;
-  } else if (resubmitRaw !== undefined && resubmitRaw !== true && resubmitRaw !== 'true') {
-    throw new ConfigError(`Invalid WALLET_WORKER_RESUBMIT_ON_ROLLBACK "${String(resubmitRaw)}". Must be true or false.`);
-  }
-
-  if (enabled && wallets.length === 0) {
-    throw new ConfigError(
-      'Wallet worker is enabled but no wallets are configured. Set walletWorker.wallets (or WALLET_WORKER_WALLETS).',
-    );
-  }
-
-  return {
-    enabled,
-    wallets,
-    maxConcurrentWallets,
-    confirmationDepth,
-    confirmationTimeoutMs,
-    pollIntervalMs,
-    defaultMaxAttempts,
-    resubmitOnRollback,
-  };
-}
-
 /** Start the wallet worker if enabled and the app context is ready. Never throws; idempotent. */
 export async function startWalletWorkerIfConfigured(): Promise<void> {
-  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  if (autoInitSkipped() || !appContext) return;
   let config: WalletWorkerConfig;
   try {
     config = loadWalletWorkerConfigFromEnv();
@@ -720,19 +254,26 @@ export async function startWalletWorkerIfConfigured(): Promise<void> {
   }
 }
 
-// Retries submissions left in 'submitting' because the process died first. Idempotent,
-// because an already submitted tx finalizes on TransactionAlreadySubmittedError. Never throws.
+let submissionReconcilerStarted = false;
+
+function submissionFinalizer(): typeof import('./blockchain/signing/submission-finalizer') {
+  return require('./blockchain/signing/submission-finalizer') as typeof import('./blockchain/signing/submission-finalizer');
+}
+
+// Resolves submits left open by a crash or by a submit without a verdict, now and then on a timer.
+// Idempotent, because a transaction the node already holds finalizes as submitted. Never throws.
 export async function redriveInterruptedSubmissionsIfConfigured(): Promise<void> {
-  if (env.SKIP_AUTO_INIT === 'true' || !appContext) return;
+  if (autoInitSkipped() || !appContext) return;
   // Without a database there are no signing requests to re-drive
   if (!cds.db) return;
   try {
-    const { redriveInterruptedSubmissions } = require('./blockchain/signing/submission-finalizer') as typeof import('./blockchain/signing/submission-finalizer');
-    const attempted = await redriveInterruptedSubmissions();
-    if (attempted > 0) logger.info(`Re-drove ${attempted} interrupted deferred submission(s)`);
+    const attempted = await submissionFinalizer().redriveInterruptedSubmissions();
+    if (attempted > 0) logger.info(`Resolved or retried ${attempted} open submission(s)`);
   } catch (err) {
     logger.error('Failed to re-drive interrupted submissions (non-fatal):', err);
   }
+  submissionFinalizer().startSubmissionReconciler();
+  submissionReconcilerStarted = true;
 }
 
 // Standalone bootstrap; skipped when the plugin already initialized the context.
@@ -740,7 +281,7 @@ cds.on('served', async () => {
   if (appContext) return;
 
   // SKIP_AUTO_INIT: tests with mocked backends
-  if (env.SKIP_AUTO_INIT === 'true') {
+  if (autoInitSkipped()) {
     logger.info('Skipping auto-initialization (SKIP_AUTO_INIT=true)');
     return;
   }

@@ -162,6 +162,51 @@ describe('OgmiosBackend.openChainSync', () => {
     ]);
   });
 
+  describe('size and deposit of a transaction', () => {
+    const mapped = async (over: Record<string, unknown>) => {
+      const { rolled } = await openStream();
+      const base = praosBlock().transactions[0];
+      await captured.handlers!.rollForward(
+        { block: praosBlock({ transactions: [{ ...base, ...over }] }), tip: { slot: 6000, id: 'f'.repeat(64), height: 120 } }, vi.fn());
+      return rolled[0].txs[0];
+    };
+    const registration = { type: 'stakeCredentialRegistration', credential: 'ab'.repeat(28), from: 'verificationKey', deposit: { ada: { lovelace: 2_000_000n } } };
+
+    it('has no size without the bytes, and their length with them', async () => {
+      expect((await mapped({})).size).toBeNull();
+      expect((await mapped({ cbor: '84a40081' })).size).toBe(4);
+    });
+
+    it('reports deposit 0 when nothing in it can move a deposit', async () => {
+      expect((await mapped({})).deposit).toBe('0');
+    });
+
+    it('leaves the deposit open with a certificate or a proposal', async () => {
+      expect((await mapped({ certificates: [registration] })).deposit).toBeNull();
+      expect((await mapped({ proposals: [{}] })).deposit).toBeNull();
+    });
+
+    it('reports deposit 0 for a failed script phase, where no certificate applies', async () => {
+      const failed = await mapped({ spends: 'collaterals', certificates: [registration], collaterals: [{ transaction: { id: 'd'.repeat(64) }, index: 1 }] });
+      expect(failed.deposit).toBe('0');
+    });
+
+    it('carries certificates and withdrawals only when the script phase passed', async () => {
+      const body = { certificates: [registration], withdrawals: { stake_test1uz4wh2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2s5lyzfk: { ada: { lovelace: 7n } } } };
+      const applied = await mapped(body);
+      expect(applied.certificates).toHaveLength(1);
+      expect(applied.withdrawals).toEqual([{ stakeAddress: 'stake_test1uz4wh2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2a2h2s5lyzfk', amount: '7' }]);
+      const failed = await mapped({ ...body, spends: 'collaterals', collaterals: [{ transaction: { id: 'd'.repeat(64) }, index: 1 }] });
+      expect(failed.certificates).toEqual([]);
+      expect(failed.withdrawals).toEqual([]);
+    });
+
+    it('carries the treasury donation', async () => {
+      expect((await mapped({ treasury: { donation: { ada: { lovelace: 5_000_000n } } } })).treasuryDonation).toBe('5000000');
+      expect((await mapped({})).treasuryDonation).toBeNull();
+    });
+  });
+
   it('maps a praos block to BlockData + Transactions and requests the next block', async () => {
     const { rolled } = await openStream();
     const next = vi.fn();

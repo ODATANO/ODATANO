@@ -22,7 +22,7 @@
 
 ### Design Principles
 
-- **Private key isolation** — The server NEVER handles, stores, or has access to private keys. All signing is external.
+- **Private key isolation** — In the external signing flow the server never sees a private key. Two opt-in features sign on the server: the HSM, where the key stays in the module, and the wallet worker's software signer, which holds a key from an environment variable in memory.
 - **Defense in depth** — Multiple independent layers: authentication, authorization, input validation, transport encryption, audit logging.
 - **Least privilege** — Role-based access restricts operations to authorized scopes.
 - **Fail-secure** — Invalid/expired requests and missing auth result in explicit rejection.
@@ -45,9 +45,11 @@ Layer 7: Audit Trail (SigningRequests + SignatureVerifications + TransactionSubm
 |---------|---------|--------------|
 | `CardanoODataService` | Read-only blockchain queries | Low — no state mutation |
 | `CardanoTransactionService` | Transaction building, signing, submission | Medium — involves funds movement preparation |
-| `CardanoSignService` | Transaction signing | High — involves private key operations (HSM) |
+| `CardanoSignService` | Signing requests, signature checks, submission, HSM signing | High — the HSM actions sign with a server-held key |
 | `CardanoIndexerService` | Chain crawler control + read-only cursor/reorg audit | Low read, Medium control — `pauseCrawler`/`resumeCrawler` are Admin-gated |
-| `CardanoWorkerService` | Asynchronous wallet jobs (build → sign → submit) | **Highest** — spends server-held wallets autonomously; HSM wallets additionally require `hsm.requiresRole` |
+| `CardanoWorkerService` | Asynchronous wallet jobs (build → sign → submit) | **Highest** — spends server-held wallets autonomously; a wallet's `requiresRole` limits who may queue jobs, HSM wallets additionally require `hsm.requiresRole` |
+| `CardanoBackendService` | Chain reads, script evaluation and submit in provider shape, for another ODATANO that uses this one as its `odatano` backend | Low read, Medium submit |
+| `CardanoAgentService` | Agent grants: scoped, budgeted tokens an Admin issues (off by default) | Medium — a grant hands allow-listed actions to an agent; administration is Admin-gated and rate limited |
 
 This enables independent security policies per service.
 
@@ -99,18 +101,16 @@ ODATANO uses SAP BTP's XSUAA for production authentication. In development, auth
     {
       "name": "CardanoAdmin",
       "description": "Operate the ODATANO chain crawler and wallet worker",
-      "scope-references": ["$XSAPPNAME.Admin"]
+      "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign", "$XSAPPNAME.Admin"]
     }
   ],
   "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
 }
 ```
 
-`Admin` is deliberately **outside** `CardanoUser` and outside `authorities`: the crawler/worker
-control actions are least-privilege by design, so an operator must be granted `CardanoAdmin`
-explicitly. Omitting the scope or the template — as earlier revisions of this guide did — leaves
-`pauseCrawler` / `resumeCrawler` / `PauseWorker` / `ResumeWorker` unassignable and therefore 403
-for everyone.
+`Admin` is outside `CardanoUser` and outside `authorities`: an operator is granted `CardanoAdmin`
+explicitly. `CardanoAdmin` carries all four scopes, because a service asks for its own role before it
+looks at an operation: `PauseWorker` needs `Transact` and `Admin`.
 
 ### Setup on BTP
 
@@ -127,40 +127,62 @@ SAP CAP provides declarative authorization via `@requires` annotations in CDS.
 
 ### CDS Annotations
 
-All five services (CardanoODataService, CardanoTransactionService, CardanoSignService, CardanoIndexerService, CardanoWorkerService) require an authenticated user at the service level. The state-changing operational actions ARE role-gated: `pauseCrawler` / `resumeCrawler` and `PauseWorker` / `ResumeWorker` carry `@requires: 'Admin'`, and foreign-job visibility on `WalletJobs` is restricted to Admin. Two further gates worth knowing: `VerifyDataSignature` is deliberately `@requires: 'any'` (unauthenticated — it backs wallet login), and `SubmitWalletJob` against an HSM-backed wallet additionally requires the configured `hsm.requiresRole`:
+ODATANO has seven services. Five require an authenticated user at the service level:
+`CardanoODataService`, `CardanoTransactionService`, `CardanoWorkerService`, `CardanoBackendService` and
+`CardanoAgentService`. `CardanoSignService` and `CardanoIndexerService` are `@requires: 'any'` at the service
+level: CAP checks the service before the operation, and each of the two has operations that must answer
+without credentials. Every other element of these two services carries its own requirement.
+
+| Who | What |
+|---|---|
+| Anyone, without credentials | `VerifyDataSignature` (wallet login), `getLiveness()` and `getReadiness()` (probes) |
+| `Read` | `CardanoODataService`, `CardanoBackendService`, and on `CardanoIndexerService`: `SyncState`, `ReorgLog`, `getStatus()` |
+| `Transact` | `CardanoTransactionService`, `CardanoWorkerService`, and on `CardanoBackendService` in addition to `Read`: `EvaluateTransaction`, `SubmitTransaction` |
+| `Sign` | `CardanoSignService` except `VerifyDataSignature` |
+| Any logged-in user | `CardanoAgentService`, whose operations need `Admin` or the calling agent token |
+| `Admin` | `pauseCrawler`, `resumeCrawler`, `importUtxoSet`, every `backfill…` action, `PauseWorker`, `ResumeWorker`, `CreateAgentGrant`, `UpdateAgentGrant`, `RotateAgentGrantToken`, `RevokeAgentGrant`, reading every row of `WalletJobs` and `AgentGrants` |
+| Role named in `hsm.requiresRole` | `SignWithHsm`, `SignAndSubmitWithHsm`, `SubmitWalletJob` for an HSM wallet |
+| Role named in a wallet's `requiresRole` | `SubmitWalletJob` for that wallet |
+
+Two entities are filtered by row:
+
+- `WalletJobs`: a caller sees their own jobs (`createdBy = $user`). A foreign job answers 404, not 403, so
+  the surface does not reveal which job ids exist.
+- `AgentGrants`: an agent token sees its own grant.
 
 ```cds
-@requires: 'authenticated-user'
+@requires: 'Read'
 service CardanoODataService { ... }
 
-@requires: 'authenticated-user'
+@requires: 'Transact'
 service CardanoTransactionService { ... }
 
-@requires: 'authenticated-user'
+@requires: 'any'
 service CardanoSignService {
-    // Deliberately public — backs CIP-8/COSE wallet login, which happens
-    // BEFORE a user has a session. The only unauthenticated endpoint.
+    @requires: 'Sign'
+    action CreateSigningRequest(...) returns SigningRequestResult;   // like every other element
+
+    // Backs wallet login, which happens before a user has a session.
     @requires: 'any'
-    action VerifyDataSignature(...) returns SignatureVerificationResult;
+    action VerifyDataSignature(...) returns { ... };
 }
 
-@requires: 'authenticated-user'
+@requires: 'any'
 service CardanoIndexerService {
-    @readonly entity SyncState as projection on db.CardanoSyncState;
-    @readonly entity ReorgLog  as projection on db.CardanoReorgLog;
+    @requires: 'Read'
+    function getStatus() returns CrawlerStatus;
 
-    function getStatus() returns CrawlerStatus;          // read-only, any authenticated user
+    @requires: 'any'
+    function getLiveness()  returns Liveness;
+    @requires: 'any'
+    function getReadiness() returns Readiness;
 
     @requires: 'Admin'
-    action pauseCrawler()  returns Boolean;
-    @requires: 'Admin'
-    action resumeCrawler() returns Boolean;
+    action pauseCrawler() returns Boolean;                           // like resumeCrawler, importUtxoSet, backfill…
 }
 
-@requires: 'authenticated-user'
+@requires: 'Transact'
 service CardanoWorkerService {
-    // Non-admins see their OWN jobs only; a foreign job answers 404, not 403,
-    // so the surface is not an existence oracle.
     @readonly
     @restrict: [
         { grant: 'READ', to: 'Admin' },
@@ -168,17 +190,54 @@ service CardanoWorkerService {
     ]
     entity WalletJobs as projection on db.CardanoWalletJobs excluding { dedupKey };
 
-    action SubmitWalletJob(...) returns JobSubmissionResult;   // + hsm.requiresRole for HSM wallets
-    action CancelJob(...)       returns Boolean;
+    action SubmitWalletJob(...) returns JobSubmissionResult;         // plus the wallet's requiresRole, plus hsm.requiresRole for HSM wallets
 
     @requires: 'Admin'
-    action PauseWorker()  returns Boolean;
+    action PauseWorker() returns Boolean;                            // like ResumeWorker
+}
+
+@requires: 'Read'
+service CardanoBackendService {
+    @requires: 'Transact'
+    action SubmitTransaction(...) returns LargeString;               // like EvaluateTransaction
+}
+
+@requires: 'authenticated-user'
+service CardanoAgentService {
     @requires: 'Admin'
-    action ResumeWorker() returns Boolean;
+    action CreateAgentGrant(...) returns IssuedGrant;                // like Update, Rotate and Revoke
 }
 ```
 
-The `@requires: 'authenticated-user'` annotation ensures that every request must carry a valid JWT. Beyond that, three gates are enforced **inside CDS/handlers**, not at the router: the `Admin` role on the four control actions, row-level `createdBy = $user` on `WalletJobs`, and the configured `hsm.requiresRole` on every HSM signing path — including `SubmitWalletJob` for an HSM-backed wallet, which returns **403 `ODATANO_FORBIDDEN`** without it. The `Read`/`Transact`/`Sign` scopes in `xs-security.json` may additionally be used for AppRouter-level route protection, but they are not what enforces the above.
+These gates are enforced in CDS and in the handlers, not at the router. A caller without the role gets
+**403 `ODATANO_FORBIDDEN`**. No role stands in for another: `Admin` alone reads nothing, and it does not
+replace `hsm.requiresRole` or a wallet's `requiresRole`.
+
+Where the roles come from:
+
+| Login | Roles |
+|---|---|
+| XSUAA | The scopes of the user's role collections (`CardanoReader`, `CardanoUser`, `CardanoAdmin`) |
+| Docker image | `ODATANO_HTTP_ROLES`, default `Read,Transact,Sign,Admin` for the one configured user |
+| Agent token | `Read`, `Transact`, `Sign`; the grant then decides per operation, and `Admin` is never among them |
+| Plugin in your own CAP project | Whatever your authentication assigns. A user without `Read` gets 403 on every read |
+
+A software worker wallet without `requiresRole` accepts jobs from every user with `Transact`, with any recipient and amount. That fits a deployment whose only login is the operator; the Docker image creates one user with every role. Where several users can transact, set `requiresRole` on the wallet.
+
+### Agent tokens
+
+With `AGENT_GRANTS_ENABLED=true` an Admin can hand an agent a token instead of a user
+(`CreateAgentGrant`). The token travels in the `x-agent-token` header; the server stores its SHA-256.
+
+- A token request runs as `agent:<grantId>` with the single role `agent-grant`, never as the operator.
+  Every `Admin` gate, the HSM actions and grant administration refuse it.
+- Reads and compute-only actions are always allowed. An action on the grant's allow list costs one unit of
+  its daily budget. Everything else is a 403.
+- `CardanoWorkerService` answers every token request with 403: worker wallets sign with server-held keys,
+  and an agent signs its transactions itself.
+- A revoked or expired grant is an unknown token from the next request.
+
+The README section "Agent grants" lists the actions a grant can allow and the administration calls.
 
 ### Per-address data and ownership
 
@@ -218,6 +277,10 @@ at that boundary.
 | ODATANO Admin | CardanoAdmin | Operators who pause/resume the crawler and the wallet worker |
 
 Create role collections in the SAP BTP Cockpit and assign them to users.
+
+The services check all four scopes. A user with `CardanoReader` reads and gets 403 on every build,
+submit and signing operation. The shipped AppRouter routes require a login; the service behind them
+decides by scope.
 
 ---
 

@@ -39,7 +39,7 @@ import {
   TxRedeemer
 } from '../../utils/types';
 
-import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend, EpochStateBackend, EpochLedgerState } from './cardano-backend';
+import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend, EpochStateBackend, EpochLedgerState, RewardAccountStateBackend, AskRewardAccounts } from './cardano-backend';
 
 import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { Network } from '../cardano-client';
@@ -58,6 +58,7 @@ interface OgmiosStakePool {
   margin?: number | string;
   cost?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   rewardAccount?: string;
+  metadata?: { url?: string; hash?: string };
 }
 
 /** Ogmios v6 `DelegateRepresentative`: a registered DRep credential or one of the two predefined DReps. */
@@ -68,6 +69,9 @@ interface OgmiosDelegateRepresentative {
 }
 
 interface OgmiosRewardAccountSummary {
+  from?: 'verificationKey' | 'script';
+  credential?: string;
+  deposit?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   rewards?: { ada?: { lovelace?: number | bigint } } | number | bigint;
   stakePool?: { id?: string };
   delegateRepresentative?: OgmiosDelegateRepresentative;
@@ -114,6 +118,12 @@ function ogmiosDrepToId(d?: OgmiosDelegateRepresentative): string | null {
   if (d.type === 'abstain') return 'drep_always_abstain';
   if (d.type === 'noConfidence') return 'drep_always_no_confidence';
   return d.id ? credentialToDrepId(d.id, d.from === 'script') : null;
+}
+
+// Reward balance of a summary. Ogmios 7.0 answers 0 for an account without a pool delegation,
+// whatever it holds, so that balance is unknown.
+function ogmiosRewardBalance(summary: OgmiosRewardAccountSummary): string | null {
+  return summary.stakePool?.id ? ogmiosValueToLovelaceString(summary.rewards) : null;
 }
 
 /** Lovelace amount from Ogmios' value shapes; v6 returns `{ ada: { lovelace } }` objects. */
@@ -294,6 +304,11 @@ interface OgmiosChainSyncTx {
   redeemers?: { redeemer: string; executionUnits: { memory: number | bigint; cpu: number | bigint }; validator: { purpose: string; index: number } }[];
   /** Witness-set datums: hash -> CBOR hex (original bytes). */
   datums?: Record<string, string>;
+  /** Governance proposals; each locks a deposit. */
+  proposals?: unknown[];
+  treasury?: { donation?: { ada?: { lovelace?: number | bigint } } };
+  /** hex; the serialized transaction, only when Ogmios runs with `--include-transaction-cbor` */
+  cbor?: string;
 }
 /** Ogmios certificate fields we index. Unknown `type` values pass through as the raw kind. */
 interface OgmiosCertificate {
@@ -318,7 +333,9 @@ interface OgmiosPraosBlock {
 }
 
 /** CardanoBackend implementation over an Ogmios WebSocket (local node). */
-export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend, EpochStateBackend {
+type LedgerStateClient = Awaited<ReturnType<typeof createLedgerStateQueryClient>>;
+
+export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, LedgerStateBackend, EpochStateBackend, RewardAccountStateBackend {
   public readonly name = 'ogmios';
   /** Ogmios cannot answer historic queries. The orchestrator skips it for these. */
   public readonly unsupportedMethods: ReadonlySet<string> = new Set([
@@ -692,23 +709,58 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
   private async withLedgerStateAt<T>(
     point: ChainPoint,
     label: string,
-    fn: (client: Awaited<ReturnType<typeof createLedgerStateQueryClient>>) => Promise<T>,
+    fn: (client: LedgerStateClient) => Promise<T>,
   ): Promise<T> {
+    const session = await this.openLedgerStateAt(point, label);
+    try {
+      return await fn(session.client);
+    } finally {
+      await session.close();
+    }
+  }
+
+  /** A connection of its own with the ledger state at `point` acquired. The caller closes it. */
+  private async openLedgerStateAt(point: ChainPoint, label: string): Promise<{ client: LedgerStateClient; close: () => Promise<void> }> {
     const url = new URL(this.ogmiosUrl);
     const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
     const context = await createInteractionContext(
       (err) => logger.error(`[OgmiosBackend] ${label} context error: ${err.message}`),
-      () => { /* closed by shutdown() below */ },
+      () => { /* closed by close() below */ },
       { connection }
     );
-    let client: Awaited<ReturnType<typeof createLedgerStateQueryClient>> | null = null;
     try {
-      client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
-      return await fn(client);
-    } finally {
+      const client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
       // shutdown() closes THIS connection only; the backend's own socket is untouched
-      if (client) { try { await client.shutdown(); } catch { /* best effort */ } }
-      else this.forceCloseContext(context);
+      return { client, close: async () => { try { await client.shutdown(); } catch { /* best effort */ } } };
+    } catch (err) {
+      this.forceCloseContext(context);
+      throw err;
+    }
+  }
+
+  // Reward accounts at `point`. The node lists an account while it is delegated to a pool or a DRep.
+  // Errors of `read` itself pass through unchanged.
+  async rewardAccountsAt<T>(point: ChainPoint, read: (ask: AskRewardAccounts) => Promise<T>): Promise<T> {
+    const session = await handleBackendRequest(() => this.openLedgerStateAt(point, 'account snapshot'), this.name);
+    try {
+      return await read((stakeAddresses) => handleBackendRequest(async () => {
+        if (!stakeAddresses.length) return [];
+        // the node keeps key and script credentials apart and finds a script only under `scripts`
+        const scripts = stakeAddresses.filter(a => decodeShelleyAddress(a).isScript);
+        const keys = scripts.length ? stakeAddresses.filter(a => !scripts.includes(a)) : stakeAddresses;
+        const raw = await session.client.rewardAccountSummaries(
+          { ...(keys.length ? { keys } : {}), ...(scripts.length ? { scripts } : {}) }) as unknown;
+        const summaries = (Array.isArray(raw) ? raw : Object.values(raw as Record<string, unknown>)) as OgmiosRewardAccountSummary[];
+        return summaries.flatMap((s) => (s.credential ? [{
+          stakeAddress: credentialToStakeAddress(s.credential, s.from === 'script', this.network),
+          withdrawableAmount: ogmiosRewardBalance(s),
+          deposit: s.deposit == null ? null : ogmiosValueToLovelaceString(s.deposit),
+          poolId: s.stakePool?.id || null,
+          drepId: ogmiosDrepToId(s.delegateRepresentative),
+        }] : []));
+      }, this.name));
+    } finally {
+      await session.close();
     }
   }
 
@@ -792,7 +844,10 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         pledge: ogmiosValueToLovelaceString(pool.pledge),
         margin: parseOgmiosRatio(pool.margin),
         fixedCost: ogmiosValueToLovelaceString(pool.cost),
-        rewardAccount: pool.rewardAccount || ''
+        rewardAccount: pool.rewardAccount || '',
+        // the node knows where the file is, not what it says
+        metadataUrl: pool.metadata?.url ?? null,
+        metadataHash: pool.metadata?.hash ?? null,
       };
     }, this.name);
   }
@@ -825,11 +880,11 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         activeEpoch: 0,
         // reward-account summaries carry no controlled amount and no withdrawal totals
         controlledAmount: '0',
-        rewardsSum: ogmiosValueToLovelaceString(account.rewards),
+        rewardsSum: ogmiosRewardBalance(account),
         withdrawalsSum: '0',
         reservesSum: '0',
         treasurySum: '0',
-        withdrawableAmount: ogmiosValueToLovelaceString(account.rewards),
+        withdrawableAmount: ogmiosRewardBalance(account),
         poolId: account.stakePool?.id || null,
         drepId: ogmiosDrepToId(account.delegateRepresentative),
         addresses: []
@@ -1393,12 +1448,15 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       fee: spendsCollaterals ? (totalCollateral ?? declaredFee) : declaredFee,
       spendsCollaterals,
       totalCollateral,
-      deposit: '0',
+      // Only certificates and proposals move deposits, and none applies when the script phase failed.
+      // Null leaves the amount to the indexer, which has the spent inputs.
+      deposit: spendsCollaterals || !(tx.certificates?.length || tx.proposals?.length) ? '0' : null,
+      treasuryDonation: tx.treasury?.donation?.ada?.lovelace?.toString() ?? null,
       // The ledger applies no mint when the script phase failed: the body's mint field is
       // declared but never enacted, so a phase-2 failure must report none at all.
       mint: spendsCollaterals ? undefined : this.convertOgmiosValue(tx.mint ?? {}),
-      // chain-sync has no serialized size, and 0 would look like a real size
-      size: null,
+      // null without the bytes: 0 would look like a real size
+      size: tx.cbor ? tx.cbor.length / 2 : null,
       blockTime: slotToPosixSeconds(this.network, block.slot),
       inputs,
       outputs,

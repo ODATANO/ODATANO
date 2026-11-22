@@ -22,7 +22,7 @@ describe('DB_INDEXES', () => {
       expect(i.name.startsWith(i.table.toLowerCase())).toBe(true);
       expect(i.table).toMatch(/^odatano_cardano_[A-Za-z]+$/);
       expect(i.columns).toMatch(/^[A-Za-z_]+( DESC)?(, [A-Za-z_]+( DESC)?)*$/);
-      if (i.postgres) expect(i.postgres).toMatch(/^([A-Za-z_]+, )*[A-Za-z_]+( DESC NULLS LAST)?$/);
+      if (i.postgres) expect(i.postgres).toMatch(/^([A-Za-z_]+, )*[A-Za-z_]+( DESC NULLS LAST| NULLS FIRST)?$/);
     }
   });
 
@@ -47,9 +47,10 @@ describe('DB_INDEXES', () => {
     expect(by['odatano_cardano_AssetHistory:unit, blockHeight DESC']).toBeDefined();
     expect(by['odatano_cardano_LedgerUTxOs:address, createdSlot']).toBeDefined();
     expect(by['odatano_cardano_LedgerUTxOs:address, spentSlot']).toBeDefined();
-    expect(by['odatano_cardano_CardanoWalletJobs:status, priority, createdAt']).toBeDefined();
-    expect(by['odatano_cardano_CardanoWalletJobs:walletId, status, createdAt']).toBeDefined();
-    // a replaced single-column index is dropped, never kept next to its composite
+    // the next due job of one wallet: filter on wallet and status, then the dispatch order
+    expect(by['odatano_cardano_CardanoWalletJobs:walletId, status, priority, createdAt']).toBeDefined();
+    expect(by['odatano_cardano_CardanoWalletJobs:status']).toBeDefined();
+    // a replaced index is dropped, never kept next to its successor
     for (const name of DROPPED_DB_INDEXES) expect(DB_INDEXES.map(i => i.name)).not.toContain(name);
   });
 
@@ -61,6 +62,10 @@ describe('DB_INDEXES', () => {
   it('uses the PostgreSQL spelling (NULLS LAST) only on postgres; SQLite gets the plain DESC', () => {
     const desc = DB_INDEXES.find((i) => i.name === 'odatano_cardano_blocks_height_desc')!;
     expect(indexStatement(desc, 'postgres')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_height_desc ON odatano_cardano_Blocks (height DESC NULLS LAST)');
+    // a nullable column: CAP sorts it ASC NULLS FIRST or DESC NULLS LAST, one index serves both
+    const time = DB_INDEXES.find(i => i.name === 'odatano_cardano_blocks_time')!;
+    expect(indexStatement(time, 'postgres')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_time ON odatano_cardano_Blocks (time NULLS FIRST)');
+    expect(indexStatement(time, 'sqlite')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_time ON odatano_cardano_Blocks (time)');
     expect(indexStatement(desc, 'sqlite')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_height_desc ON odatano_cardano_Blocks (height DESC)');
     expect(indexStatement(desc)).not.toContain('NULLS');
   });

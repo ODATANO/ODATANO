@@ -22,6 +22,7 @@ import {
   DrepEpochSnapshots,
   EpochLedgerSnapshots,
 } from '#cds-models/odatano/cardano';
+import { snapshotAccounts, dropAccountSnapshotsAfter } from './account-snapshots';
 import {
   ensureSyncStateSingleton,
   readCursor,
@@ -79,12 +80,16 @@ export interface CrawlerConfig {
   assetEnrichRate: number;
   /** Snapshot every pool, DRep and the ada pots at each epoch boundary (Ogmios, or Koios at the tip). */
   epochSnapshots: boolean;
+  /** Snapshot the reward accounts with the epoch snapshot. Needs `epochSnapshots` and Ogmios. */
+  accountSnapshots?: boolean;
   /** Write certificates and withdrawals per block. Ogmios and Koios report them, Blockfrost does not. */
   certificates: boolean;
   /** Maintain the Ledger* UTxO tables. Inactive until `importUtxoSet` has run once. */
   utxoSet: boolean;
   /** Answer 404 for chain data the database lacks instead of asking a provider. Needs a full synced crawl. */
   authoritative?: boolean;
+  /** Store a copy of the assets of every input instead of pointing at the stored output. */
+  inputAssetCopies?: boolean;
 }
 
 // Streams the chain forward from a start block and bulk-indexes it.
@@ -112,6 +117,8 @@ export class CardanoCrawler {
   private static readonly CALL_TIMEOUT_MS = 60_000;
   /** Epoch snapshots are ~100 batched provider requests on mainnet; wider bound, cancelled by beginHalt. */
   private static readonly SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
+  /** One node request per 2000 known accounts; an hour covers a mainnet-sized set. */
+  private static readonly ACCOUNT_SNAPSHOT_TIMEOUT_MS = 60 * 60_000;
   /** Backoff after a failed snapshot attempt, doubling up to the cap; the marker is only set on success. */
   private static readonly SNAPSHOT_RETRY_BASE_MS = 30_000;
   private static readonly SNAPSHOT_RETRY_MAX_MS = 10 * 60_000;
@@ -143,6 +150,11 @@ export class CardanoCrawler {
   private blocksThisStream = 0;
   /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
   private streamEnded: (() => void) | null = null;
+  /** An open stream that delivers nothing for this long is taken as dead and reopened at the cursor. */
+  private static CHAIN_SYNC_IDLE_MS = 5 * 60 * 1000;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Reopens since the last block, so a chain that stands still warns once. */
+  private idleReopens = 0;
   private finalStatus: CrawlSyncStatusValue = 'stopped';
   /** Set only by an unrecoverable halt. It clears desiredRunning so restarts stay down. */
   private latchOnHalt = false;
@@ -153,6 +165,7 @@ export class CardanoCrawler {
   private snapshotInFlight: Promise<void> | null = null;
   /** Consecutive snapshot failures and the earliest time the next attempt may run. */
   private snapshotFailures = 0;
+  private accountSnapshotWarned = false;
   private snapshotRetryAfter = 0;
   private leaseHeld = false;
   private leaseHeartbeat: Promise<void> | null = null;
@@ -219,6 +232,7 @@ export class CardanoCrawler {
       certificates: this.config.certificates,
       utxoSet: this.config.utxoSet,
       authoritative: this.config.authoritative ?? false,
+      inputAssetCopies: this.config.inputAssetCopies ?? false,
     });
     // Ledger state is only applied after an imported snapshot.
     if (this.config.utxoSet) {
@@ -282,6 +296,7 @@ export class CardanoCrawler {
     // Background asset enrichment belongs to the crawl and must not outlive it.
     this.indexer.stopAssetEnrichment();
     this.wake?.(); // cancel a pending poll sleep so the loop exits now
+    this.clearIdleWatchdog();
     this.stopChainSyncProbing();
     this.streamEnded?.(); // release the ingest loop, the pipeline is awaited below
     this.leaseWake?.();
@@ -437,18 +452,25 @@ export class CardanoCrawler {
     const handle = await backend.openChainSync(points, {
       rollForward: (block, txs, tip) => this.trackCallback(async () => {
         if (!this.running) return;
-        if (await this.persistBlock(block, txs, tip)) this.blocksThisStream++;
+        this.clearIdleWatchdog();
+        if (await this.persistBlock(block, txs, tip)) {
+          this.blocksThisStream++;
+          this.idleReopens = 0;
+        }
+        this.armIdleWatchdog();
       }),
       rollBackward: (point) => this.trackCallback(async () => {
         if (!this.running) return;
+        this.clearIdleWatchdog();
         // Ogmios always opens the stream with a rollBackward to the intersection. That is the
         // handshake, not a reorg, so only roll back when the point differs from the cursor.
         const current = await cds.tx((tx) => readCursor(tx));
         if (point !== 'origin' && current?.lastBlockHash === point.hash) {
           logger.debug(`chain-sync intersection acknowledged at slot ${point.slot}, no reorg`);
-          return;
+        } else {
+          await this.handleReorg(point);
         }
-        await this.handleReorg(point);
+        this.armIdleWatchdog();
       }),
       onError: (err) => this.trackCallback(async () => {
         if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) return;
@@ -485,7 +507,30 @@ export class CardanoCrawler {
     }
     this.chainSyncHandle = handle;
     this.activeSource = 'chain-sync';
+    this.armIdleWatchdog();
     logger.info(`Crawler running (chain-sync) from ${points[0].hash} (+${points.length - 1} fallback intersection point(s))`);
+  }
+
+  // Starts the silence timer of the open stream. It runs only between frames, so a block that
+  // takes long to store never counts as silence. A half-open socket sends neither frames nor a close.
+  private armIdleWatchdog(): void {
+    this.clearIdleWatchdog();
+    if (!this.running || !this.chainSyncHandle) return;
+    const idleMs = CardanoCrawler.CHAIN_SYNC_IDLE_MS;
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null;
+      if (!this.running || !this.chainSyncHandle) return;
+      const message = `chain-sync delivered nothing for ${Math.round(idleMs / 1000)} s, reopening at the cursor`;
+      if (this.idleReopens++ === 0) logger.warn(message);
+      else logger.debug(message);
+      void this.trackCallback(() => this.endStream(() => { this.reopenStream = true; }));
+    }, idleMs);
+    this.idleTimer.unref?.();
+  }
+
+  private clearIdleWatchdog(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
   }
 
   /** Read and clear the pending frame failure, so each stream starts from a clean slate. */
@@ -512,6 +557,7 @@ export class CardanoCrawler {
   /** Close the current chain-sync stream and hand the decision in `mark` to the ingest loop. */
   private async endStream(mark: () => void): Promise<void> {
     mark();
+    this.clearIdleWatchdog();
     const handle = this.chainSyncHandle;
     this.chainSyncHandle = null;
     if (handle) {
@@ -868,6 +914,7 @@ export class CardanoCrawler {
           logger.warn(`epoch snapshots missing for epochs ${last + 1}..${epoch - 1}: passed outside the snapshot window`);
         }
       }
+      await this.maybeSnapshotAccounts(epoch, at);
       this.snapshotedEpoch = epoch;
       this.snapshotFailures = 0;
       this.snapshotRetryAfter = 0;
@@ -883,6 +930,27 @@ export class CardanoCrawler {
         if (this.running) logger.error(`epoch ${epoch} snapshot failed (retry in ${backoff} ms):`, err);
       })
       .finally(() => { this.snapshotInFlight = null; });
+  }
+
+  // The account snapshot of an epoch, after its pool snapshot. Skipped with one warning without a
+  // backend that reads the ledger at a block.
+  private async maybeSnapshotAccounts(epoch: number, at: { slot: number; time: number; hash: string | null }): Promise<void> {
+    if (!this.config.accountSnapshots) return;
+    const backend = at.hash ? this.client.getRewardAccountStateBackend() : null;
+    if (!backend || !at.hash) {
+      if (!this.accountSnapshotWarned) logger.warn('account snapshots need Ogmios (the ledger at the snapshot block); none is taken');
+      this.accountSnapshotWarned = true;
+      return;
+    }
+    await this.withTimeout(
+      snapshotAccounts({
+        backend, epoch, at: { slot: at.slot, hash: at.hash },
+        withdrawals: this.config.certificates,
+        shouldStop: () => !this.running,
+      }),
+      `snapshotAccounts(${epoch})`,
+      CardanoCrawler.ACCOUNT_SNAPSHOT_TIMEOUT_MS,
+    );
   }
 
   // Roll back in one transaction. Deletes blocks after the fork slot, never by height, and their transactions.
@@ -939,6 +1007,7 @@ export class CardanoCrawler {
 
       // Epoch snapshots read at a rolled-back block describe a chain that no longer exists.
       if (blocksRolledBack > 0) {
+        await dropAccountSnapshotsAfter(tx, forkSlot);
         for (const entity of [PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots]) {
           await tx.run(DELETE.from(entity).where({ snapshotSlot: { '>': forkSlot } }));
         }

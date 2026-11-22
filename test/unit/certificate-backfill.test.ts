@@ -32,6 +32,7 @@ vi.mock('@sap/cds', () => {
         },
       },
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
+      DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, _where: where }) }) },
     },
   };
   return { default: cdsMock, ...cdsMock };
@@ -54,6 +55,8 @@ const tx = (hash: string, certs: any[] = [], withdrawals: any[] = []) => ({ hash
 /** Blocks the index knows, by hash and slot: the intersection query (newest below) and the batch range query. */
 function fakeIndex(known: Record<string, number>) {
   dbRun.mockImplementation(async (q: Q) => {
+    // every delete finds two stored rows
+    if (q._op === 'DELETE') return 2;
     if (q.entity !== 'odatano.cardano.Blocks') return undefined;
     const w = q._where;
     if (q._op === 'SELECT.one') {
@@ -129,6 +132,24 @@ describe('backfillCertificates', () => {
     expect(upserts[1].entries).toEqual([{ tx_hash: 't1', stakeAddress: 'stake1', lovelace: '5' }]);
     expect(upserts[2].entries).toEqual([{ tx_hash: 't4', certIndex: 1, kind: 'vote_delegation', stakeAddress: 'stake1', poolId: null, drepId: 'drep1', deposit: null, epoch: null }]);
     expect(progress).toEqual([1, 1, 2]);   // one report per batch; the skipped block's batch reports the unchanged count
+  });
+
+  it('removes the stored rows of a transaction whose script phase failed', async () => {
+    fakeIndex({ start: 100, b1: 110 });
+    const failed = { ...tx('bad'), spendsCollaterals: true };
+    const { client } = fakeClient([
+      [block(110, 'b1'), [tx('ok', [{ certIndex: 0, kind: 'stake_registration', stakeAddress: 'stake1' }]), failed]],
+      [block(120, 'past'), []],
+    ]);
+
+    const r = await backfillCertificates({ client, fromSlot: 110, toSlot: 110, batchBlocks: 1 });
+
+    const deletes = dbRun.mock.calls.map(([q]) => q).filter((q) => q._op === 'DELETE');
+    expect(deletes.map((q) => [q.entity, q._where])).toEqual([
+      ['odatano.cardano.TransactionCertificates', { tx_hash: { in: ['bad'] } }],
+      ['odatano.cardano.TransactionWithdrawals', { tx_hash: { in: ['bad'] } }],
+    ]);
+    expect(r).toMatchObject({ certificates: 1, removed: 4 });
   });
 
   it('ends at the first block past toSlot when no block sits on it, and rejects a stream error', async () => {

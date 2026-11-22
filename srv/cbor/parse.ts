@@ -7,9 +7,6 @@ import { Cbor, CborArray, CborBytes, CborMap, CborTag, CborUInt } from '@harmoni
 import type { CborObj } from '@harmoniclabs/cbor';
 import { TransactionValidationError } from '../utils/errors';
 import { ERROR_CODES } from '../utils/error-codes';
-import { installRedeemerTagPatch } from './redeemer-tag-patch';
-
-installRedeemerTagPatch();
 
 export interface ParsedInput {
   txHash: string;
@@ -98,12 +95,12 @@ export interface ParsedTransaction {
 // Throws TX_PARSE_FAILED on malformed CBOR.
 export function parseTransaction(cborHex: string): ParsedTransaction {
   let tx: Tx;
-  let raw: BodyFields;
+  let networkId: number | null;
   try {
     // one decode for both readers; keepRef keeps the original bytes for the body hash and datums
     const parsed = Cbor.parse(Buffer.from(cborHex, 'hex'), { keepRef: true });
     tx = Tx.fromCborObj(parsed);
-    raw = readBodyFields(parsed);
+    networkId = readNetworkId(parsed);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     throw new TransactionValidationError(
@@ -118,7 +115,7 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
   return {
     txHash: body.hash.toString(),
     network: normalizeNetwork(body.network),
-    networkId: raw.networkId,
+    networkId,
     inputs: body.inputs.map(mapInput),
     outputs: body.outputs.map(mapOutput),
     validityStart: body.validityIntervalStart != null ? body.validityIntervalStart.toString() : null,
@@ -133,10 +130,10 @@ export function parseTransaction(cborHex: string): ParsedTransaction {
       lovelace: w.amount.toString(),
     })),
     certificates: (body.certs ?? []).map(mapCertificate),
-    votingProcedures: raw.votingProcedures,
-    proposalProcedures: raw.proposalProcedures,
-    treasuryDonation: raw.treasuryDonation,
-    currentTreasuryValue: raw.currentTreasuryValue,
+    votingProcedures: (body.votingProcedures?.procedures ?? []).reduce((n, voter) => n + voter.votes.length, 0),
+    proposalProcedures: (body.proposalProcedures ?? []).length,
+    treasuryDonation: body.donation?.toString() ?? null,
+    currentTreasuryValue: body.currentTreasuryValue?.toString() ?? null,
     requiredSigners: (body.requiredSigners ?? []).map((s) => s.toString()),
     scriptDataHash: body.scriptDataHash ? body.scriptDataHash.toString() : null,
     isValid: tx.isScriptValid,
@@ -198,37 +195,11 @@ function mapCertificate(cert: Certificate, index: number): ParsedCertificate {
   return { index, type: certTypeToString(cert.certType) };
 }
 
-type BodyFields = Pick<ParsedTransaction, 'networkId' | 'votingProcedures' | 'proposalProcedures' | 'treasuryDonation' | 'currentTreasuryValue'>;
-
-/** Body fields 15 and 19 to 22 as they stand in the bytes. `Tx.fromCbor` drops 19 to 22 and maps any network byte other than 0 to mainnet. */
-function readBodyFields(parsed: CborObj): BodyFields {
+/** Body field 15 as it stands in the bytes. `Tx.fromCbor` maps any network byte other than 0 to mainnet. */
+function readNetworkId(parsed: CborObj): number | null {
   const body = parsed instanceof CborArray ? parsed.array[0] : undefined;
-  const field = (key: number): CborObj | undefined =>
-    body instanceof CborMap ? body.map.find(e => e.k instanceof CborUInt && e.k.num === BigInt(key))?.v : undefined;
-  const uint = (key: number): bigint | null => {
-    const v = field(key);
-    return v instanceof CborUInt ? v.num : null;
-  };
-
-  // voting_procedures = { voter => { gov_action_id => voting_procedure } }
-  const voting = field(19);
-  const votes = voting instanceof CborMap
-    ? voting.map.reduce((n, e) => n + (e.v instanceof CborMap ? e.v.map.length : 0), 0)
-    : 0;
-  const networkId = uint(15);
-  return {
-    networkId: networkId == null ? null : Number(networkId),
-    votingProcedures: votes,
-    proposalProcedures: setItems(field(20)).length,
-    treasuryDonation: uint(22)?.toString() ?? null,
-    currentTreasuryValue: uint(21)?.toString() ?? null,
-  };
-}
-
-/** Items of a CBOR set, with or without the Conway set tag 258. */
-function setItems(obj: CborObj | undefined): CborObj[] {
-  const inner = obj instanceof CborTag ? obj.data : obj;
-  return inner instanceof CborArray ? inner.array : [];
+  const value = body instanceof CborMap ? body.map.find(e => e.k instanceof CborUInt && e.k.num === 15n)?.v : undefined;
+  return value instanceof CborUInt ? Number(value.num) : null;
 }
 
 /** Inline datum bytes as they stand in the transaction; decoding and re-encoding may change them. */

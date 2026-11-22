@@ -1,7 +1,7 @@
 import cds from '@sap/cds';
 
 import { TEST_FIXTURES } from './test-fixtures';
-import { setupKoiosMocks, nock } from './mock-helpers';
+import { setupKoiosMocks, setupTxInfoMock, nock } from './mock-helpers';
 // Native require: must share the module graph of the cds.test()-booted CAP
 // server, or the handlers never see the app context set by createTestContext.
 const { createTestContext, resetAppContext, shutdownAppContext } =
@@ -156,6 +156,8 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     describe('Error Scenarios', () => {
 
       it('SubmitSignedTransaction - should return 400 for invalid signature', async () => {
+        // a refusal is final only for a transaction that is not on chain
+        setupTxInfoMock([]);
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {
@@ -194,6 +196,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
         expect(status).to.equal(503);
         expect(data).to.have.property('error');
+        expect(data.error.code).to.equal('ODATANO_SUBMIT_OUTCOME_UNKNOWN');
         expect(data.error).to.have.property('message');
         expect(data.error.message).to.match(/timeout|unavailable|failed/i);
         expect(scope.isDone()).to.be.true;
@@ -243,6 +246,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
       });
 
       it('SubmitSignedTransaction - should return 400 for malformed CBOR', async () => {
+        setupTxInfoMock([]);
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {

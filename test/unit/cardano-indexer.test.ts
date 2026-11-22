@@ -376,14 +376,15 @@ describe('CardanoIndexer', () => {
     it('lists the newest hashes on every call and fetches only those the address has no row for', async () => {
       mockClient.getAddressTransactionHashes.mockResolvedValue(['tx_new', 'tx_old']);
       mockRun.mockResolvedValueOnce([{ address_address: 'addr_test1q', tx_hash: 'tx_old', blockTime: 1000 }]);
-      const ensure = vi.spyOn(indexer as any, 'ensureTransactionsIndexed')
-        .mockResolvedValue(new Map([['tx_new', { hash: 'tx_new', inputs: [], outputs: [] }]]));
+      mockRun.mockResolvedValueOnce([]); // no stored transaction for tx_new
+      mockClient.getTransactionsBatch.mockResolvedValue(new Map([['tx_new', { hash: 'tx_new', inputs: [], outputs: [] }]]));
       const mapAddressTransactions = vi.mocked((await import('../../srv/utils/mappers')).mapAddressTransactions);
       mapAddressTransactions.mockReturnValue([{ address_address: 'addr_test1q', tx_hash: 'tx_new', blockTime: 2000 } as any]);
 
       const result = await indexer.indexAddressTransactions(mockTx as any, 'addr_test1q', 10) as any[];
 
-      expect(ensure).toHaveBeenCalledWith(expect.anything(), ['tx_new']);
+      expect(mockClient.getTransactionsBatch).toHaveBeenCalledTimes(1);
+      expect(mockClient.getTransactionsBatch).toHaveBeenCalledWith(['tx_new']);
       expect(result.map(r => r.tx_hash)).toEqual(['tx_new', 'tx_old']);
     });
 
@@ -392,14 +393,75 @@ describe('CardanoIndexer', () => {
       mockRun.mockResolvedValueOnce([
         { tx_hash: 'a', blockTime: 1000 }, { tx_hash: 'b', blockTime: 1000 },
       ]);
-      const ensure = vi.spyOn(indexer as any, 'ensureTransactionsIndexed');
-
       const result = await indexer.indexAddressTransactions(mockTx as any, 'addr_test1q', 10) as any[];
 
-      expect(ensure).not.toHaveBeenCalled();
       expect(mockClient.getTransactionsBatch).not.toHaveBeenCalled();
       // same block: the tx hash orders them
       expect(result.map(r => r.tx_hash)).toEqual(['b', 'a']);
+    });
+  });
+
+  describe('provider calls come before the first write', () => {
+    // Call order of the last provider or builder call and of the first write of one operation.
+    const callOrder = async () => {
+      const cds = (await import('@sap/cds')).default as any;
+      const writes = [cds.ql.UPSERT.into, cds.ql.INSERT.into, cds.ql.UPDATE.entity]
+        .flatMap((fn: any) => fn.mock.invocationCallOrder as number[]);
+      const calls = [...Object.values(mockClient), ...Object.values(mockTxBuilder)]
+        .flatMap((fn: any) => (fn?.mock?.invocationCallOrder ?? []) as number[]);
+      return { lastCall: Math.max(...calls), firstWrite: Math.min(...writes), writes: writes.length };
+    };
+
+    it('stores an address after its newest transactions were read', async () => {
+      mockClient.getAddress.mockResolvedValue({ amount: [], utxos: [] });
+      mockClient.getAddressTransactionHashes.mockResolvedValue(['tx1']);
+      mockRun.mockResolvedValueOnce([]).mockResolvedValueOnce([]); // no address row, no stored transaction
+      mockClient.getTransactionsBatch.mockResolvedValue(new Map([['tx1', { hash: 'tx1' }]]));
+
+      await indexer.indexAddress(mockTx as any, 'addr_test1q');
+
+      const { lastCall, firstWrite, writes } = await callOrder();
+      expect(mockClient.getTransactionsBatch).toHaveBeenCalledWith(['tx1']);
+      expect(writes).toBeGreaterThan(1);
+      expect(lastCall).toBeLessThan(firstWrite);
+    });
+
+    it('stores an account after every address of it was read', async () => {
+      mockClient.getAccount.mockResolvedValue({
+        stakeaddress: 'stake_test1u', withdrawalsSum: '5', addresses: [{ address: 'addr_a' }, { address: 'addr_b' }],
+      });
+      mockClient.getAddress.mockResolvedValue({ amount: [], utxos: [] });
+      mockClient.getAddressTransactionHashes.mockResolvedValue([]);
+
+      await indexer.indexAccount(mockTx as any, 'stake_test1u');
+
+      const { lastCall, firstWrite, writes } = await callOrder();
+      expect(mockClient.getAddress).toHaveBeenCalledTimes(2);
+      expect(writes).toBeGreaterThan(0);
+      expect(lastCall).toBeLessThan(firstWrite);
+    });
+
+    it('stores a block after its epoch was read', async () => {
+      mockClient.getBlock.mockResolvedValue({ hash: 'b1', epoch: 5 });
+      mockClient.getEpoch.mockResolvedValue({ epoch: 5 });
+
+      await indexer.indexBlock(mockTx as any, 'b1');
+
+      const { lastCall, firstWrite, writes } = await callOrder();
+      expect(writes).toBe(2);
+      expect(lastCall).toBeLessThan(firstWrite);
+    });
+
+    it('writes nothing before a build returned', async () => {
+      mockClient.getProtocolParameters.mockResolvedValue({});
+      mockTxBuilder.buildSimpleAdaTransaction.mockResolvedValue({ inputs: [], outputs: [] });
+
+      await indexer.indexSimpleBuildResult(mockTx as any, { senderAddress: 'addr_test1q' } as any);
+
+      const { lastCall, firstWrite, writes } = await callOrder();
+      expect(mockTxBuilder.buildSimpleAdaTransaction).toHaveBeenCalledTimes(1);
+      expect(writes).toBeGreaterThan(0);
+      expect(lastCall).toBeLessThan(firstWrite);
     });
   });
 

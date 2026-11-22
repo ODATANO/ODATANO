@@ -34,10 +34,13 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionWithdrawals: 'TransactionWithdrawals',
   TransactionInputs: 'TransactionInputs',
   TransactionInputAssets: 'TransactionInputAssets',
+  TransactionInputAssetCopies: 'TransactionInputAssetCopies',
   TransactionRedeemers: 'TransactionRedeemers',
   TransactionDatums: 'TransactionDatums',
   TransactionOutputs: 'TransactionOutputs',
   TransactionOutputAssets: 'TransactionOutputAssets',
+  Transactions: 'Transactions',
+  LedgerUTxOs: 'LedgerUTxOs',
 }));
 vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
   readCursor: vi.fn(async () => ({ startSlot: 100, startBlockHash: 'start', lastSlot: 900 })),
@@ -86,7 +89,9 @@ function fakeIndex(inputs: Row[], lovelace: Row[] = [], assets: Row[] = lovelace
     }
     if (q.entity === 'TransactionInputs' && q._op === 'SELECT.many') return inputs;
     if (q.entity === 'TransactionOutputs' && q._op === 'SELECT.many') return outputs;
-    if (q.entity === 'TransactionInputAssets' && q._op === 'SELECT.many') return q._where?.unit === 'lovelace' ? lovelace : assets;
+    // the lovelace of an input is read through the view, the rows to move from the copies
+    if (q.entity === 'TransactionInputAssets' && q._op === 'SELECT.many') return lovelace;
+    if (q.entity === 'TransactionInputAssetCopies' && q._op === 'SELECT.many') return assets;
     return undefined;
   });
 }
@@ -136,6 +141,19 @@ describe('backfillTransactions', () => {
     expect(r).toMatchObject({ blocks: 1, transactions: 1, inputs: 2, redeemers: 1, datums: 1, skipped: 0, atSlot: SLOT });
   });
 
+  it('fills the empty datum of a stored output from the stream, before the inputs are resolved', async () => {
+    fakeIndex([], [], [], [{ txSeq: String(SEQ), outputIndex: 0, utxo_dataHash: 'd'.repeat(64), utxo_inlineDatum: null }]);
+    const outputs = [{ address: 'addrS', amount: [], txHash: T, outputIndex: 0, dataHash: 'd'.repeat(64), inlineDatum: 'd87980', isCollateral: false }];
+    const r = await run([chainTx([], { outputs })]);
+
+    const calls = dbRun.mock.calls.map(c => c[0]);
+    const at = calls.findIndex(q => q._op === 'UPDATE' && q.entity === 'TransactionOutputs');
+    expect(calls[at]).toMatchObject({ _where: { txSeq: String(SEQ), outputIndex: 0 }, _set: { utxo_inlineDatum: 'd87980' } });
+    expect(dbRun.mock.invocationCallOrder[at]).toBeLessThan(resolver.resolveInputs.mock.invocationCallOrder[0]);
+    expect(calls.filter(q => q._op === 'UPDATE').map(q => q.entity)).toEqual(['TransactionOutputs', 'TransactionInputs', 'LedgerUTxOs']);
+    expect(r).toMatchObject({ outputs: 1, inputs: 0 });
+  });
+
   it('leaves a transaction alone whose stored inputs are in another order', async () => {
     // rows written from a provider in a different input order: position 0 holds B's address
     fakeIndex([row(0, { address_address: 'addrB' }), row(1, { address_address: 'addrA' })]);
@@ -156,12 +174,12 @@ describe('backfillTransactions', () => {
     const r = await run([chainTx([bare(A, 0), bare(B, 1)])]);
 
     const ops = dbRun.mock.calls.map(c => c[0]);
-    expect(ops.filter(q => q._op === 'DELETE').map(q => q.entity)).toEqual(['TransactionInputAssets', 'TransactionInputs']);
+    expect(ops.filter(q => q._op === 'DELETE').map(q => q.entity)).toEqual(['TransactionInputAssetCopies', 'TransactionInputs']);
     const rows = upserts('TransactionInputs')[0].entries as Row[];
     expect(rows.map(x => [x.inputIndex, x.spentTxHash, x.address_address])).toEqual([[0, A, 'addrA'], [1, B, 'addrB']]);
     // the empty inline datum is filled on the way
     expect(rows[0].utxoData_inlineDatum).toBe('d87980');
-    const assets = upserts('TransactionInputAssets')[0].entries as Row[];
+    const assets = upserts('TransactionInputAssetCopies')[0].entries as Row[];
     expect(assets.map(a => [a.input_inputIndex, a.asset_quantity])).toEqual([[1, '2000000'], [0, '5000000']]);
     expect(r).toMatchObject({ rewritten: 1, skipped: 0 });
   });
@@ -180,7 +198,7 @@ describe('backfillTransactions', () => {
 
     const rows = upserts('TransactionInputs')[0].entries as Row[];
     expect(rows.map(x => [x.inputIndex, x.address_address, x.isCollateral, x.spentTxHash])).toEqual([[0, 'addrB', true, B]]);
-    expect((upserts('TransactionInputAssets')[0].entries as Row[]).map(a => [a.input_inputIndex, a.asset_quantity])).toEqual([[0, '2000000']]);
+    expect((upserts('TransactionInputAssetCopies')[0].entries as Row[]).map(a => [a.input_inputIndex, a.asset_quantity])).toEqual([[0, '2000000']]);
     expect(r).toMatchObject({ rewritten: 1, skipped: 0 });
   });
 
@@ -227,7 +245,7 @@ describe('backfillTransactions', () => {
     fakeIndex([row(0)]);
     const r = await run([chainTx([bare(B, 1)])]);
     expect(updates()[0]._set).toEqual({ spentTxHash: B, spentOutputIndex: 1, address_address: 'addrB', hasAddresses: true, hasAssets: true });
-    expect(upserts('TransactionInputAssets')[0].entries).toMatchObject([{ input_txSeq: SEQ, input_inputIndex: 0, unit: 'lovelace', asset_quantity: '2000000' }]);
+    expect(upserts('TransactionInputAssetCopies')[0].entries).toMatchObject([{ input_txSeq: SEQ, input_inputIndex: 0, unit: 'lovelace', asset_quantity: '2000000' }]);
     expect(r.inputs).toBe(1);
   });
 

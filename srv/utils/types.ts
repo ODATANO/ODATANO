@@ -24,6 +24,7 @@ export interface TxInputLine {
   amount: Amount[];
   txHash: Hex;
   outputIndex: number;
+  spentTxSeq?: number | null; // optional; null = the spent output is not stored here; txSeq of the transaction that created it
   dataHash?: Hex | null;
   inlineDatum?: string | null;
   referenceScriptHash?: Hex | null;
@@ -126,7 +127,10 @@ export interface Transaction {
   index: number;
   /** What the ledger charged: the declared fee, or on a phase-2 failure the collateral consumed. */
   fee: Lovelace | string;
-  deposit: Lovelace | string;
+  /** Deposits locked minus deposits refunded; null while the source could not tell. */
+  deposit: Lovelace | string | null;
+  /** Lovelace donated to the treasury; only set by sources that report it. */
+  treasuryDonation?: string | null;
   /** True when phase 2 failed and only collateral was consumed. Undefined when the source does not report it. */
   spendsCollaterals?: boolean;
   // null = not declared, the charge is then collateral inputs minus the return.
@@ -245,11 +249,11 @@ export interface AccountData {
   active: boolean;
   activeEpoch: number;
   controlledAmount: string;
-  rewardsSum: string;
+  rewardsSum: string | null; // null = the backend does not report it for this account
   withdrawalsSum: string;
   reservesSum: string;
   treasurySum: string;
-  withdrawableAmount: string;
+  withdrawableAmount: string | null; // null = the backend does not report it for this account
   poolId: string | null;
   drepId: string | null;
   addresses: Address[];
@@ -275,6 +279,15 @@ export interface PoolData {
   margin: number;
   fixedCost: string;
   rewardAccount: string;
+  /** URL of the metadata file as registered; null without one. */
+  metadataUrl?: string | null;
+  /** hex; blake2b-256 the registration names for that file */
+  metadataHash?: string | null;
+  /** From the metadata file; null while it is unknown or failed its checks. */
+  name?: string | null;
+  ticker?: string | null;
+  homepage?: string | null;
+  description?: string | null;
 }
 
 /** DRep information */

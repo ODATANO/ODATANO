@@ -20,13 +20,19 @@ import {
   Credential,
   StakeAddress,
   Hash28,
+  Anchor,
+  GovActionInfo,
+  ProposalProcedure,
+  TxRedeemerTag,
+  Vote,
+  VoterKind,
 } from '@harmoniclabs/buildooor';
 // AuxiliaryData/TxMetadata check `instanceof` against the classes at the dist/tx/metadata
 // paths; the buildooor barrel re-exports the eras/common variants, which fail that check.
 // Import from the paths the library uses internally.
 import { TxMetadata } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadata';
 import { TxMetadatumInt } from '@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum';
-import { Cbor, CborArray, CborMap, CborTag, CborUInt, CborBytes } from '@harmoniclabs/cbor';
+import { Cbor, CborArray, CborMap, CborUInt } from '@harmoniclabs/cbor';
 
 import { parseTransaction } from '../../srv/cbor';
 import { isValidTxCborHex } from '../../srv/utils/validators';
@@ -392,23 +398,41 @@ describe('parseTransaction — value-moving body fields', () => {
     expect(parsed.proposalProcedures).toBe(0);
   });
 
-  it('counts votes and proposals the library decoder drops and keeps the raw network byte', () => {
-    const raw = Cbor.parse(cborHex(buildTx({ outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)] }))) as CborArray;
-    const body = raw.array[0] as CborMap;
-    const voter = new CborArray([new CborUInt(0), new CborBytes(Buffer.from(KEY_HASH_28, 'hex'))]);
-    const vote = (i: number) => ({ k: new CborArray([new CborBytes(Buffer.from(TX_HASH_A, 'hex')), new CborUInt(i)]), v: new CborArray([new CborUInt(1)]) });
-    body.map.push(
-      { k: new CborUInt(19), v: new CborMap([{ k: voter, v: new CborMap([vote(0), vote(1)]) }]) },
-      { k: new CborUInt(20), v: new CborTag(258, new CborArray([new CborUInt(0)])) },
-      { k: new CborUInt(15), v: new CborUInt(2) },
-    );
-    const hex = Buffer.from(Cbor.encode(new CborArray(raw.array))).toString('hex');
+  it('counts votes and proposals and keeps the raw network byte', () => {
+    const anchor = new Anchor({ url: 'https://example.org/a.json', anchorDataHash: TX_HASH_B });
+    const tx = buildTx({
+      outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)],
+      extraBody: {
+        votingProcedures: [{
+          voter: { kind: VoterKind.DRepKeyHash, hash: KEY_HASH_28 },
+          votes: [0, 1].map((index) => ({ govActionId: { id: TX_HASH_A, index }, vote: { vote: Vote.Yes } })),
+        }],
+        proposalProcedures: [new ProposalProcedure({ deposit: 100_000_000_000n, rewardAccount: stakeAddress, govAction: new GovActionInfo(), anchor })],
+      },
+    });
+    // a network byte the library would read as mainnet
+    const raw = Cbor.parse(cborHex(tx)) as CborArray;
+    (raw.array[0] as CborMap).map.push({ k: new CborUInt(15), v: new CborUInt(2) });
 
-    const parsed = parseTransaction(hex);
+    const parsed = parseTransaction(Buffer.from(Cbor.encode(new CborArray(raw.array))).toString('hex'));
 
     expect(parsed.votingProcedures).toBe(2);
     expect(parsed.proposalProcedures).toBe(1);
     expect(parsed.networkId).toBe(2);
+  });
+
+  it('reads voting and proposing redeemers', () => {
+    const raw = Cbor.parse(cborHex(buildTx({ outputs: [makeOutput(TEST_ADDRESS_TESTNET, 5_000_000n)] }))) as CborArray;
+    // Conway map form: { [tag, index]: [data, exUnits] }
+    const entry = (tag: number) => ({
+      k: new CborArray([new CborUInt(tag), new CborUInt(0)]),
+      v: new CborArray([new CborUInt(42), new CborArray([new CborUInt(1_000), new CborUInt(2_000)])]),
+    });
+    raw.array[1] = new CborMap([{ k: new CborUInt(5), v: new CborMap([entry(TxRedeemerTag.Voting), entry(TxRedeemerTag.Proposing)]) }]);
+
+    const parsed = parseTransaction(Buffer.from(Cbor.encode(new CborArray(raw.array))).toString('hex'));
+
+    expect(parsed.witnesses.redeemers).toBe(2);
   });
 
   it('reports empty fields when the body has none of them', () => {

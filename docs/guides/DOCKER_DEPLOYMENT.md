@@ -40,6 +40,10 @@ curl http://localhost:1337/health
 curl http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
+Both ports are published on `127.0.0.1` only. Ogmios has no authentication, so keep `1337` local.
+To serve the API to other hosts, put a reverse proxy in front of `4004` or change the `ports` entry of
+the `odatano` service in `docker-compose.yml`.
+
 ### Backends only
 
 To run just the node + Ogmios and point a local (non-container) ODATANO at them:
@@ -75,18 +79,18 @@ The image runs `NODE_ENV=production` with HTTP basic auth through `@odatano/cap-
 |---|---|---|
 | `ODATANO_HTTP_PASSWORD` | required | Password of the operator user |
 | `ODATANO_HTTP_USER` | `odatano` | Operator user |
-| `ODATANO_HTTP_ROLES` | `Admin` | Comma-separated roles of the operator |
+| `ODATANO_HTTP_ROLES` | `Read,Transact,Sign,Admin` | Comma-separated roles of the user. `Read` alone gives a read-only login |
 | `ODATANO_AUTH` | `basic` | `dummy` = unauthenticated, local testing only |
 
-Anonymous requests reach only `getLiveness()` and `VerifyDataSignature`; everything else is
+Anonymous requests reach only `getLiveness()`, `getReadiness()` and `VerifyDataSignature`; everything else is
 challenged. Agent tokens (`x-agent-token`, `AGENT_GRANTS_ENABLED=true`) pass on the service paths.
 
 ### Database
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`); the schema is deployed on every boot (additive evolution, `ODATANO_DB_DEPLOY=never` skips it) |
-| `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set; seeded on the first boot from the schema the image build deployed |
+| `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`); the schema is brought up to date on every boot (`ODATANO_DB_DEPLOY=never` skips it) |
+| `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set; seeded on the first boot, and brought up to date on every later one |
 | `ODATANO_SQLITE_TIMEOUT_MS` | `5000` | How long a SQLite writer waits for the lock |
 
 Moving an existing SQLite deployment to PostgreSQL: stop the service, then run the image's
@@ -97,43 +101,61 @@ Moving an existing SQLite deployment to PostgreSQL: stop the service, then run t
 docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite
 ```
 
-It deploys the schema, copies every table through CAP and verifies the row counts.
+It brings the SQLite file to the schema of this version, deploys the schema to PostgreSQL, copies
+every table through CAP and verifies the row counts.
 
-**Upgrading a 1.x SQLite deployment to 2.0** still needs the schema delta on the mounted file
-(2.0 adds `CardanoSyncState`, `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`,
-`CardanoAgentGrants`, `CardanoAgentGrantUsage` and a `dedupKey` column): migrating to PostgreSQL
-as above is the simplest way to get it, since the deploy there is additive.
+### Schema changes at start
 
-**Upgrading a database written before the txSeq key layout.** `TransactionInputs`,
-`TransactionOutputs` and their asset tables are keyed by `Transactions.txSeq`
-(`slot * 65536 + txIndex`) instead of the transaction hash. The additive schema deployment cannot
-change a primary key of a table that holds rows, so the first boot of the new image on an existing
-database fails until the data is moved. Stop the service and run the image's `migrate-txseq` mode
-once, then start the new image:
+Every start brings the database to the schema of the image, on PostgreSQL and on SQLite, before the
+service listens. It runs in two parts:
+
+1. The changes CAP's additive deployment refuses, each only where the database still needs it:
+   - `TransactionInputs`, `TransactionOutputs` and their asset tables keyed by `Transactions.txSeq`
+     instead of the transaction hash (databases from before that layout).
+   - `Blocks.time` from text to a timestamp.
+   - The columns `walletId` and `allowedJobKinds` of `CardanoAgentGrants` removed.
+   - The table `TransactionInputAssets` renamed to `TransactionInputAssetCopies`; the old name becomes a
+     view (see "Input assets" in the User Guide).
+2. CAP's additive deployment: new tables, new columns, and every view.
+
+Part 1 runs in one transaction and refuses while a crawler holds its lease, so every instance on
+the database has to be stopped. A SQLite file created by an earlier image has no record of its
+schema (`cds_model`); the first start writes one from the tables and columns the file holds.
+
+On a large database run both parts as a step of their own, so the start itself has nothing left to do:
 
 ```bash
 docker compose stop odatano
-docker compose run --rm --no-deps odatano migrate-txseq --dry-run   # row counts, nothing changed
-docker compose run --rm --no-deps odatano migrate-txseq
+docker compose run --rm --no-deps odatano migrate-schema --dry-run   # the steps that are due, nothing changed
+docker compose run --rm --no-deps odatano deploy-schema              # part 1 and part 2, then exits
 docker compose up -d odatano
 ```
 
-It works on PostgreSQL and SQLite, in one transaction: it fills `Transactions.txSeq`, rebuilds the
-four tables in the new layout (rows copied in key order, row counts compared), recreates the service
-views, refreshes the planner statistics (`ANALYZE`) and stores the new model in `cds_model`. It
-refuses while a crawler holds its lease, and a database already on the new layout is left alone.
-The server recreates the table indexes on its next start, which takes a while on a large database.
-Plan disk space for a second copy of the four tables during the run; on PostgreSQL run
-`VACUUM odatano_cardano_transactions` afterwards (the txSeq update leaves dead rows there).
-Measured: 68 million rows (preview, 540 000 blocks) in 15 minutes on a 1 GB PostgreSQL. A plugin deployment runs
-`node node_modules/@odatano/core/scripts/migrate-txseq.mjs` with its own `db` configuration. A
-SQLite file headed for PostgreSQL is migrated first, then copied with `migrate`.
+`migrate-schema` without `--dry-run` runs part 1 alone. The views are missing from then until part 2
+ran, so a program that reads the database directly has to wait for it.
+
+What to plan for:
+
+- The steps of part 1 cannot be undone, and an earlier image does not run on the changed database.
+  Back up the database before the first start of this version; the backup is the only way back.
+- `Blocks.time` rewrites the table and its indexes once. Measured on a copy of a mainnet database:
+  9.7 million rows in 1.6 to 2.7 minutes, 3.5 GB of write-ahead log.
+- The txSeq step copies four tables: plan disk space for a second copy of them, and on PostgreSQL run
+  `VACUUM (PARALLEL 0) odatano_cardano_transactions` afterwards. Measured: 68 million rows in 15 minutes
+  on a 1 GB PostgreSQL. Without `PARALLEL 0` the PostgreSQL container needs a `shm_size` above
+  `maintenance_work_mem`.
+- The other steps change no rows.
+- The server recreates its table indexes on the next start, which takes a while on a large database.
+
+A plugin deployment runs `node node_modules/@odatano/core/scripts/migrate-schema.mjs` with its own `db`
+configuration and then `cds deploy`.
 
 ### Health probes
 
 ```bash
 curl http://localhost:1337/health                                    # Ogmios: 200 near tip, 202 while syncing
 curl http://localhost:4004/odata/v4/cardano-indexer/getLiveness\(\)    # API liveness, no credentials (Docker/compose healthcheck)
+curl http://localhost:4004/odata/v4/cardano-indexer/getReadiness\(\)   # 200 ready, 503 while context, database or a configured HSM is missing
 curl http://localhost:4004/odata/v4/cardano-indexer/getStatus\(\)      # crawler cursor + progress (if enabled)
 curl http://localhost:4004/odata/v4/cardano-worker/GetWorkerStatus\(\) # worker state + queue depth (if enabled)
 ```
@@ -188,6 +210,7 @@ WALLET_WORKER_ENABLED=false
 # signerType hsm | software; the software key is read from the env var named in keyEnv
 # (plain 64-hex or AES-256-GCM iv:tag:ciphertext) and never persisted.
 WALLET_WORKER_WALLETS=
+# Optional per wallet: "requiresRole":"<role>". Only callers with that role may queue jobs for it.
 WALLET_WORKER_MAX_CONCURRENT=4
 WALLET_WORKER_CONFIRMATION_DEPTH=3
 WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000

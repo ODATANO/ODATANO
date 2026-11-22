@@ -2,11 +2,11 @@ import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { BackendError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { validateJsonWithLimits, validatePlutusJson, PLUTUS_JSON_FIELDS, isAssetUnit } from '../../utils/validators';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields } from '../../utils/tx-request-parsers';
+import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseOutputList, parseMintActionPolicyFields } from '../../utils/tx-request-parsers';
 import { applyScriptParameters } from '../../utils/tx-build-helper';
 import { scriptHashToEnterpriseAddress } from '../../utils/mappers';
 import { MIN_FULL_ASSET_UNIT_LENGTH } from '../../utils/const';
-import type { JSONValue, MintAction, TxBuildRequest } from '../../utils/types';
+import type { JSONValue, MintAction, TxBuildPlutusRequest, TxBuildRequest } from '../../utils/types';
 import type { Network } from '../cardano-client';
 import type { WalletJobKindValue } from './job-store';
 
@@ -360,6 +360,29 @@ function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
   delete clean.lockOnScript;
 
   return clean as TxBuildRequest;
+}
+
+/** Most recipients one payout job takes; the transaction size limit may be reached earlier. */
+export const MAX_PAYOUT_OUTPUTS = 150;
+
+// payout: the outputs of `outputsJson` in the given order, paid from the wallet in one transaction.
+// Entries read like those of BuildPlutusTransaction. No script runs.
+export function preparePayoutRequest(raw: RawRequest): TxBuildPlutusRequest {
+  requirePresent(raw, ['senderAddress', 'outputsJson']);
+  if (typeof raw.outputsJson !== 'string') fail('outputsJson must be a JSON string');
+  const outputs = takeParsed(parseOutputList(raw.outputsJson, 'outputsJson', MAX_PAYOUT_OUTPUTS));
+  if (!outputs) fail('outputsJson must list at least one output');
+  return {
+    network: raw.network as Network,
+    senderAddress: raw.senderAddress as string,
+    changeAddress: raw.changeAddress as string | undefined,
+    scriptInputs: [],
+    outputs,
+    forceInputs: takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson')),
+    protectInputs: takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson')),
+    validityStartMs: raw.validityStartMs as string | undefined,
+    validityEndMs: raw.validityEndMs as string | undefined,
+  };
 }
 
 /** Raw job request → TxBuildRequest for the matching build method; malformed payloads throw 400 INVALID_INPUT. */

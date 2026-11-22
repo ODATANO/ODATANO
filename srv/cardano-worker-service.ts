@@ -3,6 +3,7 @@ import { handleRequest } from './utils/backend-request-handler';
 import { BackendError, NotFoundError, rejectInvalid, rejectMissing } from './utils/errors';
 import { ERROR_CODES } from './utils/error-codes';
 import { validateJsonWithLimits } from './utils/validators';
+import { answerNumbersAsText } from './utils/result-numbers';
 import {
   getWalletWorker,
   isWalletWorkerRunning,
@@ -15,25 +16,28 @@ import {
   insertJob,
   markCancelled,
   readWallet,
+  runWithoutAmbientTx,
   type WalletJobKindValue,
   type WalletJobRow,
 } from './blockchain/wallet-worker/job-store';
-import { getCardanoClient, getCardanoIndexer, getHsmConfig, loadWalletWorkerConfigFromEnv } from './server';
+import { getCardanoClient, getCardanoIndexer, getHsmConfig } from './server';
+import { loadWalletWorkerConfigFromEnv } from './config';
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 import { SubmitWalletJob, CancelJob, GetJobStatus } from '#cds-models/CardanoWorkerService';
 
 const logger = cds.log('CardanoWorkerService');
 
+const TERMINAL_JOB_STATUS: ReadonlySet<string> = new Set(['confirmed', 'failed', 'cancelled']);
+const JOB_WAIT_POLL_MS = 1000;
+
 function isAdmin(req: Request): boolean {
   return req.user?.is?.('Admin') ?? false;
 }
 
-/** The HSM role a caller lacks for an HSM-backed wallet, the same gate SignWithHsm applies; null when none is missing. */
-function missingHsmRole(req: Request, signerType: string | undefined): string | null {
-  if (signerType !== 'hsm') return null;
-  const requiresRole = getHsmConfig()?.requiresRole;
-  if (!requiresRole || req.user?.is(requiresRole)) return null;
-  return requiresRole;
+/** The first role the caller lacks for this wallet: its own requiresRole, then hsm.requiresRole on an HSM wallet. */
+function missingWalletRole(req: Request, wallet: { signerType?: string; requiresRole?: string | null } | undefined): string | null {
+  const roles = [wallet?.requiresRole, wallet?.signerType === 'hsm' ? getHsmConfig()?.requiresRole : null];
+  return roles.find((role) => role && !req.user?.is(role)) ?? null;
 }
 
 function toJobStatus(job: WalletJobRow) {
@@ -55,6 +59,7 @@ function toJobStatus(job: WalletJobRow) {
 
 /** CardanoWorkerService handlers: job submission and status, worker control. */
 module.exports = (srv: cds.Service) => {
+  answerNumbersAsText(srv);
 
   // SubmitWalletJob: queue an async transaction job; returns the jobId immediately.
   srv.on(SubmitWalletJob, async (req) => {
@@ -85,20 +90,20 @@ module.exports = (srv: cds.Service) => {
     }
 
     // Role gate on this instance's config, mirroring the sign service's 403.
-    const configuredRole = missingHsmRole(req, config.wallets.find((w) => w.walletId === walletId)?.signerType);
+    const configuredRole = missingWalletRole(req, config.wallets.find((w) => w.walletId === walletId));
     if (configuredRole) {
-      return req.reject(403, `SubmitWalletJob on HSM-backed wallet "${walletId}" requires role '${configuredRole}'`);
+      return req.reject(403, `SubmitWalletJob on wallet "${walletId}" requires role '${configuredRole}'`);
     }
 
     return handleRequest(req, async (db) => {
       const wallet = await readWallet(db, walletId);
       if (!wallet) return rejectInvalid(req, 'SubmitWalletJob', `Unknown wallet "${walletId}": configured wallets are registered at worker start`, 'walletId');
       if (!wallet.enabled) return rejectInvalid(req, 'SubmitWalletJob', `Wallet "${walletId}" is disabled`, 'walletId');
-      // Registered row too: another instance may run the HSM wallet this one has no config for.
-      const registeredRole = missingHsmRole(req, wallet.signerType);
+      // Registered row too: another instance may run the wallet this one has no config for.
+      const registeredRole = missingWalletRole(req, wallet);
       if (registeredRole) {
         throw new BackendError(
-          `Wallet "${walletId}" is HSM-backed and requires role '${registeredRole}'`,
+          `SubmitWalletJob on wallet "${walletId}" requires role '${registeredRole}'`,
           403, ERROR_CODES.FORBIDDEN, undefined, undefined, 'walletId'
         );
       }
@@ -139,17 +144,24 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
-  // GetJobStatus: scoped to the creator unless Admin.
+  // GetJobStatus: scoped to the creator unless Admin. With waitMs it answers once the job is
+  // confirmed, failed or cancelled, or when the time is up. Each read has its own transaction,
+  // so a waiting request holds no database connection.
   srv.on(GetJobStatus, async (req) => {
-    const { jobId } = req.data;
+    const { jobId, waitMs } = req.data;
     if (!jobId) return rejectInvalid(req, 'GetJobStatus', 'jobId is required', 'jobId');
+    const deadline = Date.now() + Number(waitMs ?? 0);
 
-    return handleRequest(req, async (db) => {
-      const job = await getJobById(db, jobId);
-      if (!job || (!isAdmin(req) && job.createdBy !== req.user?.id)) {
-        throw new NotFoundError(`Job ${jobId}`); // see CancelJob: reject() here becomes a 500
+    return handleRequest(req, async () => {
+      for (;;) {
+        const job = await runWithoutAmbientTx(() => cds.tx((tx) => getJobById(tx, jobId)));
+        if (!job || (!isAdmin(req) && job.createdBy !== req.user?.id)) {
+          throw new NotFoundError(`Job ${jobId}`); // see CancelJob: reject() here becomes a 500
+        }
+        const timeUp = Date.now() + JOB_WAIT_POLL_MS > deadline || req.http?.res.destroyed === true;
+        if (TERMINAL_JOB_STATUS.has(job.status) || timeUp) return toJobStatus(job);
+        await new Promise((resolve) => setTimeout(resolve, JOB_WAIT_POLL_MS));
       }
-      return toJobStatus(job);
     });
   });
 

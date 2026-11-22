@@ -39,7 +39,6 @@ const GRANT: AgentGrantRow = {
   ID: '11111111-1111-4111-8111-111111111111',
   userId: 'alice',
   allowedActions: '["BuildSimpleAdaTransaction"]',
-  walletId: null,
   isActive: true,
 };
 

@@ -266,7 +266,6 @@ function makeClient(backends: Array<'blockfrost' | 'koios' | 'ogmios'>) {
     blockfrostApiKey: 'test-key',
     koiosApiKey: '',
     ogmiosUrl: 'ws://localhost:1337',
-    transactionBuilders: ['buildooor'],
     primaryTimeoutMs: 1000,
     fallbackTimeoutMs: 1000,
     indexTtlMs: 1000,

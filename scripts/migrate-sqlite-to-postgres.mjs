@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // Copies an ODATANO SQLite database into PostgreSQL through CAP. Stop every writer first.
-// The target must be empty unless --force, which appends. Unknown source tables stop the run
-// unless --ignore-unknown. Row counts per table are compared at the end.
+// The source file is brought to the schema of this version, then copied. The target must be empty
+// unless --force, which appends. Unknown source tables stop the run unless --ignore-unknown.
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -23,6 +25,14 @@ const BATCH = Math.max(1, Number(arg('--batch', '500')) || 500);
 
 if (!fs.existsSync(FROM)) { console.error(`source SQLite file not found: ${FROM}`); process.exit(2); }
 if (!TO || !/^postgres(ql)?:\/\//i.test(TO)) { console.error('a postgres:// target is required (--to or ODATANO_DB_URL)'); process.exit(2); }
+
+// The copy reads the source with the model of this version.
+if (!DRY) {
+    const env = { ...process.env, CDS_CONFIG: JSON.stringify({ requires: { db: { kind: 'sqlite', credentials: { url: FROM } } } }) };
+    const deploy = fileURLToPath(new URL('../docker/deploy-schema.mjs', import.meta.url));
+    const deployed = spawnSync(process.execPath, ['--no-warnings=ExperimentalWarning', deploy], { env, stdio: 'inherit' });
+    if (deployed.status !== 0) { console.error(`the source ${FROM} could not be brought to the schema of this version`); process.exit(1); }
+}
 
 const cds = require('@sap/cds');
 const { postgresCredentials, postgresKind } = await import(new URL('../docker/cds-config.mjs', import.meta.url).href);
@@ -51,7 +61,7 @@ for (const d of entities) {
     plan.push({ entity: d.name, table, source: countOf(table), target: Number(dstCount), def: d });
 }
 const unknown = [...srcTables]
-    .filter(t => !modelTables.has(t) && !t.startsWith('sqlite_'))
+    .filter(t => !modelTables.has(t) && !t.startsWith('sqlite_') && t !== 'cds_model')
     .map(t => ({ table: t, rows: countOf(t) }));
 
 console.log(`source ${FROM}`);

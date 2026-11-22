@@ -1,5 +1,5 @@
 # Simple Docker build for ODATANO - matches CI setup
-FROM node:22.23.4-alpine
+FROM node:22.23.5-alpine
 
 # Build arguments for versioning
 ARG VERSION=0.1.0
@@ -26,16 +26,18 @@ RUN npm rebuild pkcs11js || echo "pkcs11js native build skipped (optional; HSM u
 # and the runtime image has no TypeScript loader. `npm run build` emits into dist/, which nothing serves.
 RUN npm run build:plugin
 
-# Deploy database
-RUN npm run db:deploy
+# The SQLite seed, deployed with schema evolution so a volume started from it can take later versions
+RUN node --no-warnings=ExperimentalWarning docker/deploy-schema.mjs
 
-# The DB adapters are devDependencies but this image serves from one, so both are re-added after the prune,
-# at the versions in package-lock.json. Deleting the devDependencies block first is required. Otherwise the
-# install restores every dev dependency, and --omit=dev would drop the sqlite adapter itself.
+# The DB adapters are devDependencies but this image serves from one, so both become dependencies of the
+# image's manifest, at the versions in package-lock.json. The lockfile entries of @sap/cds-dk go first:
+# the PostgreSQL adapter names it as an optional peer, and npm keeps an optional peer the lockfile holds.
 RUN ADAPTERS="$(node -p 'const p = require("./package-lock.json").packages; ["@cap-js/sqlite", "@cap-js/postgres"].map(n => n + "@" + p["node_modules/" + n].version).join(" ")')" \
  && npm prune --omit=dev \
  && npm pkg delete devDependencies \
- && npm install --no-save --ignore-scripts $ADAPTERS
+ && node -e 'const fs = require("fs"); const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8")); for (const k of Object.keys(lock.packages)) if (/^node_modules\/@sap\/cds-dk(\/|$)/.test(k)) delete lock.packages[k]; fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2));' \
+ && npm install --ignore-scripts --save-exact $ADAPTERS \
+ && npm ls --all > /dev/null
 
 # Add metadata labels
 LABEL org.opencontainers.image.version="${VERSION}" \
