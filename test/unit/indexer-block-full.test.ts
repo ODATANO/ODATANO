@@ -12,6 +12,8 @@ let blocksAtHeight: string[] = [];
 let referencedBlocks: string[] = [];
 /** Transactions the stale-seq range check finds at this block's txSeq keys. */
 let seqRangeRows: Array<{ hash: string; txSeq: string }> = [];
+/** Transactions stored by hash elsewhere on the chain (a rollback moved them). */
+let storedByHash: Array<{ hash: string; txSeq: string }> = [];
 /** The crawler cursor the ledger anchor verification reads (readCursor is mocked below). */
 let cursorRow: { lastSlot: number; lastBlockHash: string | null; utxoSet: { appliedSlot: number | null } } | null =
   { lastSlot: 5000, lastBlockHash: 'h', utxoSet: { appliedSlot: null } };
@@ -26,7 +28,8 @@ const mockTx = {
       // hash -> txSeq lookup of input resolution; the stale-seq range check finds nothing
       if ((q.where as { txSeq?: unknown }).txSeq) return seqRangeRows;
       const hashes = (q.where as { hash?: { in: string[] } }).hash?.in ?? [];
-      return hashes.includes('prev'.padEnd(64, '0')) ? [{ hash: 'prev'.padEnd(64, '0'), txSeq: PREV_SEQ }] : [];
+      const moved = storedByHash.filter(r => hashes.includes(r.hash));
+      return hashes.includes('prev'.padEnd(64, '0')) ? [{ hash: 'prev'.padEnd(64, '0'), txSeq: PREV_SEQ }, ...moved] : moved;
     }
     if (q._op === 'SELECT.many' && q.entity === 'TransactionOutputs') {
       // prior-block output for input resolution: prevTx#0 belongs to addrPrev
@@ -111,6 +114,8 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
 vi.mock('#cds-models/odatano/cardano', () => ({
   Assets: 'AssetsTable',
+  // the block row is written to the table, under the name the assertions use
+  Blocks: 'Block',
   // transaction-rows (hash -> txSeq lookup, stale-seq delete)
   Transactions: 'Transactions', TransactionInputs: 'TransactionInputs', TransactionInputAssets: 'TransactionInputAssets',
   TransactionInputAssetCopies: 'TransactionInputAssetCopies',
@@ -168,6 +173,7 @@ beforeEach(() => {
   blocksAtHeight = [];
   referencedBlocks = [];
   seqRangeRows = [];
+  storedByHash = [];
   mockTx.run.mockClear();
 });
 
@@ -293,9 +299,21 @@ describe('CardanoIndexer.indexBlockFull — txSeq keys', () => {
     await indexer.indexBlockFull(mockTx as never, blockData(), [tx(ours)]);
 
     const range = runs.find(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { txSeq?: unknown }).txSeq);
-    expect(range?.where).toEqual({ txSeq: { between: 5000 * 65536, and: 5000 * 65536 } });
+    // the whole slot, so another fork's transaction at a higher index is found too
+    expect(range?.where).toEqual({ txSeq: { between: 5000 * 65536, and: 5001 * 65536 - 1 } });
     expect(deletesOf('TransactionOutputs')[0].where).toEqual({ txSeq: { in: [String(5000 * 65536)] } });
     expect(deletesOf('Transactions')[0].where).toEqual({ hash: { in: ['fork'.padEnd(64, '0')] } });
+  });
+
+  it('deletes the rows of a transaction of this block that is stored at another position', async () => {
+    const { indexer } = makeIndexer();
+    const ours = 'k4'.padEnd(64, '0');
+    storedByHash = [{ hash: ours, txSeq: String(4000 * 65536 + 3) }];
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [tx(ours)]);
+
+    expect(deletesOf('TransactionOutputs')[0].where).toEqual({ txSeq: { in: [String(4000 * 65536 + 3)] } });
+    expect(deletesOf('Transactions')[0].where).toEqual({ hash: { in: [ours] } });
   });
 
   it('deletes nothing when the keys belong to the transactions of the block', async () => {
@@ -309,9 +327,28 @@ describe('CardanoIndexer.indexBlockFull — txSeq keys', () => {
   });
 });
 
+// The crawler fetches the epoch before it opens the block transaction.
+async function persist(indexer: CardanoIndexer, block: BlockData, txs: Transaction[]): Promise<void> {
+  if (block.epoch != null) await indexer.prefetchCrawlEpoch(block.epoch);
+  await indexer.indexBlockFull(mockTx as never, block, txs);
+}
+
 describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('calls no backend inside the block transaction, also when the epoch was not prefetched', async () => {
+    const getEpoch = vi.fn().mockResolvedValue({
+      epoch: 7, start_time: 1, end_time: 2, first_block_time: 1, last_block_time: 2,
+      block_count: 1, tx_count: 1, output: '0', fees: '0', active_stake: '0',
+    });
+    const { indexer } = makeIndexer(getEpoch);
+
+    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
+
+    expect(getEpoch).not.toHaveBeenCalled();
+    expect(upsertsFor('Block')).toHaveLength(1);
   });
 
   it('reuses the network snapshot and UPSERTs it until a block that wrote it has committed', async () => {
@@ -321,12 +358,12 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     });
     const { indexer } = makeIndexer(getEpoch);
 
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
+    await persist(indexer, blockData({ epoch: 7 }), []);
+    await persist(indexer, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
     expect(upsertsFor('Epoch')).toHaveLength(2); // nothing confirmed yet
 
     indexer.confirmBlockCommit();
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk3'.padEnd(64, '9') }), []);
+    await persist(indexer, blockData({ epoch: 7, hash: 'blk3'.padEnd(64, '9') }), []);
 
     expect(getEpoch).toHaveBeenCalledTimes(1); // memoized — NOT one HTTP call per block
     expect(upsertsFor('Epoch')).toHaveLength(2); // committed row is not written again
@@ -339,8 +376,8 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     }));
     const { indexer } = makeIndexer(getEpoch);
 
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 8 }), []);
+    await persist(indexer, blockData({ epoch: 7 }), []);
+    await persist(indexer, blockData({ epoch: 8 }), []);
 
     expect(getEpoch.mock.calls.map(([epoch]) => epoch)).toEqual([7, 7, 8]);
     const persisted = upsertsFor('Epoch').at(-1)!.entries as Array<Record<string, unknown>>;
@@ -356,12 +393,12 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     const getEpoch = vi.fn().mockRejectedValue(new Error('ogmios: only current epoch'));
     const { indexer } = makeIndexer(getEpoch);
 
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
+    await persist(indexer, blockData({ epoch: 7 }), []);
+    await persist(indexer, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
 
     expect(getEpoch).toHaveBeenCalledTimes(1); // immediate retry is suppressed
     now += 30_001;
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk3'.padEnd(64, '9') }), []);
+    await persist(indexer, blockData({ epoch: 7, hash: 'blk3'.padEnd(64, '9') }), []);
     expect(getEpoch).toHaveBeenCalledTimes(2);
     expect(upsertsFor('Block')).toHaveLength(3); // enrichment failure never blocks persist
   });
@@ -375,9 +412,9 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
     });
     const { indexer } = makeIndexer(getEpoch);
 
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
+    await persist(indexer, blockData({ epoch: 7 }), []);
     now += 5 * 60 * 1000 + 1;
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
+    await persist(indexer, blockData({ epoch: 7, hash: 'blk2'.padEnd(64, '9') }), []);
 
     expect(getEpoch).toHaveBeenCalledTimes(2);
   });
@@ -397,9 +434,10 @@ describe('CardanoIndexer.indexBlockFull — epoch memo', () => {
       }),
     };
 
+    await indexer.prefetchCrawlEpoch(7);
     await expect(indexer.indexBlockFull(failingTx as never, blockData({ epoch: 7 }), []))
       .rejects.toThrow('rollback');
-    await indexer.indexBlockFull(mockTx as never, blockData({ epoch: 7 }), []);
+    await persist(indexer, blockData({ epoch: 7 }), []);
 
     expect(failedWrites.filter(q => q._op === 'UPSERT' && q.entity === 'Epoch')).toHaveLength(1);
     expect(upsertsFor('Epoch')).toHaveLength(1);
@@ -501,7 +539,9 @@ describe('CardanoIndexer.resolveInputs (via indexBlockFull)', () => {
 
     // only the lookup whether the spent output is stored: one key read, no output or asset rows
     expect(runs.filter(q => q._op === 'SELECT.many' && ['TransactionOutputs', 'TransactionOutputAssets'].includes(q.entity))).toHaveLength(0);
-    expect(runs.filter(q => q._op === 'SELECT.many' && q.entity === 'Transactions' && (q.where as { hash?: unknown }).hash)).toHaveLength(1);
+    const spentLookups = runs.filter(q => q._op === 'SELECT.many' && q.entity === 'Transactions'
+      && ((q.where as { hash?: { in: string[] } }).hash?.in ?? []).includes('x'.padEnd(64, '0')));
+    expect(spentLookups).toHaveLength(1);
     const inputRows = upsertsFor('TransactionInputs')[0].entries as Array<Record<string, unknown>>;
     expect(inputRows[0].address_address).toBe('addrKnown');
   });
@@ -956,6 +996,33 @@ describe('CardanoIndexer.indexBlockFull — CIP-68 decimals', () => {
 });
 
 // Crawler-fed ledger state: outpoint on inputs, certificates, withdrawals
+describe('CardanoIndexer.reconcileRolledBackAssets', () => {
+  it('drops by key the bare rows a block after the fork wrote, and recomputes CIP-68 decimals', async () => {
+    const { indexer } = makeIndexer();
+    const GONE = 'f'.repeat(56) + '676f6e65';
+
+    await indexer.reconcileRolledBackAssets(mockTx as never, [REF_UNIT, GONE], 500);
+
+    const deleted = runs.filter(q => q._op === 'DELETE' && q.entity === 'AssetsTable');
+    // validFrom and unit are the key, so the delete never reads the output assets
+    expect(deleted.map(q => q.where)).toEqual([{ validFrom: BARE_ASSET_STAMP, unit: { in: [REF_UNIT, GONE] }, firstSeenSlot: { '>': 500 } }]);
+    expect(runs.filter(q => String(q.entity).endsWith('TransactionOutputAssets'))).toHaveLength(0);
+    // no reference datum is stored any more, so both tokens fall back to the registry value
+    expect(decimalsUpdates().map(q => q.where)).toEqual([{ unit: FT_UNIT }, { unit: RFT_UNIT }]);
+  });
+
+  it('stamps a new bare row with the slot of its block', async () => {
+    const { indexer } = makeIndexer();
+    const hash = 'd5'.padEnd(64, '0');
+    const t = tx(hash, { outputs: [out(hash, 0, [{ unit: UNIT_A, quantity: '5' }])] });
+
+    await indexer.indexBlockFull(mockTx as never, blockData(), [t]);
+
+    const rows = assetWrites()[0].entries as Array<Record<string, unknown>>;
+    expect(rows[0]).toMatchObject({ unit: UNIT_A, firstSeenSlot: blockData().slot });
+  });
+});
+
 describe('CardanoIndexer.indexBlockFull — outpoint, certificates, withdrawals', () => {
   const STAKE = 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn';
   const POOL = 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r';

@@ -2,6 +2,9 @@
  * Constants and mock data for integration tests. No nock dependency, safe for every test.
  */
 
+import { blake2b_256 } from '@harmoniclabs/crypto';
+import { GENESIS_INFOS_BY_NETWORK } from '../../srv/utils/const';
+
 export type BackendType = 'blockfrost' | 'koios' | 'ogmios';
 export type TxBuilderType = 'buildooor';
 
@@ -10,6 +13,45 @@ export interface TestConfiguration {
   txBuilderName: TxBuilderType;
   apiKey?: string;
 }
+
+/** signedTxCbor2 with an expiry `aheadMs` from now; ODATANO sends only transactions with a near expiry. */
+export function withExpiry(aheadMs: number): { cbor: string; hash: string } {
+  const { systemStartPosixMs, slotLengthMs, startSlotNo } = GENESIS_INFOS_BY_NETWORK.preview;
+  const slot = startSlotNo + Math.floor((Date.now() + aheadMs - systemStartPosixMs) / slotLengthMs);
+  const body = 'a500818258205305281b2828b54252969df717d3050ddd81f61e2f62b3125eb326a258c76f78000182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a1011b000000025370c023021a00028d5d031a' + slot.toString(16).padStart(8, '0') + '0f00';
+  const cbor = '84' + body + 'a100d9010281825820e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f584066b33b3bcaf0a5f908d83a13273d570d2d9fbbe240d917985d620fc5d24d3a9e7919426a00a960d10a7e430889eac4f16a55e6520f8804891e9fb9af443c010ef5f6';
+  return { cbor, hash: Buffer.from(blake2b_256(Buffer.from(body, 'hex'))).toString('hex') };
+}
+const TTL_TX = withExpiry(2 * 3_600_000);
+
+const { deriveEd25519PublicKey_sync, getEd25519Signature_sync, blake2b_224 } = require('@harmoniclabs/crypto') as typeof import('@harmoniclabs/crypto');
+const { bech32 } = require('bech32') as typeof import('bech32');
+
+/** A fixed test-only key; its enterprise address pays for and signs the signed-flow fixtures. */
+const TEST_SIGNER_KEY = Uint8Array.from(Buffer.alloc(32, 0x11));
+const TEST_SIGNER_VKEY = Buffer.from(deriveEd25519PublicKey_sync(TEST_SIGNER_KEY)).toString('hex');
+const TEST_SIGNER_KEY_HASH = Buffer.from(blake2b_224(Buffer.from(TEST_SIGNER_VKEY, 'hex'))).toString('hex');
+const TEST_SIGNER_ADDRESS = bech32.encode('addr_test', bech32.toWords(Buffer.from('60' + TEST_SIGNER_KEY_HASH, 'hex')), 2000);
+
+/** Ed25519 signature of `message` with the test signer key. */
+function testSignerSign(message: Uint8Array): Uint8Array {
+  return getEd25519Signature_sync(Uint8Array.from(message), TEST_SIGNER_KEY);
+}
+
+/** The test signer: hex public key, its key hash, its enterprise address, and a signing function. */
+export const TEST_SIGNER = { vkey: TEST_SIGNER_VKEY, keyHash: TEST_SIGNER_KEY_HASH, address: TEST_SIGNER_ADDRESS, sign: testSignerSign };
+
+// The body of the signed-flow fixtures, with an expiry `aheadMs` from now (body key 3).
+function signedFlow(aheadMs: number) {
+  const { systemStartPosixMs, slotLengthMs, startSlotNo } = GENESIS_INFOS_BY_NETWORK.preview;
+  const slot = startSlotNo + Math.floor((Date.now() + aheadMs - systemStartPosixMs) / slotLengthMs);
+  const body = 'a500818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c1031a' + slot.toString(16).padStart(8, '0') + '0f00';
+  const hash = Buffer.from(blake2b_256(Buffer.from(body, 'hex'))).toString('hex');
+  const signature = Buffer.from(testSignerSign(Buffer.from(hash, 'hex'))).toString('hex');
+  const witnessSetCbor = 'a100d9010281825820' + TEST_SIGNER_VKEY + '5840' + signature;
+  return { unsignedTxCbor: '84' + body + 'a0f5f6', signedTxCbor: '84' + body + witnessSetCbor + 'f5f6', witnessSetCbor, hash };
+}
+const SIGNED_FLOW = signedFlow(2 * 3_600_000);
 
 export const TEST_FIXTURES = {
   network: 'preview',
@@ -25,16 +67,23 @@ export const TEST_FIXTURES = {
   transactionMetadataLabel: '1990',
   validUnit: 'eadc69a5d2d1357acc9b9d49ec5390fcdf6e080c7a40139917223dcba971c6765a1acab1d7849f4f032195cf69c4ab486ac6dedec9533103',
   validDrepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',
-  unsignedTxCbor: '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a0f5f6',
-  signedTxCbor1: '84a400818258202db5788ec32bc0fdd0bc308b4787dba2d2dd4930bec4025360647fed6d35bccb010182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a101821b000000023f09f49ca1581cdef68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088eaa146546f6b656e4d1909c4021a000294c10f00a100d9010281825820e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f584068f60d60ecf7dcc99b5e19577015cd4d06f9c0c69d2d0688625c72cdbb2dae67e8a2bf0af85d12f6adda74ee693802ad2ccf7ed2a1ce5ec7c0a872bcf259c206f5f6',
+  unsignedTxCbor: SIGNED_FLOW.unsignedTxCbor,
+  signedTxCbor1: SIGNED_FLOW.signedTxCbor,
   signedTxCbor2: '84a400818258205305281b2828b54252969df717d3050ddd81f61e2f62b3125eb326a258c76f78000182a200583900d090525914fb9bcd35141eaff7b054b9ce105f154ebb73347ff9c7415318a7bcc399479a382e00ef73306801c4d8064df6cc20d2a5ca7189011a00989680a200581d60374610273097b313fade06a30e90c5fb2640074ca0744ce850b8f0a1011b000000025370c023021a00028d5d0f00a100d9010281825820e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f584066b33b3bcaf0a5f908d83a13273d570d2d9fbbe240d917985d620fc5d24d3a9e7919426a00a960d10a7e430889eac4f16a55e6520f8804891e9fb9af443c010ef5f6',
-  witnessSetCbor: 'a100d9010281825820e865ca640ce4c6e92cd45b5e7f4ab37da379f1098eae4dc5e46709a42dec8f2f584068f60d60ecf7dcc99b5e19577015cd4d06f9c0c69d2d0688625c72cdbb2dae67e8a2bf0af85d12f6adda74ee693802ad2ccf7ed2a1ce5ec7c0a872bcf259c206',
+  witnessSetCbor: SIGNED_FLOW.witnessSetCbor,
   txHash: '4a066f70b5e478f7564311fb2762025fa449246e5bdb035d233a8aadb004abc7',
-  txBodyHash: '4a066f70b5e478f7564311fb2762025fa449246e5bdb035d233a8aadb004abc7', // Same as txHash
+  // body hash of the signed-flow fixtures above; they expire two hours after the test start
+  txBodyHash: SIGNED_FLOW.hash,
+  // payment address of the test signer key, the fee payer the signed-flow witness binds to
+  signerAddress: TEST_SIGNER_ADDRESS,
+  signerKeyHash: TEST_SIGNER_KEY_HASH,
   lovelaceAmount: '5000000', // 5 ADA
   highLovelaceAmount: '15000000000', // 15,000 ADA
   invalidLovelaceAmountNegative: '-1000',
   expectedTxHashCbor2: '290c6b9abf9118cdc1fdcbdc6635f94ef0d414c1212c2c95b069a209d32b97cf',
+  // signedTxCbor2 with an expiry two hours from now (body key 3); its witness no longer matches the body
+  signedTxCborWithTtl: TTL_TX.cbor,
+  expectedTxHashWithTtl: TTL_TX.hash,
   invalidAddress: 'invalid_address',
   invalidLovelaceAmount: 'not_a_number',
   policyId: 'def68337867cb4f1f95b6b811fedbfcdd7780d10a95cc072077088ea',

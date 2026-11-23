@@ -91,13 +91,12 @@ describe('BlockfrostBackend.getBlockTransactions', () => {
     expect(txs.map(t => t.hash)).toEqual(['tx1', 'tx2']);
   });
 
-  it('drops hashes the batch could not resolve', async () => {
+  it('refuses a block whose transactions the batch could not all resolve, so the crawler retries it', async () => {
     api.blocksTxsAll.mockResolvedValue(['tx1', 'missing']);
     vi.spyOn(backend, 'getTransactionsBatch').mockResolvedValue(
       new Map([['tx1', { hash: 'tx1' } as never]]),
     );
-    const txs = await backend.getBlockTransactions('blk');
-    expect(txs.map(t => t.hash)).toEqual(['tx1']);
+    await expect(backend.getBlockTransactions('blk')).rejects.toMatchObject({ statusCode: 503 });
   });
 
   it('returns [] for an empty block', async () => {

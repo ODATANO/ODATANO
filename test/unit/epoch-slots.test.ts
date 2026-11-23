@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { epochOfSlot, epochStartSlot, posixToSlot, slotToPosixMs, slotToPosixSeconds } from '../../srv/utils/epoch-slots';
+import fs from 'node:fs';
+import path from 'node:path';
+import { epochOfSlot, epochStartSlot, posixToSlot, rollbackHorizonSlots, slotToPosixMs, slotToPosixSeconds } from '../../srv/utils/epoch-slots';
+import { EPOCH_CONFIG_BY_NETWORK } from '../../srv/utils/const';
 
 describe('slotToPosixSeconds', () => {
   it('anchors each network on its first Shelley slot', () => {
@@ -45,5 +48,19 @@ describe('epoch helpers', () => {
     expect(epochOfSlot('mainnet', 198_869_828)).toBe(657);
     expect(epochOfSlot('mainnet', epochStartSlot('mainnet', 657))).toBe(657);
     expect(epochOfSlot('preprod', 134_720_933)).toBe(315);
+  });
+});
+
+describe('rollbackHorizonSlots', () => {
+  // the ledger fixes an epoch at 10k/f slots, so k, f and the epoch length must agree
+  it.each(['mainnet', 'preprod', 'preview'] as const)('is 3k/f on %s and consistent with its epoch length', (network) => {
+    const { securityParam, activeSlotsCoeff, slotsPerEpoch } = EPOCH_CONFIG_BY_NETWORK[network];
+    expect((10 * securityParam) / activeSlotsCoeff).toBe(slotsPerEpoch);
+    expect(rollbackHorizonSlots(network)).toBe((3 * slotsPerEpoch) / 10);
+  });
+
+  it('takes k and f from the preview genesis the repository ships', () => {
+    const genesis = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../config/preview/cardano-node/shelley-genesis.json'), 'utf8'));
+    expect(EPOCH_CONFIG_BY_NETWORK.preview).toMatchObject({ securityParam: genesis.securityParam, activeSlotsCoeff: genesis.activeSlotsCoeff, slotsPerEpoch: genesis.epochLength });
   });
 });

@@ -69,6 +69,9 @@ services:
     container_name: odatano-service
     ports:
       - "127.0.0.1:4004:4004"
+    volumes:
+      # the SQLite file, kept across `docker compose down` and seen by one-off `run` containers
+      - odatano-data:/data
     environment:
       - NETWORK=preview
       # Ogmios first (live), Koios as historical fallback. Blockfrost: add it to BACKENDS and set BLOCKFROST_API_KEY.
@@ -79,8 +82,9 @@ services:
       - PRIMARY_TIMEOUT_MS=15000
       - FALLBACK_TIMEOUT_MS=15000
       - INDEX_TTL_MS=600000
-      - NODE_ENV=production
       - ODATANO_HTTP_PASSWORD=${ODATANO_HTTP_PASSWORD:?set ODATANO_HTTP_PASSWORD}
+      # reverse proxies in front of the container; the login throttle keys on the client before them
+      - ODATANO_TRUST_PROXY=${ODATANO_TRUST_PROXY:-0}
       - AGENT_GRANTS_ENABLED=${AGENT_GRANTS_ENABLED:-false}
       - PORT=4004
     depends_on:
@@ -104,3 +108,4 @@ networks:
 volumes:
   node-db:
   node-ipc:
+  odatano-data:

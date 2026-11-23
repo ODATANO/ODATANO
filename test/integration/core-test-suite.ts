@@ -40,7 +40,16 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { status, data } = await test.get(`/odata/v4/cardano/NetworkInformation`);
             expect(data.value[0]).to.have.property('maxSupply');
             expect(data.value[0]).to.have.property('circulatingSupply');
+            expect(data.value[0]).not.to.have.property('@odata.nextLink');
             expect(status).to.equal(200);
+          });
+
+          it('GET /NetworkInformation – applies $select, $count and $filter of the client', async () => {
+            const { data } = await test.get(`/odata/v4/cardano/NetworkInformation?$select=network,maxSupply&$count=true`);
+            expect(data['@odata.count']).to.equal(1);
+            expect(Object.keys(data.value[0]).sort()).to.deep.equal(['maxSupply', 'network']);
+            const none = await test.get(`/odata/v4/cardano/NetworkInformation?$filter=network eq 'none'`);
+            expect(none.data.value).to.deep.equal([]);
           });
 
           it('POST /GetNetworkInformation – read current NetworkInformation via action', async () => {
@@ -378,6 +387,23 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect(after.length).to.equal(1);
           });
 
+          it('GET /Transactions(hash=…)/inputs – a cold navigation indexes the transaction and answers its rows', async () => {
+            const CardanoService = await cds.connect.to('CardanoODataService');
+            const { Transactions } = CardanoService.entities as any;
+            expect(await cds.run(SELECT.from(Transactions).where({ hash: TEST_FIXTURES.validTxHash }))).to.have.length(0);
+            const inputs = await test.get(`/odata/v4/cardano/Transactions(hash='${TEST_FIXTURES.validTxHash}')/inputs`);
+            expect(inputs.status).to.equal(200);
+            expect(inputs.data.value.length).to.be.greaterThan(0);
+            const outputs = await test.get(`/odata/v4/cardano/Transactions(hash='${TEST_FIXTURES.validTxHash}')/outputs`);
+            expect(outputs.data.value.length).to.be.greaterThan(0);
+          });
+
+          it('GET /Transactions(hash=…)/metadata – a cold navigation answers the stored metadata', async () => {
+            const { status, data } = await test.get(`/odata/v4/cardano/Transactions(hash='${TEST_FIXTURES.txWithMetadata}')/metadata`);
+            expect(status).to.equal(200);
+            expect(data.value.length).to.be.greaterThan(0);
+          });
+
           it('GET /Transactions(hash=…) – cold key read triggers indexing', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { Transactions } = CardanoService.entities as any;
@@ -638,6 +664,12 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect((data.value ?? data).length).to.equal(after.length);
           });
 
+          it('GET /Addresses(…)/utxos – a cold navigation indexes the address and answers its UTxOs', async () => {
+            const { status, data } = await test.get(`/odata/v4/cardano/Addresses('${TEST_FIXTURES.addressWithFunds}')/utxos`);
+            expect(status).to.equal(200);
+            expect(data.value.length).to.be.greaterThan(0);
+          });
+
           it('POST /GetAssetsByAddress – cold read triggers Asset indexing and persists', async () => {
             const CardanoService = await cds.connect.to('CardanoODataService');
             const { AddressAssets } = CardanoService.entities as any;
@@ -877,6 +909,15 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             expect(status).to.equal(200);
             const after = await cds.run(SELECT.from(Accounts).where({ stakeAddress: TEST_FIXTURES.validStakeAddress }));
             expect(after.length).to.equal(1);
+            // the account row only; its addresses are read through the navigation
+            expect(after[0].addressCount).to.be.a('number');
+          });
+
+          it('GET /Accounts(stakeAddress=…)/Address – a cold navigation answers the addresses of one page', async () => {
+            const { status, data } = await test.get(`/odata/v4/cardano/Accounts(stakeAddress='${TEST_FIXTURES.validStakeAddress}')/Address?$top=2`);
+            expect(status).to.equal(200);
+            expect(data.value.length).to.be.at.most(2);
+            for (const row of data.value) expect(row.stakeAddress).to.equal(TEST_FIXTURES.validStakeAddress);
           });
         });
 
@@ -1116,6 +1157,12 @@ export function createBackendTestSuite(backendConfig: TestConfiguration) {
             const { status, data } = await test.get(`/odata/v4/cardano/LedgerProtocolParameters`);
             expect(status).to.equal(200);
             expect(Array.isArray(data.value)).to.be.true;
+            expect(data.value[0]).not.to.have.property('@odata.nextLink');
+          });
+
+          it('GET /LedgerProtocolParameters – applies $select of the client', async () => {
+            const { data } = await test.get(`/odata/v4/cardano/LedgerProtocolParameters?$select=network,epoch,minFeeA`);
+            expect(Object.keys(data.value[0]).sort()).to.deep.equal(['epoch', 'minFeeA', 'network']);
           });
 
           it('POST /LedgerProtocolParameters– get ProtocolParameter data', async () => {

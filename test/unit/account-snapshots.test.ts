@@ -55,7 +55,9 @@ beforeEach(async () => {
     await cds.run(DELETE.from(`${NS}.${entity}`));
   }
   // two snapshot blocks, one per epoch, and the pool snapshot rows the account snapshot follows
-  await cds.run(INSERT.into(`${NS}.Blocks`).entries([{ hash: hash('a'), slot: 1000 }, { hash: hash('b'), slot: 2000 }]));
+  await cds.run(INSERT.into(`${NS}.Blocks`).entries([
+    { hash: hash('a'), slot: 1000, withdrawalsReported: true }, { hash: hash('b'), slot: 2000, withdrawalsReported: true },
+  ]));
   await cds.run(INSERT.into(`${NS}.EpochLedgerSnapshots`).entries([{ epoch: 10, snapshotSlot: 1000 }, { epoch: 11, snapshotSlot: 2000 }]));
   await cds.run(INSERT.into(`${NS}.LedgerAccounts`).entries(['s1', 's2', 's3', 's4', 's5'].map(stakeAddress => ({ stakeAddress }))));
   // s5 is in both places, s6 is known from a certificate only
@@ -111,6 +113,28 @@ describe('snapshotAccounts', () => {
       ['s3', null], // fell without a stored withdrawal
       ['s4', null], // no row in the previous epoch
     ]);
+  });
+
+  it('writes no marker for an attempt that was told to stop', async () => {
+    let stop = false;
+    const backend = node([account('s1', '100')]).backend;
+    const ask = backend.rewardAccountsAt.bind(backend);
+    // the stop arrives while the node is being asked, after the last page
+    backend.rewardAccountsAt = async (point, read) => { const r = await ask(point, read); stop = true; return r; };
+
+    await expect(snapshotAccounts({ backend, epoch: 10, at: at10, withdrawals: true, shouldStop: () => stop })).rejects.toThrow('stopped');
+
+    expect(await marker(10)).toMatchObject({ accountCount: null, accountSnapshotSlot: null });
+  });
+
+  it('leaves the credited amount empty when a block of the interval was stored without its withdrawals', async () => {
+    await snapshotAccounts({ backend: node([account('s1', '100')]).backend, epoch: 10, at: at10, withdrawals: true });
+    // a block crawled over a source that reports no withdrawals, between the two snapshots
+    await cds.run(INSERT.into(`${NS}.Blocks`).entries({ hash: hash('c'), slot: 1500, withdrawalsReported: null }));
+
+    await snapshotAccounts({ backend: node([account('s1', '150')]).backend, epoch: 11, at: at11, withdrawals: true });
+
+    expect((await rows(11)).map(r => [r.stakeAddress, r.creditedAmount])).toEqual([['s1', null]]);
   });
 
   it('stores an account whose balance the node does not report, and derives nothing from it', async () => {

@@ -3,7 +3,8 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { copySql, isTextType, rebuiltTableSql, unparsableSql } from '../../scripts/migrate-schema.mjs';
+import cds from '@sap/cds';
+import { copySql, grantableByName, isTextType, qualifiedGrantList, rebuiltTableSql, releaseSharedClaimsSql, unparsableSql } from '../../scripts/migrate-schema.mjs';
 
 const ROOT = path.resolve(__dirname, '../..');
 const SCRIPT = path.join(ROOT, 'scripts/migrate-schema.mjs');
@@ -116,6 +117,29 @@ describe('scripts/migrate-schema.mjs: statements', () => {
     const sql = rebuiltTableSql('CREATE TABLE odatano_cardano_Blocks (hash NVARCHAR(64) NOT NULL, time NVARCHAR(255), height INTEGER)', 'odatano_cardano_Blocks', 'b_new');
     expect(sql).toBe('CREATE TABLE b_new (hash NVARCHAR(64) NOT NULL, time TIMESTAMP_TEXT, height INTEGER)');
     expect(() => rebuiltTableSql('CREATE TABLE odatano_cardano_Blocks (hash NVARCHAR(64))', 'odatano_cardano_Blocks', 'b_new')).toThrow('no text column time');
+  });
+});
+
+describe('scripts/migrate-schema.mjs: one idempotency key per user', () => {
+  it('a job still in flight keeps a shared key, else the newest; ties by createdAt, then ID', () => {
+    const db = new DatabaseSync(':memory:');
+    db.exec('CREATE TABLE jobs (ID TEXT PRIMARY KEY, status TEXT, createdAt TEXT, dedupKey TEXT)');
+    const insert = db.prepare('INSERT INTO jobs VALUES (?, ?, ?, ?)');
+    // key k1: a submitted job older than a failed one; the submitted one keeps it
+    insert.run('a1', 'submitted', '2026-11-01T00:00:00.000Z', 'k1');
+    insert.run('a2', 'failed', '2026-11-02T00:00:00.000Z', 'k1');
+    // key k2: none in flight, the newest keeps it
+    insert.run('b1', 'confirmed', '2026-11-01T00:00:00.000Z', 'k2');
+    insert.run('b2', 'failed', '2026-11-03T00:00:00.000Z', 'k2');
+    // key k3: same createdAt, the larger ID keeps it
+    insert.run('c1', 'failed', '2026-11-01T00:00:00.000Z', 'k3');
+    insert.run('c2', 'failed', '2026-11-01T00:00:00.000Z', 'k3');
+    // key k4: two in flight, the newer keeps it
+    insert.run('d1', 'submitting', '2026-11-01T00:00:00.000Z', 'k4');
+    insert.run('d2', 'submitted', '2026-11-02T00:00:00.000Z', 'k4');
+    db.exec(releaseSharedClaimsSql('jobs'));
+    const keys = Object.fromEntries((db.prepare('SELECT ID, dedupKey FROM jobs').all() as Array<{ ID: string; dedupKey: string }>).map((r) => [r.ID, r.dedupKey]));
+    expect(keys).toEqual({ a1: 'k1', a2: 'a2', b1: 'b1', b2: 'k2', c1: 'c1', c2: 'k3', d1: 'd1', d2: 'k4' });
   });
 });
 
@@ -259,4 +283,39 @@ describe('scripts/migrate-schema.mjs: block time, grant columns and input asset 
     expect(r.err).toContain('stop ODATANO first');
     expect(read(file, (db) => kindOf(db, 'odatano_cardano_TransactionInputAssets'))).toBe('table');
   }, 60_000);
+});
+describe('scripts/migrate-schema.mjs: grant allow lists name Service.operation', () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(path.join(tmpdir(), 'odatano-schema-')); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('reads the grantable operations from the model, a shared name under every service that declares it', async () => {
+    const byName = grantableByName(await cds.load('*'));
+    expect([...(byName.get('SubmitTransaction') ?? [])].sort()).toEqual(['CardanoBackendService.SubmitTransaction', 'CardanoTransactionService.SubmitTransaction']);
+    expect(byName.get('VerifySignature')).toEqual(['CardanoSignService.VerifySignature']);
+    expect(byName.has('pauseCrawler')).toBe(false);
+    expect(qualifiedGrantList(['SubmitTransaction', 'CardanoSignService.VerifySignature', 'Gone', 'Other.Gone'], byName).sort())
+      .toEqual(['CardanoBackendService.SubmitTransaction', 'CardanoSignService.VerifySignature', 'CardanoTransactionService.SubmitTransaction']);
+  });
+
+  it('rewrites the names without a service, keeps the qualified ones and needs nothing on a second run', () => {
+    const file = database(dir, `
+CREATE TABLE odatano_cardano_CardanoAgentGrants (ID NVARCHAR(36) NOT NULL, agentLabel NVARCHAR(120), allowedActions NCLOB NOT NULL, PRIMARY KEY(ID));
+CREATE TABLE odatano_cardano_CardanoSyncState (ID NVARCHAR(10) NOT NULL, leaseUntil TIMESTAMP_TEXT, PRIMARY KEY(ID));
+CREATE TABLE odatano_cardano_Blocks (hash NVARCHAR(64) NOT NULL, PRIMARY KEY(hash));
+`, `INSERT INTO odatano_cardano_CardanoAgentGrants VALUES ('g1', 'old', '["BuildSimpleAdaTransaction","SubmitTransaction"]'),
+  ('g2', 'new', '["CardanoTransactionService.SubmitTransaction"]')`);
+
+    expect(migrate(file, '--dry-run').out).toContain('due: CardanoAgentGrants: allow lists name Service.operation (1 grants)');
+    const r = migrate(file);
+
+    expect(r.err).toBe('');
+    expect(r.code).toBe(0);
+    const rows = read(file, (db) => db.prepare('SELECT ID, allowedActions FROM odatano_cardano_CardanoAgentGrants ORDER BY ID').all()) as Array<{ ID: string; allowedActions: string }>;
+    expect(JSON.parse(rows[0].allowedActions).sort()).toEqual([
+      'CardanoBackendService.SubmitTransaction', 'CardanoTransactionService.BuildSimpleAdaTransaction', 'CardanoTransactionService.SubmitTransaction',
+    ]);
+    expect(JSON.parse(rows[1].allowedActions)).toEqual(['CardanoTransactionService.SubmitTransaction']);
+    expect(migrate(file).out).toContain('needs no migration');
+  }, 90_000);
 });

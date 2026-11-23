@@ -1,169 +1,135 @@
-# Lazy On-Demand Indexing (Architecture Concept)
+# Indexing
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
-ODATANO uses a **Lazy On-Demand Indexing** model for Cardano blockchain data.
+ODATANO stores chain data in its database in two ways:
 
-1. **Data is indexed only when first requested**, not pre-synchronized
-2. **Temporal entities** (mutable state) remain valid for the duration defined by `INDEX_TTL_MS` (default: 3600000ms = 1 hour)
-3. **Non-temporal entities** (immutable facts) are stored permanently after first indexing
+- **On demand.** A read that misses the database fetches the data from a backend and stores it. This is
+  the default.
+- **By crawler.** An optional crawler stores every block and its transactions ahead of the requests.
 
-When a client queries data for the first time, ODATANO checks the database, fetches from the blockchain on cache miss, persists the result, and returns the OData response. All subsequent reads within TTL are instant local DB lookups.
+Both write the same tables. Once stored, the data answers `$filter`, `$expand`, `$orderby`, `$top` and
+`$skip` from the database.
 
-## Why This Architecture?
+## Temporal and Permanent Data
 
-- **CAP "Service Facade" Pattern**: Consumer sees clean OData entities while the service transparently handles retrieval and enrichment
-- **No Full Blockchain Sync**: Only actually requested data gets indexed
-- **SAP/ERP Integration**: Supports dynamic, ad-hoc lookups (arbitrary addresses, on-demand transactions, smart contract UTxOs)
-- **Full OData Compatibility**: Once indexed, data supports `$filter`, `$expand`, `$orderby`, `$top`/`$skip`, `$search`
-- **Efficiency**: First read = live blockchain call + persistence; subsequent reads = fast local DB lookup
+**Temporal entities** hold state that changes. They use CAP's `temporal` aspect, which adds the key fields
+`validFrom` and `validTo`. A read returns the row that is valid now. A stored row is valid for
+`INDEX_TTL_MS`, by default one hour. After that the next read fetches the data again and stores a new row;
+the old one stays.
 
-## Temporal vs. Non-Temporal Data
+| Entity | Content |
+|---|---|
+| NetworkInformation | Supply and stake totals |
+| Pools, Dreps | State of a pool, of a DRep |
+| Assets | Supply, mint data and registry fields of a token |
+| Addresses, AddressAssets, AddressUTxOs, UTxOAssets | Balance, assets and UTxOs of an address |
+| Accounts | Delegation and rewards of a stake address |
+| TransactionBuilds | Unsigned transactions built for a caller |
 
-### Temporal Entities (TTL-Based Cache)
+A collection read of `AddressAssets` or `AddressUTxOs` that names the address indexes it on a miss. The
+address is named by a `$filter` on `address_address` or by navigation from `Addresses`.
 
-Mutable blockchain state that can change over time. Uses CAP's `temporal` aspect which adds `validFrom`/`validTo` key fields for automatic time-based versioning. Queries automatically return only currently valid entries.
+**All other entities** have no `validFrom` and `validTo`, and `INDEX_TTL_MS` does not apply to them. Among
+them:
 
-- **NetworkInformation**: Supply, stake amounts
-- **Addresses**: Balance, UTxOs
-- **Accounts**: Stake delegation, rewards
-- **AddressAssets / AddressUTxOs**: Asset holdings, available UTxOs. Filled with the address; a collection read that names the address (`$filter` on `address_address` or navigation from `Addresses`) indexes it on a miss
-- **TransactionBuilds** (M2): Unsigned transaction builds
-- **TransactionSubmissions** (M2): Submission records with status tracking
-- **SigningRequests** (M3): External signing requests (custom 30-min TTL)
+- Blocks, Epochs, Transactions and their inputs, outputs, assets and metadata. An Epochs row is read from
+  the backend again until it is `final`: the epoch has ended and no rollback can reach it.
+- AssetHistory: mint and burn events, keyed by unit and transaction hash
+- The epoch snapshots: one row per pool, DRep and reward account per epoch, and the network figures of
+  that epoch
+- TransactionSubmissions, SigningRequests and SignatureVerifications. A signing request has its own
+  expiry, 30 minutes by default.
 
-### Non-Temporal Entities (Permanent Storage)
+`db/schema.cds` has every entity.
 
-Immutable blockchain facts stored without `validFrom`/`validTo`. Not affected by `INDEX_TTL_MS`.
+## Indexing on Demand
 
-- **Transactions / Blocks / Epochs**: Confirmed, immutable chain data
-- **AssetHistory**: Mint/burn events, keyed (unit, txHash)
-- **PoolEpochSnapshots / DrepEpochSnapshots / EpochLedgerSnapshots**: One dated observation per pool/DRep per epoch, plus the network figures (pots, stake totals) of that epoch
-- **Pools / Dreps**: Registration data
-- **TransactionBuildInputs/Outputs/Assets** (M2): Build details
-- **TransactionSubmissionErrors**: Failed submission records
-- **SignatureVerifications**: Immutable verification audit trail
-- **AddressSigningRequests / AddressTransactionBuilds / AddressTransactions** (M3): Address association entities
+```
+GET /Transactions('<hash>')
+  1. Look for the row. Found: answer from the database.
+  2. Miss: read the transaction from a backend.
+  3. Look again, then store it with its inputs, outputs, assets and metadata.
+  4. Run the client's query and answer.
+```
 
-See `db/schema.cds` for full entity definitions.
+For a temporal entity, step 1 finds only a row that is still valid. An expired row counts as a miss.
 
-## Pre-sync alongside lazy indexing
+A navigation indexes its parent first: `Transactions('<hash>')/inputs`, `Addresses('<a>')/utxos`,
+`Blocks('<hash>')/epoch`, `Accounts('<s>')/Address`, and an input's or output's `address`. `$expand` of
+those targets does the same. All backend reads of a navigation run before its first write.
 
-Lazy indexing stays the default and is unchanged. An **opt-in chain crawler** fills
-the same tables *ahead* of the request instead of on a cache miss:
+The request transaction holds no database connection while the backend answers. That matters on SQLite,
+which has one connection. `indexMissing` in `srv/cardano-service.ts` implements the steps. Each index
+method of `CardanoIndexer` has a `fetch` half that reads and a `store` half that writes.
 
-| | Lazy indexing | Crawler pre-sync |
+## Crawler
+
+The crawler is off by default. `CRAWLER_ENABLED=true` and a start block switch it on; see the
+[Crawler Guide](../guides/CRAWLER_GUIDE.md).
+
+| | On demand | Crawler |
 |---|---|---|
-| Trigger | cache miss on a read | continuous, from a configured start block |
-| Scope | the single entity asked for | every block + its transactions, inputs/outputs/assets/metadata |
-| Freshness rule | TTL on temporal entities | none — the crawled range is **authoritative** |
-| Write path | `CardanoIndexer.index*` per entity | `CardanoIndexer.indexBlockFull` (one UPSERT per table per block, atomic) |
+| Trigger | A read that misses | Continuous, from the start block on |
+| Scope | The entity that was asked for | Every block with its transactions, inputs, outputs, assets and metadata |
+| Expiry | `INDEX_TTL_MS` on temporal entities | None |
+| Write path | `CardanoIndexer.index*` per entity | `CardanoIndexer.indexBlockFull`: one UPSERT per table per block, in one transaction |
 
-The two coexist by design. Crawled entities (`Blocks`, `Transactions` and children) are
-**non-temporal**, so nothing expires them and the lazy path simply finds them present; gaps outside
-the crawled range are still filled on demand.
+Blocks and transactions do not expire, so the on-demand path finds crawled rows and calls no backend for
+them. Data outside the crawled range is still fetched on demand. With `CRAWLER_AUTHORITATIVE=true`, and a
+crawl that starts at Shelley and has reached the tip, a block or transaction that is not stored is a 404
+without a backend call.
 
-**Cursor and reorgs.** `CardanoSyncState` is a singleton cursor (last slot/hash/height, tip,
-`syncStatus`, error streak) guarded by a DB lease, so exactly one instance crawls per deployment.
-A rollback deletes everything after the fork point in one transaction, rewinds the cursor and writes
-a `CardanoReorgLog` row. Two sources: Ogmios chain-sync (native `rollBackward`) and Blockfrost/Koios
-pagination (parent-hash comparison). Enable with `CRAWLER_ENABLED=true` plus a start point; see the
-[User Guide](../guides/USER_GUIDE.md).
+**Sources.** Ogmios chain-sync is the primary source. Pagination over Koios or Blockfrost is the fallback.
 
-**Analytics coverage.** Beyond blocks and transactions, the crawler fills three tables that
-the lazy path would otherwise only populate by accident — whatever somebody happened to request:
+**Cursor.** `CardanoSyncState` is one row: last slot, hash and height, the tip, `syncStatus` and the error
+count. A database lease on that row makes sure one instance crawls per deployment.
 
-| Table | Source | Cost |
+**Reorgs.** A rollback deletes everything after the fork point in one transaction, moves the cursor back
+and writes a `CardanoReorgLog` row. Chain-sync reports a rollback itself. Pagination finds it by comparing
+parent hashes.
+
+### What the crawler fills besides blocks and transactions
+
+| Table | Source | Setting |
 |---|---|---|
-| `AssetHistory` | the ledger's mint field (Ogmios `mint`, Koios `assets_minted`) or, for Blockfrost, Σ outputs − Σ inputs per unit | none — data the block already carries |
-| `Assets` | a bare row per unseen unit: policyId, assetNameHex, decoded name, CIP-14 fingerprint | none (`CRAWLER_ASSET_CATALOGUE=bare`, the default) |
-| `PoolEpochSnapshots` / `DrepEpochSnapshots` / `EpochLedgerSnapshots` | full pool/DRep set and the ada pots, once per epoch: read from the node's ledger at the crawled block (Ogmios, while the block is within the node's last k blocks), else from Koios **only while at the chain tip** | a handful of Ogmios queries, or ~100 batched Koios requests per epoch; opt-in |
+| `AssetHistory` | The mint field of the block (Ogmios, Koios). On Blockfrost: outputs minus inputs per unit | `CRAWLER_ASSET_HISTORY`, on by default |
+| `Assets` | One row per new unit: policy id, asset name, CIP-14 fingerprint | `CRAWLER_ASSET_CATALOGUE=bare`, the default |
+| `PoolEpochSnapshots`, `DrepEpochSnapshots`, `EpochLedgerSnapshots` | Every pool, every DRep and the ada pots, once per epoch | `CRAWLER_EPOCH_SNAPSHOTS` |
+| `AccountEpochSnapshots` | Reward accounts with the epoch snapshot, Ogmios only | `CRAWLER_ACCOUNT_SNAPSHOTS` |
+| `TransactionCertificates`, `TransactionWithdrawals` | Block content from Ogmios chain-sync or Koios | `CRAWLER_CERTIFICATES` |
+| `TransactionRedeemers`, `TransactionDatums` | Block content from Ogmios chain-sync | Always |
+| `LedgerUTxOs`, `LedgerAddresses`, `LedgerAccounts` and their asset tables | The UTxO set, kept current per block after a snapshot import | `CRAWLER_UTXO_SET` |
 
-A bare `Assets` row is stamped `validFrom === validTo`, i.e. born expired. CAP's temporal filter
-therefore hides it from OData reads, so the first keyed read is still a miss and the lazy path
-enriches it with supply and registry data — while a consumer reading the database directly already
-sees the complete catalogue (and excludes the placeholders with `validTo > validFrom`). Both
-stamps are the fixed epoch-zero sentinel, never `now`: `Assets` is temporal and keyed
-`(validFrom, unit)`, so a wall-clock stamp would make the same unit a new row on every sighting
-and could collide with a slice the lazy path writes in the same millisecond — inside the crawler's
-block transaction that means a failed block. With the sentinel the bare row is one fixed,
-idempotent row per unit that no enriched slice can ever alias or be overwritten by.
+**Asset rows from the crawler.** A row the crawler writes for a new unit carries no supply and no registry
+data. Its `validFrom` and `validTo` are both `1970-01-01T00:00:00.000Z`, so it is expired from the start:
 
-Mint/burn is skipped, and logged, for a transaction whose consumed inputs cannot all be resolved
-(an output created before the crawl start): a delta that is short by an unknown amount would look
-like a mint that never happened. Phase-2 failures contribute nothing — the ledger applies no mint
-when the script phase failed. Reorgs remove mint rows with their transactions; the epoch snapshots
-are keyed by epoch rather than block and are deliberately left in place, dated by `snapshotSlot`.
+- An OData read does not see it. The first keyed read is a miss, and the on-demand path stores the full row.
+- A program that reads the database directly sees the whole catalogue. `validTo > validFrom` selects the
+  full rows.
+- The stamp is fixed, not the current time. `Assets` is keyed by `validFrom` and `unit`, so the crawler
+  writes one row per unit however often it sees the unit, and never the key of a full row.
 
-Epoch snapshots are taken **only while the crawl is at the chain tip**. Koios `/pool_info` and
-`/drep_info` answer with the pool and DRep set as it is now and take no epoch parameter, so a
-snapshot written during a backfill would carry today's stake and vote power under a historical
-epoch number — a table that reads as a time series but is a constant. The crawler therefore
-compares the block's epoch with the epoch of the reported tip and skips the epoch otherwise.
-Backfilled ranges carry no snapshots; the range crawled live does.
+**Mint and burn.** On Blockfrost the amount is the difference between outputs and inputs. When an input of
+a transaction is not stored, because its output is older than the crawl start, the difference is unknown.
+The crawler then records no mint or burn for that transaction and logs it. A transaction whose script
+phase failed mints nothing. A reorg removes the mint rows with their transactions.
 
-**Consequence for consumers:** within the pre-synced range, reads never touch a backend — that is
-the point of the feature, and the reason the range carries no TTL.
+**Epoch snapshots.** A snapshot must show the state of its epoch, not today's state:
 
-## Configuration
+- Ogmios reads the ledger at the first crawled block of the epoch. That works while the block is within
+  the node's last k blocks (2160 on mainnet and preprod, 432 on preview).
+- Koios reports the current state only. The crawler takes a snapshot from Koios only while it crawls in
+  the epoch of the chain tip.
+- An epoch passed outside that window has no snapshot. The crawler logs the gap.
+- A reorg deletes the snapshot rows taken at a block after the fork point.
+
+## Settings
 
 | Variable       | Default   | Description                                              |
 | -------------- | --------- | -------------------------------------------------------- |
-| `INDEX_TTL_MS` | `3600000` | TTL for temporal entities in milliseconds (1 hour)       |
-| `NETWORK`      | `preview` | Cardano network: `mainnet`, `preview`, or `preprod`      |
-| `BACKENDS`     | `koios`   | Enabled backends: `blockfrost`, `koios`, `ogmios`, `odatano` |
+| `INDEX_TTL_MS` | `3600000` | How long a temporal row is valid, in milliseconds        |
+| `NETWORK`      | `preview` | `mainnet`, `preview` or `preprod`                        |
+| `BACKENDS`     | `koios`   | Any of `koios`, `ogmios`, `blockfrost`, `odatano`; the order does not matter |
 
-`INDEX_TTL_MS` only affects temporal entities. Non-temporal entities remain permanently.
-
-## Implementation Flow
-
-### Temporal Entity (e.g., Address)
-
-```
-GET /Addresses('addr1...')
-  → DB lookup for valid entry
-  → Miss or expired: fetch from Blockfrost/Koios → persist with validFrom/validTo → return
-  → Hit (within TTL): return from DB (no blockchain call)
-  → After TTL: re-fetch → new temporal version (old version kept for history)
-```
-
-### Non-Temporal Entity (e.g., Transaction)
-
-```
-GET /Transactions('hash123...')
-  → DB lookup
-  → Miss: fetch from Blockfrost/Koios → persist (no temporal fields) → return
-  → Hit: return from DB (never expires, never re-fetched)
-```
-
-### Transaction Build Workflow
-
-```
-POST /BuildSimpleAdaTransaction
-  → Validate inputs → build (Buildooor)
-  → Fetch protocol params + UTxOs from Ogmios/Blockfrost
-  → Build unsigned tx with fee calculation
-  → Persist TransactionBuilds with inputs/outputs/assets
-  → Return unsigned CBOR (temporal, respects INDEX_TTL_MS)
-```
-
-### Transaction Submission Workflow
-
-```
-POST /SubmitTransaction (signed CBOR)
-  → Validate → submit via Ogmios (primary) or Blockfrost/Koios (fallback)
-  → Record in TransactionSubmissions (success → txHash, failure → errors)
-```
-
-### External Signing Workflow
-
-```
-POST /CreateSigningRequest (buildId)
-  → Retrieve build → create SigningRequest (30-min TTL)
-  → Return signing instructions (CLI command, CIP-30 guidance)
-  → Client signs externally (wallet, CLI, hardware)
-
-POST /SubmitVerifiedTransaction (signed CBOR)
-  → Verify signature → record in SignatureVerifications
-  → Submit to network → update SigningRequest status
-```
+The crawler settings are in the [Crawler Guide](../guides/CRAWLER_GUIDE.md).

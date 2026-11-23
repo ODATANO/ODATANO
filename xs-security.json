@@ -1,13 +1,6 @@
 {
   "scopes": [
     {
-      "name": "$XSAPPNAME.mtcallback",
-      "description": "Subscription via SaaS Registry",
-      "grant-as-authority-to-apps": [
-        "$XSAPPNAME(application,sap-provisioning,tenant-onboarding)"
-      ]
-    },
-    {
       "name": "$XSAPPNAME.Read",
       "description": "Read Cardano blockchain data"
     },
@@ -24,7 +17,6 @@
       "description": "Operate the ODATANO chain crawler and wallet worker"
     }
   ],
-  "attributes": [],
   "role-templates": [
     {
       "name": "CardanoReader",

@@ -7,8 +7,11 @@ import { mockUtxosAdaOnly, mockProtocolParams, TEST_FIXTURES, SCRIPT_UTXO_ADDRES
 
 // The script address answers with its live script UTxO so the BuildPlutusSpendTransaction
 // unspent pre-check passes; every other address gets the configured sender UTxOs.
+// The backend pages these lists with `order`, `limit` and `offset`; a later page is empty.
 function addressUtxosReply(utxos: any[]) {
-  return function (_uri: string, body: any) {
+  return function (uri: string, body: any) {
+    const offset = Number(new URL(uri, 'https://preview.koios.rest').searchParams.get('offset') ?? 0);
+    if (offset > 0) return [];
     if (Array.isArray(body?._addresses) && body._addresses.includes(SCRIPT_UTXO_ADDRESS)) {
       return [scriptUtxoKoiosEntry];
     }
@@ -37,6 +40,7 @@ export function setupKoiosMocks(utxos = mockUtxosAdaOnly) {
 
   nock('https://preview.koios.rest')
     .post('/api/v1/address_utxos', (body: any) => body._addresses !== undefined)
+    .query(true)
     .reply(200, addressUtxosReply(utxos))
     .persist();
 }
@@ -73,6 +77,7 @@ export function setupUtxoMock(utxos: any[]) {
 
   nock('https://preview.koios.rest')
     .post('/api/v1/address_utxos', (body: any) => body._addresses !== undefined)
+    .query(true)
     .reply(200, addressUtxosReply(utxos))
     .persist();
 }

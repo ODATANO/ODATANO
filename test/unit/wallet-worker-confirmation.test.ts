@@ -76,7 +76,15 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   TransactionSubmissions: 'odatano.cardano.TransactionSubmissions',
 }));
 
+vi.mock('../../srv/blockchain/signing/landing-proof', () => ({
+  judgeLanding: vi.fn(),
+  hasUnspentOutput: vi.fn(),
+  isExpired: vi.fn(() => false),
+  landingFacts: vi.fn(() => ({ ttlSlot: 5000, inputs: [{ txHash: 'in', outputIndex: 0 }], outputCount: 1 })),
+}));
+
 import cds from '@sap/cds';
+import { judgeLanding, hasUnspentOutput } from '../../srv/blockchain/signing/landing-proof';
 import { ConfirmationTracker } from '../../srv/blockchain/wallet-worker/confirmation-tracker';
 import { emitBlockIndexed, emitReorg } from '../../srv/blockchain/crawler/hooks';
 import {
@@ -94,11 +102,24 @@ const TX_HASH = 'a'.repeat(64);
 
 function makeClient() {
   return {
+    network: 'preview' as const,
     getTransaction: vi.fn(),
     getLatestBlock: vi.fn(),
     submitTransaction: vi.fn(),
+    supports: vi.fn((_method: string) => true),
+    // the transaction's input on the ledger; spent unless a test says otherwise
+    isUtxoUnspent: vi.fn(async () => false),
   };
 }
+
+/** The crawled chain: empty unless a test stores a row. */
+const indexed = new Map<string, { slot: number; blockHeight: number; blockHash: string }>();
+const indexer = {
+  findCrawledTransaction: vi.fn(async (_t: unknown, hash: string) => {
+    const row = indexed.get(hash);
+    return row ? { ...row, tipHeight: row.blockHeight, spendsCollaterals: false, validityKnown: true } : null;
+  }),
+};
 
 async function seedSubmittedJob(walletId = 'w1', txHash = TX_HASH, signedTxCbor = 'cafe01'): Promise<string> {
   await upsertWalletRegistration(db, { walletId, signerType: 'software', address: 'addr_test1x', publicKeyHash: 'f'.repeat(56) });
@@ -113,6 +134,7 @@ function makeTracker(client: ReturnType<typeof makeClient>, options: Partial<{ c
   const onFinal = vi.fn();
   const tracker = new ConfirmationTracker({
     client: client as never,
+    indexer,
     options: {
       confirmationDepth: options.confirmationDepth ?? 3,
       confirmationTimeoutMs: options.confirmationTimeoutMs ?? 600_000,
@@ -126,6 +148,9 @@ function makeTracker(client: ReturnType<typeof makeClient>, options: Partial<{ c
 
 afterEach(() => {
   tables.clear();
+  indexed.clear();
+  vi.mocked(judgeLanding).mockReset();
+  vi.mocked(hasUnspentOutput).mockReset();
 });
 
 describe('ConfirmationTracker: crawler hook path', () => {
@@ -252,6 +277,25 @@ describe('ConfirmationTracker: polling path', () => {
     }));
   });
 
+  it('takes a lookup hit without a block height through the overdue check instead of waiting on it for good', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+    client.getTransaction.mockResolvedValue({ hash: TX_HASH, slot: null, blockHeight: null });
+    vi.mocked(judgeLanding).mockResolvedValue({ verdict: 'neverLands', reason: 'expired' });
+    const { tracker, onFinal } = makeTracker(client, { confirmationTimeoutMs: 1_000 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01', submittedAt: new Date(Date.now() - 60_000).toISOString() });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    await tracker.pollOnce();
+
+    expect(judgeLanding).toHaveBeenCalled();
+    const job = (await getJobById(db, jobId))!;
+    expect(job.confirmedHeight ?? null).toBeNull();
+    expect(job.status).toBe('failed');
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'failed' }));
+  });
+
   it('marks the recorded submission row confirmed with the job', async () => {
     const client = makeClient();
     client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
@@ -269,14 +313,15 @@ describe('ConfirmationTracker: polling path', () => {
     tables.delete('odatano.cardano.TransactionSubmissions');
   });
 
-  it('fails a tx unseen past the confirmation timeout as TX_DROPPED', async () => {
+  it('fails a tx unseen past the timeout as TX_DROPPED once the chain proves it can never land', async () => {
     const client = makeClient();
     client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
     client.getTransaction.mockRejectedValue(new NotFoundError('Transaction', 'test'));
+    vi.mocked(judgeLanding).mockResolvedValue({ verdict: 'neverLands', reason: `Transaction ${TX_HASH} expired at slot 900` });
     const { tracker, onFinal } = makeTracker(client, { confirmationTimeoutMs: 1_000 });
     const jobId = await seedSubmittedJob();
     tracker.track({
-      jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: null,
+      jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01',
       submittedAt: new Date(Date.now() - 60_000).toISOString(), // long past the timeout
     });
     (tracker as unknown as { running: boolean }).running = true;
@@ -290,8 +335,162 @@ describe('ConfirmationTracker: polling path', () => {
     expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({
       jobId, walletId: 'w1', outcome: 'failed', txHash: TX_HASH,
       errorCode: JOB_ERROR_CODES.TX_DROPPED,
-      errorMessage: expect.stringContaining('not seen on-chain'),
+      errorMessage: expect.stringContaining('expired at slot 900'),
     }));
+  });
+
+  it('keeps a tx unseen past the timeout while the chain cannot prove it lost', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+    client.getTransaction.mockRejectedValue(new NotFoundError('Transaction', 'test'));
+    vi.mocked(judgeLanding).mockResolvedValue({ verdict: 'open' });
+    const { tracker, onFinal } = makeTracker(client, { confirmationTimeoutMs: 1_000 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01', submittedAt: new Date(Date.now() - 60_000).toISOString() });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    await tracker.pollOnce();
+
+    expect((await getJobById(db, jobId))!.status).toBe('submitted');
+    expect(onFinal).not.toHaveBeenCalled();
+  });
+
+  it('finds the tx in the local index before asking a backend', async () => {
+    const client = makeClient();
+    client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+    indexed.set(TX_HASH, { slot: 500, blockHeight: 100, blockHash: 'b' });
+    const { tracker } = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    await tracker.pollOnce();
+
+    expect(client.getTransaction).not.toHaveBeenCalled();
+    expect((await getJobById(db, jobId))!.status).toBe('confirmed');
+  });
+
+  it('confirms with Ogmios alone through an unspent output, counting depth from the tip it was seen at', async () => {
+    const client = makeClient();
+    client.supports.mockImplementation((method: string) => method !== 'getTransaction');
+    vi.mocked(hasUnspentOutput).mockResolvedValue(true);
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    client.getLatestBlock.mockResolvedValue({ height: 100, hash: 't1', slot: 900 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.status).toBe('submitted');
+
+    client.getLatestBlock.mockResolvedValue({ height: 102, hash: 't2', slot: 940 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.status).toBe('confirmed');
+    expect(client.getTransaction).not.toHaveBeenCalled();
+    expect(onFinal).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'confirmed' }));
+  });
+
+  it('with Ogmios alone confirms only while an own output is unspent: spent outputs and inputs leave no evidence', async () => {
+    const client = makeClient();
+    client.supports.mockImplementation((method: string) => method !== 'getTransaction');
+    vi.mocked(hasUnspentOutput).mockResolvedValueOnce(true).mockResolvedValue(false);
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 3 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    client.getLatestBlock.mockResolvedValue({ height: 100, hash: 't1', slot: 900 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.confirmedHeight).toBe(100);
+    // the outputs are spent and the input too: a rollback plus a conflicting spend reads the same
+    client.getLatestBlock.mockResolvedValue({ height: 102, hash: 't2', slot: 940 });
+    await tracker.pollOnce();
+
+    const job = (await getJobById(db, jobId))!;
+    expect(job.status).toBe('submitted');
+    expect(job.confirmedHeight ?? null).toBeNull();
+    expect(onFinal).not.toHaveBeenCalled();
+    // no rollback was seen, so nothing is sent again
+    expect(client.submitTransaction).not.toHaveBeenCalled();
+  });
+
+  it('with Ogmios alone never confirms from spent inputs alone: an own output must have been seen', async () => {
+    const client = makeClient();
+    client.supports.mockImplementation((method: string) => method !== 'getTransaction');
+    vi.mocked(hasUnspentOutput).mockResolvedValue(false);
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 1 });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    for (const height of [100, 101, 102, 103]) {
+      client.getLatestBlock.mockResolvedValue({ height, hash: `t${height}`, slot: 900 + height });
+      await tracker.pollOnce();
+    }
+
+    expect((await getJobById(db, jobId))!.status).toBe('submitted');
+    expect(onFinal).not.toHaveBeenCalled();
+  });
+
+  it('with Ogmios alone watches again and resends when an input is unspent again after a rollback', async () => {
+    const client = makeClient();
+    client.supports.mockImplementation((method: string) => method !== 'getTransaction');
+    vi.mocked(hasUnspentOutput).mockResolvedValueOnce(true).mockResolvedValue(false);
+    client.isUtxoUnspent.mockResolvedValue(true);
+    const { tracker, onFinal } = makeTracker(client, { confirmationDepth: 3, resubmitOnRollback: true });
+    const jobId = await seedSubmittedJob();
+    tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01' });
+    (tracker as unknown as { running: boolean }).running = true;
+
+    client.getLatestBlock.mockResolvedValue({ height: 100, hash: 't1', slot: 900 });
+    await tracker.pollOnce();
+    expect((await getJobById(db, jobId))!.confirmedHeight).toBe(100);
+    client.getLatestBlock.mockResolvedValue({ height: 102, hash: 't2', slot: 940 });
+    await tracker.pollOnce();
+
+    const job = (await getJobById(db, jobId))!;
+    expect(job.status).toBe('submitted');
+    expect(job.confirmedHeight).toBeNull();
+    expect(client.submitTransaction).toHaveBeenCalledWith('cafe01');
+    expect(onFinal).not.toHaveBeenCalled();
+  });
+
+  it('reads the chain for an overdue tx at most once a minute and resends its bytes with a growing wait', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      const client = makeClient();
+      client.getLatestBlock.mockResolvedValue({ height: 104, hash: 'tip', slot: 999 });
+      client.getTransaction.mockRejectedValue(new NotFoundError('Transaction', 'test'));
+      client.submitTransaction.mockRejectedValue(new TransactionAlreadySubmittedError(TX_HASH));
+      vi.mocked(judgeLanding).mockResolvedValue({ verdict: 'open' });
+      const { tracker } = makeTracker(client, { confirmationTimeoutMs: 1_000 });
+      const jobId = await seedSubmittedJob();
+      tracker.track({ jobId, walletId: 'w1', txHash: TX_HASH, signedTxCbor: 'cafe01', submittedAt: new Date(Date.now() - 60_000).toISOString() });
+      (tracker as unknown as { running: boolean }).running = true;
+
+      await tracker.pollOnce();
+      await tracker.pollOnce();
+      expect(judgeLanding).toHaveBeenCalledTimes(1);
+      expect(client.submitTransaction).toHaveBeenCalledTimes(1);
+
+      // a minute later: read and send again; the next send then waits two minutes
+      vi.setSystemTime(Date.now() + 61_000);
+      await tracker.pollOnce();
+      expect(judgeLanding).toHaveBeenCalledTimes(2);
+      expect(client.submitTransaction).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + 61_000);
+      await tracker.pollOnce();
+      expect(judgeLanding).toHaveBeenCalledTimes(3);
+      expect(client.submitTransaction).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(Date.now() + 61_000);
+      await tracker.pollOnce();
+      expect(client.submitTransaction).toHaveBeenCalledTimes(3);
+      expect((await getJobById(db, jobId))!.status).toBe('submitted');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps waiting while the tx is unseen but within the timeout', async () => {

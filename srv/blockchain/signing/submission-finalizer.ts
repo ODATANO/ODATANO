@@ -1,9 +1,9 @@
 import cds, { Request } from '@sap/cds';
-import { SubmitOutcomeUnknownError, TransactionAlreadySubmittedError, isSubmitRejection } from '../../utils/errors';
+import { SubmitOutcomeUnknownError, TransactionAlreadySubmittedError, TransactionValidationError } from '../../utils/errors';
 import { detachedTx, runWithoutAmbientTx } from '../../utils/tx-utils';
 import { extractTxCacheTargets } from '../../utils/tx-build-helper';
 import { getExternalSignerModule } from './external-signer';
-import { isTransactionOnChain, type TransactionLookup } from '../transaction-presence';
+import { isExpired, isFinalRefusal, judgeLanding, type LandingClient } from './landing-proof';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { CardanoClient } from '../cardano-client';
 import { AddressTransactionBuilds, TransactionSubmissions, type TransactionSubmission } from '#cds-models/CardanoTransactionService';
@@ -31,29 +31,48 @@ export interface FinalizeParams {
   };
   signerType?: string;
   signerInfo?: string;
+  /** When the transaction was first sent; bounds a transaction without an expiry. */
+  sentAtMs?: number | null;
 }
 
 type SubmissionIndexer = Pick<CardanoIndexer,
-  'persistTransactionSubmission' | 'updateSubmissionStatus' | 'dropDuplicateSubmission' | 'invalidateUtxoCacheForTx' | 'findIndexedTransaction'>;
-type SubmissionClient = Pick<CardanoClient, 'submitTransaction'> & TransactionLookup;
+  'persistTransactionSubmission' | 'updateSubmissionStatus' | 'dropDuplicateSubmission' | 'invalidateUtxoCacheForTx' | 'findCrawledTransaction'>;
+type SubmissionClient = Pick<CardanoClient, 'submitTransaction'> & LandingClient;
 
 interface SubmissionDeps {
   indexer: SubmissionIndexer & Pick<CardanoIndexer, 'indexVerifiedTransactionSubmission'>;
   client: SubmissionClient;
 }
 
-/** accepted: the node or the chain has the transaction. rejected: refused and not on chain. unknown: no verdict. */
-type SubmitOutcome = 'accepted' | 'rejected' | 'unknown';
+// accepted: the node or the chain has the transaction. rejected: it can never land. scriptFailed: it
+// landed with failing scripts. unresolved: it can no longer land, nothing shows whether it did.
+// unknown: it may still land.
+type SubmitOutcome = 'accepted' | 'rejected' | 'scriptFailed' | 'unresolved' | 'unknown';
 
 interface RecordedSubmission {
   id: string;
   signedTxCbor: string;
   txHash: string;
   buildId: string | null;
+  sentAtMs: number | null;
 }
 
 // Record ids this process is sending right now. The reconciler leaves them alone.
 const inFlight = new Set<string>();
+// Stale records (no expiry, can still land, key not held here) and when the reconciler reads them next.
+const STALE_RECHECK_MS = 60 * 60_000;
+const staleUntil = new Map<string, number>();
+
+function noteStale(id: string, txHash: string, unspentInputs: Array<{ txHash: string; outputIndex: number }>): void {
+  staleUntil.set(id, Date.now() + STALE_RECHECK_MS);
+  logger.warn({ id, txHash, unspentInputs: unspentInputs.map((r) => `${r.txHash}#${r.outputIndex}`) },
+    'Transaction without an expiry has not landed and still can; only spending one of its inputs ends it. Read again in an hour');
+}
+
+/** Records the reconciler reads only once an hour: no expiry, not landed, an input still unspent. */
+export function staleRecordIds(): string[] {
+  return [...staleUntil.keys()];
+}
 // Signing requests whose stored transaction no longer verifies. Reported once, then skipped.
 const unverifiable = new Set<string>();
 
@@ -72,17 +91,18 @@ function messageOf(err: unknown): string {
 }
 
 // Sends the transaction and says what the attempt proves. With send = false only the chain is read,
-// unless no backend can look transactions up: then the node's answer is the only evidence.
-// `error` is the failed submit, also when the transaction turned out to be known.
-async function attemptSubmit(
+// unless no backend can look transactions up: then it is sent again, but never past its expiry. A
+// refusal ends the record only where it holds for these bytes; `error` is the failed submit.
+export async function attemptSubmit(
   signedTxCbor: string,
   txHash: string,
   send: boolean,
-  indexer: Pick<CardanoIndexer, 'findIndexedTransaction'>,
+  indexer: Pick<CardanoIndexer, 'findCrawledTransaction'>,
   client: SubmissionClient,
-): Promise<{ outcome: SubmitOutcome; error?: unknown }> {
-  const sent = send || !client.supports('getTransaction');
-  let error: unknown = new Error(`Transaction ${txHash} is not on chain ${RESUBMIT_WINDOW_MS / 60_000} minutes after its submit`);
+  sentAtMs: number | null = null,
+): Promise<{ outcome: SubmitOutcome; error?: unknown; finalRefusal?: boolean; unspentInputs?: Array<{ txHash: string; outputIndex: number }> }> {
+  const sent = (send || !client.supports('getTransaction')) && !isExpired(signedTxCbor, client.network);
+  let error: unknown;
   if (sent) {
     try {
       await client.submitTransaction(signedTxCbor);
@@ -93,14 +113,15 @@ async function attemptSubmit(
     }
   }
 
-  // A refusal may mean the transaction is already on chain and its inputs are spent.
-  try {
-    if (await isTransactionOnChain(indexer, client, txHash)) return { outcome: 'accepted', error };
-  } catch (lookupErr: unknown) {
-    logger.warn({ txHash, error: messageOf(lookupErr) }, 'Chain lookup after a failed submit was inconclusive');
-    return { outcome: 'unknown', error };
-  }
-  return { outcome: !sent || isSubmitRejection(error) ? 'rejected' : 'unknown', error };
+  const landing = await judgeLanding(signedTxCbor, txHash, { indexer, client }, sentAtMs);
+  if (landing.verdict === 'onChain') return { outcome: 'accepted', error };
+  if (landing.verdict === 'scriptFailed') return { outcome: 'scriptFailed', error: new TransactionValidationError(landing.reason, error) };
+  if (sent && isFinalRefusal(error)) return { outcome: 'rejected', error, finalRefusal: true };
+  if (landing.verdict === 'neverLands') return { outcome: 'rejected', error: new TransactionValidationError(landing.reason, error) };
+  if (landing.verdict === 'unresolved') return { outcome: 'unresolved', error: new Error(landing.reason) };
+  // without an expiry it can still land: open, and the inputs that would let it are named
+  if (landing.verdict === 'stale') return { outcome: 'unknown', error: new Error(landing.reason), unspentInputs: landing.unspentInputs };
+  return { outcome: 'unknown', error: error ?? new Error(`Transaction ${txHash} is not on chain yet and may still land`) };
 }
 
 // Outcomes are written in detached transactions, so no DB lock is held across the network call.
@@ -140,7 +161,9 @@ export async function submitAndFinalize(
 
   inFlight.add(params.signingRequestId);
   try {
-    const { outcome, error } = await attemptSubmit(params.fullSignedTxCbor, params.txHash, send, indexer, client);
+    const { outcome, error, unspentInputs } = await attemptSubmit(params.fullSignedTxCbor, params.txHash, send, indexer, client, params.sentAtMs ?? null);
+    if (unspentInputs) noteStale(params.signingRequestId, params.txHash, unspentInputs);
+    else staleUntil.delete(params.signingRequestId);
 
     if (outcome === 'unknown') {
       logger.warn({ signingRequestId: params.signingRequestId, txHash: params.txHash, error: messageOf(error) },
@@ -148,12 +171,35 @@ export async function submitAndFinalize(
       throw new SubmitOutcomeUnknownError(params.txHash, error);
     }
 
-    if (outcome === 'rejected') {
+    if (outcome === 'unresolved') {
       try {
-        await detachedTx('mark signing request failed', (db: cds.Transaction) => db.run(
-          UPDATE.entity(SigningRequests as never).set({ status: 'failed', errorMessage: messageOf(error) })
+        await detachedTx('mark signing request unresolved', (db: cds.Transaction) => db.run(
+          UPDATE.entity(SigningRequests as never).set({ status: 'unresolved', errorMessage: messageOf(error) })
             .where({ id: params.signingRequestId, status: 'submitting' })
         ));
+      } catch (markErr: unknown) {
+        logger.error({ err: markErr, signingRequestId: params.signingRequestId }, 'Could not mark signing request unresolved');
+      }
+      logger.error({ signingRequestId: params.signingRequestId, txHash: params.txHash, error: messageOf(error) },
+        'Submit outcome cannot be decided any more; the signing request is unresolved and needs an operator');
+      throw new SubmitOutcomeUnknownError(params.txHash, error);
+    }
+
+    if (outcome === 'rejected' || outcome === 'scriptFailed') {
+      try {
+        await detachedTx('mark signing request failed', async (db: cds.Transaction) => {
+          const marked = await db.run(
+            UPDATE.entity(SigningRequests as never).set({ status: 'failed', errorMessage: messageOf(error) })
+              .where({ id: params.signingRequestId, status: 'submitting' })
+          );
+          // it landed and spent the collateral: the submission record keeps that on file
+          if (outcome !== 'scriptFailed' || Number(marked) === 0) return;
+          const row = await indexer.persistTransactionSubmission(db as never, {
+            signedTxCbor: params.fullSignedTxCbor, txHash: params.txHash, buildId: params.buildId || null,
+          });
+          await indexer.updateSubmissionStatus(db as never, row.id!, 'failed', messageOf(error));
+          await db.run(UPDATE.entity(SigningRequests as never).set({ submission_id: row.id }).where({ id: params.signingRequestId }));
+        });
       } catch (markErr: unknown) {
         logger.error({ err: markErr, signingRequestId: params.signingRequestId },
           'Could not durably mark signing request failed after submit error');
@@ -176,12 +222,15 @@ export async function submitAndFinalize(
 async function settleRecorded(row: RecordedSubmission, send: boolean, indexer: SubmissionIndexer, client: SubmissionClient): Promise<void> {
   inFlight.add(row.id);
   try {
-    const { outcome, error } = await attemptSubmit(row.signedTxCbor, row.txHash, send, indexer, client);
+    const { outcome, error, unspentInputs } = await attemptSubmit(row.signedTxCbor, row.txHash, send, indexer, client, row.sentAtMs);
+    if (unspentInputs) noteStale(row.id, row.txHash, unspentInputs);
+    else staleUntil.delete(row.id);
 
+    // every write changes only a row still pending: another instance may have settled it meanwhile
     if (outcome === 'accepted' && error === undefined) {
       logger.info({ txHash: row.txHash }, 'Transaction submitted to blockchain');
       await detachedTx('record submission outcome', async (db) => {
-        await indexer.updateSubmissionStatus(db as never, row.id, 'submitted');
+        await indexer.updateSubmissionStatus(db as never, row.id, 'submitted', undefined, 'pending');
         // best-effort: a cache failure must not roll back the submitted status
         try {
           const senders = row.buildId
@@ -200,11 +249,12 @@ async function settleRecorded(row: RecordedSubmission, send: boolean, indexer: S
     try {
       await detachedTx('record submission outcome', async (db) => {
         // the row stays pending with the last error; a refusal ends only a row that is still pending
-        if (outcome === 'unknown') return indexer.updateSubmissionStatus(db as never, row.id, 'pending', errMsg);
-        if (outcome === 'rejected') return indexer.updateSubmissionStatus(db as never, row.id, 'failed', errMsg, 'pending');
+        if (outcome === 'unknown') return indexer.updateSubmissionStatus(db as never, row.id, 'pending', errMsg, 'pending');
+        if (outcome === 'unresolved') return indexer.updateSubmissionStatus(db as never, row.id, 'unresolved', errMsg, 'pending');
+        if (outcome === 'rejected' || outcome === 'scriptFailed') return indexer.updateSubmissionStatus(db as never, row.id, 'failed', errMsg, 'pending');
         // A resubmit keeps one row per transaction: its own row goes when an earlier one exists.
         if (await indexer.dropDuplicateSubmission(db as never, row.id, row.txHash)) return;
-        return indexer.updateSubmissionStatus(db as never, row.id, 'submitted');
+        return indexer.updateSubmissionStatus(db as never, row.id, 'submitted', undefined, 'pending');
       });
     } catch (markErr: unknown) {
       logger.error({ err: markErr, submissionId: row.id }, 'Could not record the submission outcome after a submit error');
@@ -214,7 +264,11 @@ async function settleRecorded(row: RecordedSubmission, send: boolean, indexer: S
       logger.warn({ txHash: row.txHash, error: errMsg }, 'Submit got no verdict; the submission stays pending');
       throw new SubmitOutcomeUnknownError(row.txHash, error);
     }
-    if (outcome === 'rejected') {
+    if (outcome === 'unresolved') {
+      logger.error({ txHash: row.txHash, error: errMsg }, 'Submission outcome cannot be decided any more; it is unresolved and needs an operator');
+      throw new SubmitOutcomeUnknownError(row.txHash, error);
+    }
+    if (outcome === 'rejected' || outcome === 'scriptFailed') {
       logger.error({ txHash: row.txHash, error: errMsg }, 'Transaction submission failed');
       throw error;
     }
@@ -232,7 +286,7 @@ export async function submitRecorded(
   client: SubmissionClient = server().getCardanoClient(),
 ): Promise<TransactionSubmission> {
   const record = await detachedTx('record transaction submission', (db) => indexer.persistTransactionSubmission(db as never, params));
-  await settleRecorded({ id: record.id!, ...params }, true, indexer, client);
+  await settleRecorded({ id: record.id!, ...params, sentAtMs: Date.now() }, true, indexer, client);
   return { ...record, status: 'submitted' };
 }
 
@@ -257,6 +311,12 @@ export function scheduleDeferredSubmit(req: Request, SigningRequests: unknown, p
   });
 }
 
+/** Milliseconds of a stored timestamp, or null when there is none. */
+function msOrNull(value: string | null | undefined): number | null {
+  const ms = value ? Date.parse(value) : NaN;
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function olderThanWindow(sinceMs: number): boolean {
   return Number.isFinite(sinceMs) && Date.now() - sinceMs > RESUBMIT_WINDOW_MS;
 }
@@ -274,7 +334,7 @@ export async function redriveInterruptedSubmissions(deps: SubmissionDeps = liveD
   ) as Array<{
     id: string; build_id?: string | null; txBodyHash: string; signedTxCbor: string;
     signerType?: string | null; signerInfo?: string | null; signedAt?: string | null; createdAt?: string | null;
-  }>).filter((row) => !inFlight.has(row.id) && !unverifiable.has(row.id));
+  }>).filter((row) => !inFlight.has(row.id) && !unverifiable.has(row.id) && (staleUntil.get(row.id) ?? 0) <= Date.now());
 
   const submissions = (await detachedTx('load open submissions', (db: cds.Transaction) =>
     db.run(
@@ -283,7 +343,7 @@ export async function redriveInterruptedSubmissions(deps: SubmissionDeps = liveD
         .where({ status: 'pending' })
     )
   ) as Array<{ id: string; build_id?: string | null; txHash: string; signedTxCbor: string; submittedAt?: number | string | null }>)
-    .filter((row) => !inFlight.has(row.id));
+    .filter((row) => !inFlight.has(row.id) && (staleUntil.get(row.id) ?? 0) <= Date.now());
 
   if (!requests.length && !submissions.length) return 0;
   logger.info(`Resolving ${requests.length} open signing request(s) and ${submissions.length} open submission(s)`);
@@ -310,6 +370,7 @@ export async function redriveInterruptedSubmissions(deps: SubmissionDeps = liveD
         verificationResult,
         signerType: row.signerType ?? undefined,
         signerInfo: row.signerInfo ?? undefined,
+        sentAtMs: msOrNull(row.signedAt ?? row.createdAt),
       }, undefined, send, deps);
       logger.info({ signingRequestId: row.id, txHash: row.txBodyHash }, 'Open signing request resolved as submitted');
     } catch (err: unknown) {
@@ -322,7 +383,8 @@ export async function redriveInterruptedSubmissions(deps: SubmissionDeps = liveD
     attempted++;
     const send = !olderThanWindow(Number(row.submittedAt) * 1000);
     try {
-      await settleRecorded({ id: row.id, signedTxCbor: row.signedTxCbor, txHash: row.txHash, buildId: row.build_id ?? null },
+      const sentAtMs = row.submittedAt == null ? null : Number(row.submittedAt) * 1000;
+      await settleRecorded({ id: row.id, signedTxCbor: row.signedTxCbor, txHash: row.txHash, buildId: row.build_id ?? null, sentAtMs },
         send, deps.indexer, deps.client);
       logger.info({ submissionId: row.id, txHash: row.txHash }, 'Open submission resolved as submitted');
     } catch (err: unknown) {

@@ -50,6 +50,8 @@ vi.mock('@sap/cds', () => {
     const finish = (q: Record<string, unknown>) => ({
       ...q,
       orderBy: (orderBy: string) => ({ ...q, orderBy, limit: (limit: number) => ({ ...q, orderBy, limit }) }),
+      // a query whose order carries a NULLS placement sets SELECT.orderBy itself
+      limit: (limit: number) => ({ ...q, limit, SELECT: {} as { orderBy?: unknown } }),
       groupBy: (groupBy: string) => ({ ...q, groupBy }),
     });
     return {
@@ -97,6 +99,8 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   LedgerAddresses: 'LedgerAddresses', LedgerAccounts: 'LedgerAccounts',
 }));
 vi.mock('#cds-models/odatano/cardano', () => ({
+  // the account row is written to the table, under the name the assertions use
+  Accounts: 'Accounts',
   Assets: 'AssetsTable', Transactions: 'Transactions', LedgerUTxOs: 'LedgerUTxOs', LedgerUTxOAssets: 'LedgerUTxOAssets',
 }));
 vi.mock('#cds-models/CardanoTransactionService', () => ({
@@ -123,6 +127,7 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 
 import { CardanoIndexer } from '../../srv/blockchain/cardano-indexer';
 import { NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
+import type { AccountData } from '../../srv/utils/types';
 
 const POOL = 'pool1p0mrcmu9qn0x6nk4eunj0p8qy3tryv370a96u9su2l6jwkytnru';
 // preview: 86 400 slots per epoch, so slot 123 744 027 lies in epoch 1432 starting at 123 724 800
@@ -144,7 +149,7 @@ function makeIndexer() {
       liveSaturation: 0, liveDelegators: 0, activeStake: '0', activeSize: 0, pledge: '0', margin: 0,
       fixedCost: '0', rewardAccount: '',
     })),
-    getAccount: vi.fn(async () => ({
+    getAccount: vi.fn(async (): Promise<AccountData> => ({
       stakeaddress: 'stake_test1x', active: true, activeEpoch: 0, controlledAmount: '0', rewardsSum: '300',
       withdrawalsSum: '0', reservesSum: '0', treasurySum: '0', withdrawableAmount: '300',
       poolId: POOL, drepId: 'drep_always_abstain', addresses: [],
@@ -311,6 +316,8 @@ describe('circulating supply from the crawled UTxO set', () => {
 describe('crawl epoch rows from crawled blocks', () => {
   const EPOCH = 1431;
   const epochRow = (indexer: CardanoIndexer) => (indexer as any).crawlEpochCache.get(EPOCH)?.row;
+  // reads of crawled blocks; the first prefetch also looks up the stored row of the epoch before
+  const blockReads = () => dbRuns.filter((q) => (q.where as Record<string, unknown> | undefined)?.epochNumber !== undefined);
   const providerEpoch = {
     epoch: EPOCH, start_time: 1, end_time: 2, first_block_time: 3, last_block_time: 4,
     block_count: 0, tx_count: 0, output: '555', fees: '0', active_stake: '777',
@@ -321,7 +328,7 @@ describe('crawl epoch rows from crawled blocks', () => {
     (client as any).getEpoch = vi.fn(async () => providerEpoch);
     await indexer.prefetchCrawlEpoch(EPOCH);
 
-    expect(dbRuns[0].where).toEqual({ epochNumber: EPOCH });
+    expect(blockReads()[0].where).toEqual({ epochNumber: EPOCH });
     expect(epochRow(indexer)).toEqual({
       epoch: EPOCH, startTime: 1, endTime: 2, firstBlockTime: 1790294406, lastBlockTime: 1790380700,
       blockCount: 4, txCount: 9, output: '555', fees: '1700000', activeStake: '777',
@@ -347,7 +354,7 @@ describe('crawl epoch rows from crawled blocks', () => {
     (client as any).getEpoch = vi.fn(async () => providerEpoch);
     await indexer.prefetchCrawlEpoch(EPOCH);
 
-    expect(dbRuns).toHaveLength(0);
+    expect(blockReads()).toHaveLength(0);
     expect(epochRow(indexer)).toMatchObject({ blockCount: 0, txCount: 0, fees: '0' });
   });
 });
@@ -529,22 +536,20 @@ describe('addresses from the crawled UTxO set', () => {
     expect(upserted('Pools')).toMatchObject({ activeStake: '777' });
   });
 
-  it('indexes the addresses an account carries without a request per address; the set answers them itself', async () => {
+  it('stores the account with the number of its addresses and reads no address', async () => {
     const A1 = 'addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0';
     const A2 = ADDR;
     const { client, indexer } = makeIndexer();
-    const full = (a: string, lovelace: string) => ({ address: a, stakeAddress: null, type: 'enterprise', isScript: false,
-      amount: [{ unit: 'lovelace', quantity: lovelace }], utxos: [{ txHash: T1, outputIndex: 0, address: a, amount: [{ unit: 'lovelace', quantity: lovelace }] }] });
     const getAddress = vi.fn();
-    client.getAccount.mockResolvedValue({ ...(await client.getAccount()), addresses: [full(A1, '7'), full(A2, '9')] } as never);
+    client.getAccount.mockResolvedValue({ ...(await client.getAccount()), addresses: [A1, A2] } as never);
     Object.assign(client, { getAddress, getAddressTransactionHashes: vi.fn(async () => []), getUnspentOutputs: vi.fn(async () => []) });
 
     cursor = synced({ utxoSet: { status: 'none' } });
     await indexer.indexAccount(mockTx as never, 'stake_test1x');
     expect(getAddress).not.toHaveBeenCalled();
-    const written = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Addresses').map(q => q.entries as Record<string, unknown>);
-    expect(written.map(r => [r.address, r.totalLovelace])).toEqual([[A1, '7'], [A2, '9']]);
-
+    expect(runs.filter(q => q._op === 'UPSERT' && q.entity === 'Addresses')).toEqual([]);
+    expect(upserted('Accounts')).toMatchObject({ hasAddresses: true, addressCount: 2, addressList: JSON.stringify([A1, A2].sort()) });
+    expect((await indexer.fetchAccount(mockTx as never, 'stake_test1x')).account.addresses).toEqual([A1, A2]);
   });
 
   it('takes the addresses of a stake key from the crawled set, also when the node lists none', async () => {
@@ -561,14 +566,9 @@ describe('addresses from the crawled UTxO set', () => {
 
     const account = await indexer.indexAccount(mockTx as never, 'stake_test1x') as unknown as Record<string, unknown>;
 
-    expect(account.hasAddresses).toBe(true);
+    expect(account).toMatchObject({ hasAddresses: true, addressCount: 1 });
     expect(getAddress).not.toHaveBeenCalled();
-    const written = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Addresses').map(q => q.entries as Record<string, unknown>);
-    expect(written.map(r => [r.address, r.totalLovelace, r.utxoCount])).toEqual([[ADDR, '4000000', 1]]);
-    // one read of the open outputs for all addresses of the key, not one per address
-    const openReads = runs.filter(q => q.entity === 'LedgerUTxOs' && (q.where as Record<string, unknown>)?.spentTxHash === null);
-    expect(openReads).toHaveLength(1);
-    expect(openReads[0].where).toEqual({ address: { in: [ADDR] }, spentTxHash: null });
+    expect((await indexer.fetchAccount(mockTx as never, 'stake_test1x')).account.addresses).toEqual([ADDR]);
   });
 
   it('sums crawled withdrawals only when certificates are crawled since Shelley', async () => {
@@ -576,6 +576,20 @@ describe('addresses from the crawled UTxO set', () => {
     const { indexer } = makeIndexer();
     await indexer.indexAccount(mockTx as never, 'stake_test1x');
     expect(upserted('Accounts')).toMatchObject({ withdrawalsSum: '0' }); // certificates off
+
+    indexer.configureCrawlCoverage({ certificates: true } as never);
+    await indexer.indexAccount(mockTx as never, 'stake_test1x');
+    const last = runs.filter(q => q._op === 'UPSERT' && q.entity === 'Accounts').pop()!;
+    expect((last.entries as Record<string, unknown>).withdrawalsSum).toBe('1200');
+  });
+
+  it('puts the crawled withdrawals in for a backend that reports none, and leaves null when they are not crawled', async () => {
+    answer = (q) => (q.entity === 'TransactionWithdrawals' ? { total: '1200' } : undefined);
+    const { client, indexer } = makeIndexer();
+    const base = await client.getAccount();
+    client.getAccount.mockImplementation(async () => ({ ...base, withdrawalsSum: null }));
+    await indexer.indexAccount(mockTx as never, 'stake_test1x');
+    expect(upserted('Accounts')).toMatchObject({ withdrawalsSum: null }); // certificates off: unknown stays unknown
 
     indexer.configureCrawlCoverage({ certificates: true } as never);
     await indexer.indexAccount(mockTx as never, 'stake_test1x');
@@ -692,6 +706,20 @@ describe('backfillEpochs', () => {
       startTime: 1666656000 + 1431 * 86_400, endTime: 1666656000 + 1432 * 86_400, output: null, activeStake: null,
       blockCount: 4, txCount: 9, fees: '1700000', firstBlockTime: 1790294406, lastBlockTime: 1790380700,
     });
+    // 1431 lies behind the cursor and past the rollback horizon; the cursor is still inside 1432
+    expect(created.map(e => e.final)).toEqual([true, false]);
+  });
+
+  it('keeps a final row when the crawl has not passed its epoch yet', async () => {
+    cursor = synced({ startSlot: 1430 * 86_400 - 10 });
+    answer = (q) => (q._op === 'SELECT.one' && q.entity === 'Epoch' && (q.where as { epoch: number }).epoch === 1432 ? { epoch: 1432, final: true } : undefined);
+    const { indexer } = makeIndexer();
+
+    await indexer.backfillEpochs();
+
+    const touches1432 = (q: Q) => (q._op === 'UPDATE' && (q.where as { epoch?: number } | undefined)?.epoch === 1432)
+      || (q._op === 'INSERT' && (q.entries as { epoch?: number } | undefined)?.epoch === 1432);
+    expect(runs.filter(q => q.entity === 'Epoch' && touches1432(q))).toHaveLength(0);
   });
 
   it('does nothing without a crawl', async () => {

@@ -42,7 +42,7 @@ service CardanoAgentService @(impl: './cardano-agent-service') {
     function GetGrantStatus() returns GrantStatus;
 
     @title      : 'Create Agent Grant'
-    @description: 'Issue a scoped bearer token for an agent. Admin only. The token is returned once and stored as SHA-256. allowedActions must be a non-empty subset of the grantable set. Worker wallets are closed to tokens.'
+    @description: 'Issue a scoped bearer token for an agent. Admin only. The token is returned once and stored as SHA-256. allowedActions must be a non-empty subset of the grantable set, each named Service.operation (a name without its service means the operation of the transaction or the sign service). Worker wallets are closed to tokens.'
     @requires   : 'Admin'
     @odatano.agent: 'operator'
     action CreateAgentGrant(

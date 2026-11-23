@@ -1,8 +1,8 @@
 import cds from '@sap/cds';
-import axios, { AxiosError, AxiosInstance, AxiosRequestConfig, InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 import { CardanoBackend, PaginatingBackend, EnumeratingBackend, TokenRegistryBackend } from './cardano-backend';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError, ScriptValidationError, normalizeBackendError, isPostgrestServerErrorCode } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, isPostgrestServerErrorCode, submitRejection, nodeRejectionReason } from '../../utils/errors';
 import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
 import { validPoolMetadata } from '../pool-metadata';
 import { CARDANO_DEFAULTS } from '../../utils/const';
@@ -34,10 +34,20 @@ import {
 } from '../../utils/types';
 import { normalizeScriptType } from '../../utils/reference-script';
 import { Network } from '../cardano-client';
+import { callSignal, throwIfCallAborted } from './call-signal';
+import { HEX_56_REGEX } from '../../utils/const';
 
 /** Bounded retries for instance-specific PostgREST server errors (42703, 57014, …). */
 const PG_SERVER_ERROR_MAX_RETRIES = 2;
+/** Retries for 42804, which outdated instances behind the load balancer answer for valid requests. */
+const PG_VERSION_SKEW_MAX_RETRIES = 8;
 const PG_SERVER_ERROR_RETRY_DELAY_MS = 300;
+
+/** True for the PostgREST error an instance on an older Koios schema answers (42804). */
+function isVersionSkew(data: { code?: unknown; message?: unknown } | undefined): boolean {
+  return data?.code === '42804'
+    || /structure of query does not match function result type/i.test(typeof data?.message === 'string' ? data.message : '');
+}
 
 const KOIOS_URLS: Record<Network, string> = {
   mainnet: 'https://api.koios.rest/api/v1',
@@ -100,15 +110,13 @@ interface KoiosUtxoRow {
   asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }>;
 }
 
-/** Script CBOR from a Koios `reference_script` object, else its hash. Local Plutus eval needs the CBOR. */
+/** Script CBOR of a Koios `reference_script` object; null for the bare-hash form. */
 function koiosRefScriptBytes(ref: unknown): string | null {
-  if (!ref) return null;
-  if (typeof ref === 'string') return ref;
-  const obj = ref as { bytes?: string | null; hash?: string | null };
-  return obj.bytes || obj.hash || null;
+  if (!ref || typeof ref !== 'object') return null;
+  return (ref as { bytes?: string | null }).bytes || null;
 }
 
-/** Like koiosRefScriptBytes, but strictly the script HASH (for *Hash fields). */
+/** Script hash of a Koios `reference_script`, which is an object or the bare hash. */
 function koiosRefScriptHash(ref: unknown): string | null {
   if (!ref) return null;
   if (typeof ref === 'string') return ref;
@@ -124,26 +132,25 @@ function koiosRefScriptMeta(ref: unknown): { size: number | null; type: Referenc
   return { size: Number.isInteger(size) && size > 0 ? size : null, type: normalizeScriptType(obj.type) };
 }
 
-/** Sort Koios /address_txs rows newest first. Koios gives no ordering guarantee. */
-function sortAddressTxsDesc<T extends { block_height?: number | string | null; block_time?: number | null }>(rows: T[]): T[] {
-  return [...rows].sort((a, b) =>
-    Number(b.block_height ?? b.block_time ?? 0) - Number(a.block_height ?? a.block_time ?? 0)
-  );
-}
-
-/** The `error` entries of a cardano-submit-api rejection, else the body as text. */
-function nodeRejection(body: unknown): string {
-  const errors: string[] = [];
-  const walk = (v: unknown): void => {
-    if (!v || typeof v !== 'object') return;
-    const o = v as Record<string, unknown>;
-    if (Array.isArray(o.error)) errors.push(...o.error.map(String));
-    else if (typeof o.error === 'string') errors.push(o.error);
-    for (const child of Object.values(o)) walk(child);
+/** Koios `/address_utxos` and `/credential_utxos` row, mapped to a UTxO. */
+function mapKoiosUtxo(utxo: KoiosUtxoRow, address: string): UTxO {
+  const amount: Amount[] = [{ unit: 'lovelace', quantity: utxo.value }];
+  for (const asset of utxo.asset_list ?? []) {
+    amount.push({ unit: `${asset.policy_id}${asset.asset_name}`, quantity: asset.quantity });
+  }
+  const meta = koiosRefScriptMeta(utxo.reference_script);
+  return {
+    txHash: utxo.tx_hash,
+    outputIndex: utxo.tx_index,
+    address,
+    amount,
+    datumHash: utxo.datum_hash || null,
+    scriptRef: koiosRefScriptHash(utxo.reference_script),
+    scriptRefCbor: koiosRefScriptBytes(utxo.reference_script),
+    scriptRefSize: meta.size,
+    scriptRefType: meta.type,
+    inlineDatum: inlineDatumToHex(utxo.inline_datum),
   };
-  walk(typeof body === 'string' ? (() => { try { return JSON.parse(body); } catch { return undefined; } })() : body);
-  const text = errors.length > 0 ? errors.join('; ') : (typeof body === 'string' ? body : JSON.stringify(body));
-  return text.slice(0, 1000);
 }
 
 /** Koios `/pool_info` row; stake and size figures may be null for a pool without delegation. */
@@ -179,6 +186,8 @@ interface KoiosDrepInfoRow {
   drep_status?: string | null;
   last_active_epoch?: number | null;
   expires_epoch_no?: number | null;
+  deposit?: string | null;
+  live_delegator_count?: number | null;
 }
 
 /** Koios `/account_info` row. */
@@ -207,7 +216,7 @@ interface KoiosTipRow {
 interface KoiosBlockInfoRow {
   block_time: number; block_height: number | null; hash: string; abs_slot: number | null;
   epoch_no: number | null; epoch_slot: number | null; pool?: string | null; block_size: number;
-  tx_count: number; total_fees?: string | null;
+  tx_count: number; total_fees?: string | null; parent_hash?: string | null;
 }
 
 /** Koios `/block_txs` row; older instances return one `tx_hash` per row. */
@@ -258,20 +267,29 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     });
     this.network = network;
 
-    // Koios is load-balanced; single instances serve broken SQL functions (PostgREST 400,
-    // e.g. 42703) or statement timeouts (57014) while others are healthy, so a short
-    // bounded retry usually lands on a healthy instance. Client-input errors are not retried.
+    // a request stops when the client gives up the call it belongs to
+    this.api.interceptors.request.use((config) => {
+      config.signal ??= callSignal();
+      return config;
+    });
+
+    // Koios is load-balanced. Single instances serve broken SQL functions (PostgREST 400, e.g. 42703),
+    // statement timeouts (57014) or an older schema (42804) while others are healthy, so a bounded
+    // retry usually lands on a healthy instance. This is the only retry layer; client-input errors are not retried.
     this.api.interceptors.response.use(undefined, async (error: AxiosError) => {
       const config = error.config as (InternalAxiosRequestConfig & { pgRetryCount?: number }) | undefined;
-      const pgCode = (error.response?.data as { code?: unknown } | undefined)?.code;
-      if (!config || !isPostgrestServerErrorCode(pgCode)) throw error;
+      const body = error.response?.data as { code?: unknown; message?: unknown } | undefined;
+      const skew = error.response?.status === 400 && isVersionSkew(body);
+      if (!config || !(skew || isPostgrestServerErrorCode(body?.code))) throw error;
 
       const attempt = (config.pgRetryCount ?? 0) + 1;
-      if (attempt > PG_SERVER_ERROR_MAX_RETRIES) throw error;
+      const maxRetries = skew ? PG_VERSION_SKEW_MAX_RETRIES : PG_SERVER_ERROR_MAX_RETRIES;
+      if (attempt > maxRetries) throw error;
       config.pgRetryCount = attempt;
+      const pgCode = body?.code;
 
       logger.warn(
-        `Koios instance returned server-side SQL error ${pgCode} for ${config.url}, retry ${attempt}/${PG_SERVER_ERROR_MAX_RETRIES}`
+        `Koios instance returned server-side SQL error ${pgCode} for ${config.url}, retry ${attempt}/${maxRetries}`
       );
       await new Promise(resolve => setTimeout(resolve, PG_SERVER_ERROR_RETRY_DELAY_MS * attempt));
       return this.api.request(config);
@@ -314,30 +332,21 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     return [];
   }
 
-  // Retry on Postgres error 42804. Outdated Koios instances behind the load balancer return it
-  // for requests that healthy instances serve. Other 400s still fail fast.
-  private async getWithRetryOn42804<T = unknown>(
-    url: string,
-    config: AxiosRequestConfig,
-    label: string
-  ): Promise<{ data: T[] }> {
-    const maxRetries = 8;
-    const baseDelayMs = 300;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return await this.api.get(url, config);
-      } catch (err: unknown) {
-        const e = err as { response?: { status?: number; data?: { code?: string; message?: string } } };
-        const isSkew =
-          e?.response?.status === 400 &&
-          (e.response.data?.code === '42804' ||
-            /structure of query does not match function result type/i.test(e.response.data?.message ?? ''));
-        if (!isSkew || attempt >= maxRetries) throw err;
-        const delay = baseDelayMs * (attempt + 1);
-        logger.warn(`${label}: Koios transient 42804 (grest version skew), retry ${attempt + 1}/${maxRetries} after ${delay}ms...`);
-        await new Promise(r => setTimeout(r, delay));
-      }
+  // Every row of a list. PostgREST answers at most LIST_PAGE_SIZE rows per request, so this pages
+  // with `order`, which must name a unique key: without one, load-balanced instances may repeat or skip rows.
+  private async allRows<T>(path: string, order: string, body?: Record<string, unknown>, label = path): Promise<T[]> {
+    const rows: T[] = [];
+    for (let page = 0; page < KoiosBackend.LIST_MAX_PAGES; page++) {
+      throwIfCallAborted();
+      const params = { order, limit: KoiosBackend.LIST_PAGE_SIZE, offset: page * KoiosBackend.LIST_PAGE_SIZE };
+      const { data } = body
+        ? await this.api.post(path, body, { params })
+        : await this.api.get(path, { params });
+      if (!Array.isArray(data)) return rows;
+      rows.push(...(data as T[]));
+      if (data.length < KoiosBackend.LIST_PAGE_SIZE) return rows;
     }
+    throw new ProviderUnavailableError(`${label}: more than ${KoiosBackend.LIST_MAX_PAGES} pages, the list is not complete`, this.name);
   }
 
   async getTransaction(hash: string): Promise<Transaction> {
@@ -391,8 +400,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     return handleBackendRequest(
       async () => {
 
-        const results = await this.fetchWithRetryOnEmpty(
-          () => this.getWithRetryOn42804<KoiosEpochInfoRow>('/epoch_info', { params: { _epoch_no: epochNumber } }, `getEpoch(${epochNumber})`),
+        const results = await this.fetchWithRetryOnEmpty<KoiosEpochInfoRow>(
+          () => this.api.get('/epoch_info', { params: { _epoch_no: epochNumber } }),
           `getEpoch(${epochNumber})`
         );
 
@@ -432,7 +441,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const addressData = data[0] as KoiosAddressInfoRow;
         const addressUtxos = await this.getAddressUtxos(address);
 
-        // Sum balances from the mapped UTxOs; address_info's utxo_set may carry a null asset_list.
+        // Sum the balance over every UTxO; address_info's utxo_set may carry a null asset_list.
         const totals = new Map<string, bigint>();
         for (const u of addressUtxos) {
           for (const a of u.amount) {
@@ -464,10 +473,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
-        const { data: addressTxs } = await this.api.post('/address_txs', { _addresses: [address] });
-
-        // newest first, THEN limit (saves API calls); batch instead of unbounded Promise.all
-        const limitedTxs = sortAddressTxsDesc(addressTxs as Array<{ tx_hash: string; block_height?: number }>).slice(0, limit);
+        const limitedTxs = await this.newestAddressTxs(address, limit);
         const batch = await this.getTransactionsBatch(limitedTxs.map(tx => tx.tx_hash));
 
         const transactions: Transaction[] = [];
@@ -481,130 +487,78 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     );
   }
 
+  /** Every UTxO of an address, paged past the 1000-row cap of a Koios answer. */
   async getAddressUtxos(address: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/address_utxos', { _addresses: [address], _extended: true });
-        return (data as KoiosUtxoRow[]).map((utxo) => {
-          const amount: Amount[] = [
-            { unit: 'lovelace', quantity: utxo.value }
-          ];
-
-          // add native asset(s) if present
-          if (utxo.asset_list && Array.isArray(utxo.asset_list)) {
-            for (const asset of utxo.asset_list) {
-              amount.push({
-                unit: `${asset.policy_id}${asset.asset_name}`,
-                quantity: asset.quantity
-              });
-            }
-          }
-
-          return {
-            txHash: utxo.tx_hash,
-            outputIndex: utxo.tx_index,
-            address: address,
-            amount: amount,
-            datumHash: utxo.datum_hash || null,
-            scriptRef: koiosRefScriptBytes(utxo.reference_script),
-            scriptRefSize: koiosRefScriptMeta(utxo.reference_script).size,
-            scriptRefType: koiosRefScriptMeta(utxo.reference_script).type,
-            inlineDatum: inlineDatumToHex(utxo.inline_datum),
-          };
-        });
+        const rows = await this.allRows<KoiosUtxoRow>(
+          '/address_utxos', 'tx_hash.asc,tx_index.asc', { _addresses: [address], _extended: true }, 'getAddressUtxos');
+        return rows.map((utxo) => mapKoiosUtxo(utxo, address));
       },
       this.name
     );
   }
 
-  /** UTxOs of every address with this payment credential (56 hex chars). */
+  /** Every UTxO of every address with this payment credential (56 hex chars), paged. */
   async getCredentialUtxos(credHash: string): Promise<UTxO[]> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/credential_utxos', {
-          _payment_credentials: [credHash],
-          _extended: true,
-        });
-        return (data as KoiosUtxoRow[]).map((utxo) => {
-          const amount: Amount[] = [
-            { unit: 'lovelace', quantity: utxo.value }
-          ];
-
-          if (utxo.asset_list && Array.isArray(utxo.asset_list)) {
-            for (const asset of utxo.asset_list) {
-              amount.push({
-                unit: `${asset.policy_id}${asset.asset_name}`,
-                quantity: asset.quantity
-              });
-            }
-          }
-
-          return {
-            txHash: utxo.tx_hash,
-            outputIndex: utxo.tx_index,
-            address: utxo.address ?? '',
-            amount: amount,
-            datumHash: utxo.datum_hash || null,
-            scriptRef: koiosRefScriptBytes(utxo.reference_script),
-            scriptRefSize: koiosRefScriptMeta(utxo.reference_script).size,
-            scriptRefType: koiosRefScriptMeta(utxo.reference_script).type,
-            inlineDatum: inlineDatumToHex(utxo.inline_datum),
-          };
-        });
+        const rows = await this.allRows<KoiosUtxoRow>(
+          '/credential_utxos', 'tx_hash.asc,tx_index.asc', { _payment_credentials: [credHash], _extended: true }, 'getCredentialUtxos');
+        return rows.map((utxo) => mapKoiosUtxo(utxo, utxo.address ?? ''));
       },
       this.name
     );
+  }
+
+  /** The newest `limit` transactions of an address, ordered by Koios before it cuts the list. */
+  private async newestAddressTxs(address: string, limit: number): Promise<Array<{ tx_hash: string }>> {
+    const { data } = await this.api.post('/address_txs', { _addresses: [address] }, {
+      params: { order: 'block_height.desc,tx_hash.asc', limit: Math.max(1, limit) },
+    });
+    return Array.isArray(data) ? data as Array<{ tx_hash: string }> : [];
   }
 
   async getNetworkInformation(): Promise<NetworkInformation> {
     return handleBackendRequest(
       async () => {
-        // /totals works on mainnet but returns [] on preview/preprod
+        // /totals has no locked supply and no stake; those stay null
         const { data: totalsData } = await this.api.get('/totals', {
           params: { order: 'epoch_no.desc', limit: 1 }
         });
-        
+
         if (totalsData && totalsData.length > 0) {
           const latest = totalsData[0];
           return {
             supply: {
               max: CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
-              total: latest.supply || '0',
-              circulating: latest.circulation || '0',
-              locked: '0', // Not available in /totals
-              treasury: latest.treasury || '0',
-              reserves: latest.reserves || '0',
+              total: latest.supply ?? null,
+              circulating: latest.circulation ?? null,
+              locked: null,
+              treasury: latest.treasury ?? null,
+              reserves: latest.reserves ?? null,
             },
-            stake: {
-              live: '0',
-              active: '0',
-            },
+            stake: { live: null, active: null },
           };
         }
-        
-        // Testnet fallback: max supply from /genesis, remaining fields '0'
+
+        // Without /totals rows only the maximum supply is known, from /genesis.
         const { data: genesisData } = await this.api.get('/genesis');
 
         if (!genesisData || !Array.isArray(genesisData) || genesisData.length === 0) {
           throw new NotFoundError('Genesis', this.name);
         }
 
-        const genesis = genesisData[0];
-        const maxSupply = genesis.maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
-
         return {
           supply: {
-            max: maxSupply,
-            total: maxSupply,
-            circulating: maxSupply,
-            locked: '0',
-            treasury: '0',
-            reserves: '0',
+            max: genesisData[0].maxlovelacesupply || CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
+            total: null,
+            circulating: null,
+            locked: null,
+            treasury: null,
+            reserves: null,
           },
-          stake: {
-            live: '0',
-            active: '0',
-          },
+          stake: { live: null, active: null },
         };
       },
       this.name
@@ -740,7 +694,8 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           unit,
           policyId,
           assetNameHex,
-          assetName: a.asset_name_ascii ?? decodeUtf8(assetNameHex),
+          // Koios has '' for an asset without a name; every asset row stores null there
+          assetName: a.asset_name_ascii || decodeUtf8(assetNameHex),
           fingerprint: a.fingerprint,
           totalSupply: a.total_supply ?? '0',
           mintOrBurnCount: mintCnt + burnCnt,
@@ -820,21 +775,24 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     );
   }
 
-  /** Map one Koios /drep_info row to the canonical DrepData. */
+  // Map one Koios /drep_info row to the canonical DrepData. `drep_status` is registered,
+  // deregistered or not_registered; a deregistered DRep is retired. Older instances answer
+  // `retired` and `expired` instead, and those win where present.
   private _mapKoiosDrep(drepData: KoiosDrepInfoRow): DrepData {
-    // Koios /drep_info exposes either `expired`/`retired`/`last_active_epoch` (older schema)
-    // or `drep_status` ('registered' | 'retired'), `active` and `expires_epoch_no`; read both.
-    const retired: boolean = drepData.retired ?? drepData.drep_status === 'retired';
+    const retired: boolean = drepData.retired ?? drepData.drep_status === 'deregistered';
     const expired: boolean = drepData.expired ?? (drepData.active === false && !retired);
     return {
       drepId: drepData.drep_id,
       hex: drepData.hex,
       amount: drepData.amount,
       hasScript: drepData.has_script,
-      // The newer schema has no last-activity epoch, and `expires_epoch_no` means something else.
+      // Koios has no last-activity epoch
       lastActiveEpoch: drepData.last_active_epoch ?? 0,
       expired,
       retired,
+      deposit: drepData.deposit ?? null,
+      expiresEpoch: drepData.expires_epoch_no ?? null,
+      delegatorCount: drepData.live_delegator_count ?? null,
     };
   }
 
@@ -850,17 +808,10 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         if (!Array.isArray(data) || data.length === 0) {
           throw new NotFoundError('Account', this.name);
         }
-        const addressDataResponse = await this.api.post('/account_addresses', body);
-
-        // Koios returns [{ stake_address, addresses: [...] }], flatten to get all addresses
-        const addressesFlat: string[] = addressDataResponse.data.flatMap((item: { addresses: string[] }) => item.addresses);
-        const addresses: Address[] = [];
-        const concurrent = 10;
-        for (let i = 0; i < addressesFlat.length; i += concurrent) {
-          const chunk = addressesFlat.slice(i, i + concurrent);
-          const chunkResults = await Promise.all(chunk.map((addr: string) => this.getAddress(addr)));
-          addresses.push(...chunkResults);
-        }
+        // one row per stake address with all its addresses; their UTxOs are read separately.
+        // `_empty: true` lists addresses without UTxOs too, as Blockfrost does.
+        const addressDataResponse = await this.api.post('/account_addresses', { ...body, _empty: true });
+        const addresses: string[] = (addressDataResponse.data as Array<{ addresses?: string[] }>).flatMap(item => item.addresses ?? []);
 
         const accountData = data[0] as KoiosAccountInfoRow;
         return {
@@ -899,11 +850,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           // 400 carries the node's rejection (e.g. ExtraneousScriptWitnessesUTXOW); keep it
           const response = (err as { response?: { status?: number; data?: unknown } }).response;
           if (response?.status === 400 && response.data) {
-            const reason = nodeRejection(response.data);
-            // known kinds keep their class (already submitted = 409, script failure = 400)
-            const known = normalizeBackendError(new Error(reason), this.name);
-            if (known.statusCode === 409 || known instanceof ScriptValidationError) throw known;
-            throw new TransactionValidationError(`node rejected the transaction: ${reason}`, err);
+            throw submitRejection(nodeRejectionReason(response.data), this.name, err);
           }
           throw err;
         }
@@ -1009,8 +956,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const epochNo = tipData[0].epoch_no;
         try {
           return await this.getEpoch(epochNo);
-        } catch {
-          // Koios may not have the current epoch yet, so use the previous one
+        } catch (err: unknown) {
+          // Right after the boundary Koios may not list the new epoch yet. Any other error is not that.
+          if (!(err instanceof NotFoundError)) throw err;
           return await this.getEpoch(epochNo - 1);
         }
       },
@@ -1068,10 +1016,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   async getAddressTransactionHashes(address: string, limit: number): Promise<string[]> {
     return handleBackendRequest(
       async () => {
-        const { data } = await this.api.post('/address_txs', { _addresses: [address] });
-        return sortAddressTxsDesc(data as Array<{ tx_hash: string; block_height?: number }>)
-          .slice(0, limit)
-          .map(tx => tx.tx_hash);
+        return (await this.newestAddressTxs(address, limit)).map(tx => tx.tx_hash);
       },
       this.name
     );
@@ -1092,6 +1037,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
         const result = new Map<string, Transaction>();
 
         for (let i = 0; i < txHashes.length; i += BATCH_SIZE) {
+          throwIfCallAborted();
           const chunk = txHashes.slice(i, i + BATCH_SIZE);
           const { data } = await this.api.post('/tx_info', {
             _tx_hashes: chunk,
@@ -1141,6 +1087,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       size: data.block_size,
       txCount: data.tx_count,
       fees: data.total_fees,
+      previousHash: data.parent_hash,
     };
   }
 
@@ -1198,10 +1145,9 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
           anchorHeight = info[0].block_height;
         }
 
-        const rows = await this.fetchWithRetryOnEmpty<{ hash: string }>(
-          () => this.api.get(`/blocks?block_height=gt.${anchorHeight}&order=block_height.asc&limit=${count}`),
-          `getNextBlocks(${afterHash})`
-        );
+        // at the tip an empty list is the answer, not a lagging instance
+        const { data: listed } = await this.api.get(`/blocks?block_height=gt.${anchorHeight}&order=block_height.asc&limit=${count}`);
+        const rows = Array.isArray(listed) ? listed as Array<{ hash: string }> : [];
         if (!rows.length) return [];
 
         const requestedHashes = rows.map((r) => r.hash);
@@ -1239,50 +1185,29 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
   /** Page cap. 500 pages hold 500 000 ids, far beyond any real pool or DRep set. */
   private static readonly LIST_MAX_PAGES = 500;
 
-  /** Pages through a PostgREST list endpoint for one id column. Stops on the first short page. */
+  /** Every value of one id column of a list endpoint, in the order of that column. */
   private async listAllIds(path: string, column: string, label: string): Promise<string[]> {
-    const ids: string[] = [];
-    for (let page = 0; page < KoiosBackend.LIST_MAX_PAGES; page++) {
-      const offset = page * KoiosBackend.LIST_PAGE_SIZE;
-      const { data } = await this.getWithRetryOn42804(
-        `${path}?select=${column}&limit=${KoiosBackend.LIST_PAGE_SIZE}&offset=${offset}`,
-        {},
-        label,
-      );
-      if (!Array.isArray(data) || data.length === 0) return ids;
-      for (const row of data) {
-        const id = (row as Record<string, unknown>)[column];
-        if (typeof id === 'string' && id) ids.push(id);
-      }
-      if (data.length < KoiosBackend.LIST_PAGE_SIZE) return ids;
-    }
-    logger.warn(`${label}: stopped after ${KoiosBackend.LIST_MAX_PAGES} pages, the list may be truncated`);
-    return ids;
+    const rows = await this.allRowsOf(path, column, `${column}.asc`, label);
+    return rows.map(row => row[column]).filter((id): id is string => typeof id === 'string' && id.length > 0);
+  }
+
+  /** Rows of a GET list endpoint with only the `select` columns, paged. */
+  private allRowsOf(path: string, select: string, order: string, label: string): Promise<Array<Record<string, unknown>>> {
+    return this.allRows<Record<string, unknown>>(`${path}?select=${select}`, order, undefined, label);
   }
 
   /** Units with a CIP-26 registry entry, from `asset_token_registry` (the whole registry, paged). */
   async getTokenRegistryUnits(): Promise<string[]> {
     return handleBackendRequest(
       async () => {
+        const rows = await this.allRowsOf('/asset_token_registry', 'policy_id,asset_name', 'policy_id.asc,asset_name.asc', 'getTokenRegistryUnits');
         const units: string[] = [];
-        for (let page = 0; page < KoiosBackend.LIST_MAX_PAGES; page++) {
-          const offset = page * KoiosBackend.LIST_PAGE_SIZE;
-          const { data } = await this.getWithRetryOn42804(
-            `/asset_token_registry?select=policy_id,asset_name&limit=${KoiosBackend.LIST_PAGE_SIZE}&offset=${offset}`,
-            {},
-            'getTokenRegistryUnits',
-          );
-          if (!Array.isArray(data) || data.length === 0) return units;
-          for (const row of data) {
-            const r = row as { policy_id?: unknown; asset_name?: unknown };
-            if (typeof r.policy_id !== 'string' || !/^[0-9a-f]{56}$/i.test(r.policy_id)) continue;
-            const name = typeof r.asset_name === 'string' ? r.asset_name : '';
-            if (!/^([0-9a-f]{2}){0,32}$/i.test(name)) continue;
-            units.push((r.policy_id + name).toLowerCase());
-          }
-          if (data.length < KoiosBackend.LIST_PAGE_SIZE) return units;
+        for (const r of rows) {
+          if (typeof r.policy_id !== 'string' || !HEX_56_REGEX.test(r.policy_id.toLowerCase())) continue;
+          const name = typeof r.asset_name === 'string' ? r.asset_name : '';
+          if (!/^([0-9a-f]{2}){0,32}$/i.test(name)) continue;
+          units.push((r.policy_id + name).toLowerCase());
         }
-        logger.warn(`getTokenRegistryUnits: stopped after ${KoiosBackend.LIST_MAX_PAGES} pages, the list may be truncated`);
         return units;
       },
       this.name,
@@ -1303,6 +1228,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       async () => {
         const out: PoolData[] = [];
         for (let i = 0; i < poolIds.length; i += KoiosBackend.INFO_BATCH_SIZE) {
+          throwIfCallAborted();
           const batch = poolIds.slice(i, i + KoiosBackend.INFO_BATCH_SIZE);
           const { data } = await this.api.post('/pool_info', { _pool_bech32_ids: batch });
           if (!Array.isArray(data)) continue;
@@ -1328,6 +1254,7 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
       async () => {
         const out: DrepData[] = [];
         for (let i = 0; i < drepIds.length; i += KoiosBackend.INFO_BATCH_SIZE) {
+          throwIfCallAborted();
           const batch = drepIds.slice(i, i + KoiosBackend.INFO_BATCH_SIZE);
           const { data } = await this.api.post('/drep_info', { _drep_ids: batch });
           if (!Array.isArray(data)) continue;
@@ -1339,18 +1266,28 @@ export class KoiosBackend implements CardanoBackend, PaginatingBackend, Enumerat
     );
   }
 
-  /** All transactions of a block in order. /block_txs may answer flat rows or one `tx_hashes` array. */
-  async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
+  // All transactions of a block in order. /block_txs may answer flat rows or one `tx_hashes` array.
+  // An empty block needs no request. Only a block known to hold transactions is retried on [].
+  async getBlockTransactions(blockHash: string, txCount?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
+        if (txCount === 0) return [];
+        // An empty answer for a block with transactions comes from an instance that lags; ask again.
         const rows = await this.fetchWithRetryOnEmpty<KoiosBlockTxsRow>(
           () => this.api.post('/block_txs', { _block_hashes: [blockHash] }),
-          `getBlockTransactions(${blockHash})`
+          `getBlockTransactions(${blockHash})`,
         );
         const hashes: string[] = [];
         for (const row of rows) {
           if (Array.isArray(row.tx_hashes)) hashes.push(...row.tx_hashes);
           else if (row.tx_hash) hashes.push(row.tx_hash);
+        }
+        // With the count known, a short list would store the block without some of its transactions.
+        if (txCount !== undefined && hashes.length !== txCount) {
+          throw new ProviderUnavailableError(
+            `Incomplete transaction list for block ${blockHash}: ${hashes.length}/${txCount} transaction(s)`,
+            this.name
+          );
         }
         if (!hashes.length) return [];
 

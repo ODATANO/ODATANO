@@ -143,19 +143,29 @@ describe('agent-token lane', () => {
     expect(delegate).toHaveBeenCalledTimes(1);
   });
 
-  it('throttles failed token attempts per client address (20 per window), then 429 even for a valid token', async () => {
+  it('throttles failed token attempts per client address (20 per window), then 429 for an unknown token', async () => {
     for (let i = 0; i < 20; i++) {
       await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), fakeRes(), vi.fn());
     }
-    grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
     const res = fakeRes();
     await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), res, vi.fn());
     expect(res.statusCode).toBe(429);
     expect(res.headers['Retry-After']).toBeDefined();
     const other = fakeRes();
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.10'), other, vi.fn());
+    expect(other.statusCode).toBe(401);
+  });
+
+  it('admits a valid token from a locked client: a 32-byte token cannot be guessed, so others cannot lock it out', async () => {
+    for (let i = 0; i < 25; i++) {
+      await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), fakeRes(), vi.fn());
+    }
+    grantsMock.resolveAgentToken.mockResolvedValue({ ok: true, grant: GRANT });
     const next = vi.fn();
-    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.10'), other, next);
+    const res = fakeRes();
+    await auth(fakeReq('/odata/v4/cardano/', { [AGENT_TOKEN_HEADER]: TOKEN }, '10.0.0.9'), res, next);
     expect(next).toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
   });
 
   it('turns a lane crash into a 500, not an unauthenticated pass-through', async () => {

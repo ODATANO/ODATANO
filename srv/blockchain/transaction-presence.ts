@@ -5,23 +5,29 @@ import type { CardanoIndexer } from './cardano-indexer';
 import type { CardanoClient } from './cardano-client';
 
 export type TransactionLookup = Pick<CardanoClient, 'getTransaction' | 'supports'>;
+export type PresenceIndexer = Pick<CardanoIndexer, 'findCrawledTransaction'>;
 
-// True when the transaction is on chain, false when every backend answers not found, null when
-// no configured backend can look transactions up. Throws when the lookup itself fails.
-export async function isTransactionOnChain(
-  indexer: Pick<CardanoIndexer, 'findIndexedTransaction'>,
-  client: TransactionLookup,
-  txHash: string,
-): Promise<boolean | null> {
-  // the local index first (filled by the crawler), then the backends
-  const indexed = await runWithoutAmbientTx(() => cds.tx((t) => indexer.findIndexedTransaction(t, txHash)));
-  if (indexed) return true;
-  if (!client.supports('getTransaction')) return null;
+// Where the chain holds a transaction. scriptFailed: it landed with failing scripts, so only its
+// collateral was spent. validityKnown: false when the source did not say whether its scripts passed.
+export interface ChainPresence {
+  slot: number | null;
+  height: number | null;
+  scriptFailed: boolean;
+  validityKnown: boolean;
+}
+
+// The transaction on chain, from the crawled chain first, then the backends. Null when every backend
+// answers not found, undefined when no configured backend can look transactions up. Throws when the
+// lookup itself fails. A row outside the crawled chain is not evidence: a rollback may have removed it.
+export async function findOnChain(indexer: PresenceIndexer, client: TransactionLookup, txHash: string): Promise<ChainPresence | null | undefined> {
+  const crawled = await runWithoutAmbientTx(() => cds.tx((t) => indexer.findCrawledTransaction(t, txHash)));
+  if (crawled) return { slot: crawled.slot, height: crawled.blockHeight, scriptFailed: crawled.spendsCollaterals, validityKnown: crawled.validityKnown };
+  if (!client.supports('getTransaction')) return undefined;
   try {
-    await client.getTransaction(txHash);
-    return true;
+    const tx = await client.getTransaction(txHash);
+    return { slot: tx.slot ?? null, height: tx.blockHeight ?? null, scriptFailed: tx.spendsCollaterals === true, validityKnown: typeof tx.spendsCollaterals === 'boolean' };
   } catch (err) {
-    if (isNotFoundOnAllBackends(err)) return false;
+    if (isNotFoundOnAllBackends(err)) return null;
     throw err;
   }
 }

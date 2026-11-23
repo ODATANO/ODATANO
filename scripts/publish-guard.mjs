@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// prepublishOnly: publish only a committed, tagged state. npm packs the working tree, so an
-// uncommitted change or an untagged HEAD would reach the registry as a version no commit carries.
+// prepublishOnly: publish only a committed, tagged state whose CI passed. npm packs the working tree,
+// so an uncommitted change or an untagged HEAD would reach the registry as a version no commit carries.
 import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
@@ -24,4 +24,23 @@ if (!tags.includes(tag)) {
   fail(`HEAD is not tagged ${tag} (tags on HEAD: ${tags.join(', ') || 'none'}). Tag the release commit first`);
 }
 
-console.log(`publish-guard: ${tag} at ${git('rev-parse --short HEAD')}, clean tree`);
+// The release run must have passed on this exact commit. It runs the test suite as one of its jobs,
+// besides the package checks, the image audit and the image smoke.
+const REQUIRED_WORKFLOWS = ['Release'];
+const sha = git('rev-parse HEAD');
+let runs;
+try {
+  runs = JSON.parse(execSync(`gh run list --commit ${sha} --limit 50 --json workflowName,status,conclusion`,
+    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }));
+} catch (err) {
+  const detail = String(err?.stderr || err?.message || err).trim();
+  fail(`cannot read the CI runs of HEAD with the GitHub CLI (gh): ${detail}`);
+}
+for (const workflow of REQUIRED_WORKFLOWS) {
+  const latest = runs.find((r) => r.workflowName === workflow);
+  if (!latest) fail(`no "${workflow}" run for ${sha.slice(0, 7)}. Push the commit and the tag, then wait for CI`);
+  if (latest.status !== 'completed') fail(`"${workflow}" is still ${latest.status} for ${sha.slice(0, 7)}`);
+  if (latest.conclusion !== 'success') fail(`"${workflow}" ended with ${latest.conclusion} for ${sha.slice(0, 7)}`);
+}
+
+console.log(`publish-guard: ${tag} at ${git('rev-parse --short HEAD')}, clean tree, ${REQUIRED_WORKFLOWS.join(' and ')} green`);

@@ -57,3 +57,32 @@ describe('CheckSubmissionStatus', () => {
     await expect(check()).resolves.toMatchObject({ status: 'submitted' });
   });
 });
+
+describe('ResolveSubmission', () => {
+  const req = (data: Record<string, unknown>) => ({
+    data, user: { id: 'alice', is: () => true },
+    reject: vi.fn((arg: { status: number; message: string }) => { throw Object.assign(new Error(arg.message), { statusCode: arg.status }); }),
+  });
+  const stored = (status: string) => fakeDb.run.mockImplementation(async (q: { _op: string }) =>
+    q._op === 'SELECT' ? { id: 's1', txHash: 'ab'.repeat(32), status } : 1);
+
+  it('refuses a submission that is not unresolved', async () => {
+    stored('pending');
+    await expect(handlers.ResolveSubmission(req({ submissionId: 's1', outcome: 'failed' }))).rejects.toThrow(/only an unresolved submission/);
+    expect(fakeDb.run.mock.calls.some(([q]) => q._op === 'UPDATE')).toBe(false);
+  });
+
+  it('makes a confirmed one submitted, so its depth is counted, and keeps the note', async () => {
+    stored('unresolved');
+    await handlers.ResolveSubmission(req({ submissionId: 's1', outcome: 'confirmed', txHash: 'ab'.repeat(32), note: 'in block 42' }));
+    const update = fakeDb.run.mock.calls.map(([q]) => q).find((q) => q._op === 'UPDATE');
+    expect(update.set).toEqual({ status: 'submitted', resolution: expect.stringMatching(/^confirmed by alice at .*: in block 42$/) });
+  });
+
+  it('ends a failed one', async () => {
+    stored('unresolved');
+    await handlers.ResolveSubmission(req({ submissionId: 's1', outcome: 'failed' }));
+    const update = fakeDb.run.mock.calls.map(([q]) => q).find((q) => q._op === 'UPDATE');
+    expect(update.set).toMatchObject({ status: 'failed' });
+  });
+});

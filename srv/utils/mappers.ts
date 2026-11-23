@@ -76,7 +76,7 @@ import type {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
-import { ASSET_UNIT_REGEX } from './const';
+import { ASSET_UNIT_REGEX, BECH32_MAX_LENGTH } from './const';
 
 /** Key of a transaction's input/output rows: chain position, ascending, below 2^53 for any real slot. */
 export const TX_SEQ_SLOT_FACTOR = 65536;
@@ -153,18 +153,12 @@ export function mapTransactionInputAssets(
 
     if (!Array.isArray(input.amount) || (byReference && input.spentTxSeq != null)) return [];
 
-    return input.amount.map(a => {
-      const { policyId, assetName } = parseAssetUnit(a.unit);
-
-      return {
-        input_txSeq: txSeq,
-        input_inputIndex: inputIndex,
-        unit: a.unit,
-        asset_quantity: a.quantity,
-        asset_policyId: policyId,
-        asset_assetName: assetName,
-      };
-    });
+    return input.amount.map(a => ({
+      input_txSeq: txSeq,
+      input_inputIndex: inputIndex,
+      unit: a.unit,
+      ...assetSlice(a.unit, a.quantity),
+    }));
   });
 }
 
@@ -283,17 +277,12 @@ export function mapTransactionOutputAssets(
     const outputIndex = output.outputIndex;
     if (!Array.isArray(output.amount)) return [];
 
-    return output.amount.map(a => {
-      const { policyId, assetName } = parseAssetUnit(a.unit);
-      return {
-        output_txSeq: txSeq,
-        output_outputIndex: outputIndex,
-        unit: a.unit,
-        asset_quantity: a.quantity,
-        asset_policyId: policyId,
-        asset_assetName: assetName,
-      };
-    });
+    return output.amount.map(a => ({
+      output_txSeq: txSeq,
+      output_outputIndex: outputIndex,
+      unit: a.unit,
+      ...assetSlice(a.unit, a.quantity),
+    }));
   });
 }
 
@@ -331,7 +320,7 @@ export function mapAddress(address: string, addressData: AddressProviderData, ma
 interface NetAsset {
   unit: string;
   policyId: string;
-  assetName: string;
+  assetName: string | null; // null = the asset has no name
   assetNameHex: string;
   quantity: string;
 }
@@ -360,6 +349,8 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   const assetBalances = new Map<string, bigint>(); // unit -> net quantity
 
   for (const input of tx.inputs ?? []) {
+    // a reference input is read, not spent; collateral is spent only when the script phase failed
+    if (input.isReference || (input.isCollateral && tx.spendsCollaterals !== true)) continue;
     if (input.address === addr) {
       for (const amount of input.amount ?? []) {
         if (amount.unit === 'lovelace') {
@@ -389,16 +380,13 @@ function calculateNetAmounts(addr: string, tx: TransactionProviderData): { netLo
   const netAssets: NetAsset[] = [];
   for (const [unit, quantity] of assetBalances) {
     if (quantity !== 0n) {
-      const policyId = unit.substring(0, 56);
-      const assetNameHex = unit.substring(56);
-      const assetName = hexToUtf8(assetNameHex);
-
+      const slice = assetSlice(unit, quantity.toString());
       netAssets.push({
         unit,
-        policyId,
-        assetName,
-        assetNameHex,
-        quantity: quantity.toString()
+        policyId: slice.asset_policyId ?? '',
+        assetName: slice.asset_assetName,
+        assetNameHex: slice.asset_assetNameHex ?? '',
+        quantity: slice.asset_quantity,
       });
     }
   }
@@ -444,18 +432,13 @@ export function mapAddressUtxos(addr: string, validFrom: string, validTo: string
 export function mapAddressAssets(addr: string, validFrom: string, validTo: string, AssetAssets: AmountProviderData[]): AddressAssetRow[] {
   return AssetAssets
     .filter((asset: AmountProviderData) => asset.unit !== 'lovelace')
-    .map((asset: AmountProviderData) => {
-      const { policyId, assetName } = parseAssetUnit(asset.unit);
-      return {
-        address_address: addr,
-        unit: asset.unit,
-        validFrom: validFrom,
-        validTo: validTo,
-        asset_quantity: asset.quantity,
-        asset_policyId: policyId,
-        asset_assetName: assetName,
-      };
-    });
+    .map((asset: AmountProviderData) => ({
+      address_address: addr,
+      unit: asset.unit,
+      validFrom: validFrom,
+      validTo: validTo,
+      ...assetSlice(asset.unit, asset.quantity),
+    }));
 }
 
 /** Native assets of provider UTxOs to temporal UTxOAssetRows. */
@@ -469,7 +452,6 @@ export function mapAddressUtxoAssets(
     const amounts = Array.isArray(utxo.amount) ? utxo.amount : [];
     for (const asset of amounts) {
       if (!asset || !asset.unit || asset.unit === 'lovelace') continue;
-      const { policyId, assetName } = parseAssetUnit(asset.unit);
       assets.push({
         utxo_address_address: utxo.address,
         utxo_hash: utxo.txHash,
@@ -477,9 +459,7 @@ export function mapAddressUtxoAssets(
         unit: asset.unit,
         validFrom: validFrom,
         validTo: validTo,
-        asset_quantity: asset.quantity,
-        asset_policyId: policyId,
-        asset_assetName: assetName,
+        ...assetSlice(asset.unit, asset.quantity),
       });
     }
   });
@@ -522,6 +502,8 @@ export function mapBlock(providerBlockData: BlockProviderData, epochData?: Epoch
     size: providerBlockData.size,
     txCount: providerBlockData.txCount,
     fees: providerBlockData.fees ?? '0',
+    // left out when unknown, so storing the block again keeps a parent hash already stored
+    ...(providerBlockData.previousHash ? { previousHash: providerBlockData.previousHash } : {}),
   };
 }
 
@@ -566,8 +548,10 @@ export function mapTransactionMetadata(providerLabels: MetadataLabelTxProviderDa
   return rows;
 }
 
+const MAX_UINT64 = 2n ** 64n - 1n;
+
 // Maps a uint64 metadata label to the int64 id key. Labels >= 2^63 wrap by two's complement.
-// Values beyond 2^53 are returned as a decimal string. Null when the label is no non-negative integer.
+// Values beyond 2^53 are returned as a decimal string. Null when the label is no uint64.
 export function metadataIdFor(label: string | number): number | string | null {
   let big: bigint;
   if (typeof label === 'number') {
@@ -578,6 +562,7 @@ export function metadataIdFor(label: string | number): number | string | null {
     if (!/^\d+$/.test(text)) return null;
     big = BigInt(text);
   }
+  if (big < 0n || big > MAX_UINT64) return null;
   const wrapped = BigInt.asIntN(64, big);
   const safe = wrapped >= BigInt(Number.MIN_SAFE_INTEGER) && wrapped <= BigInt(Number.MAX_SAFE_INTEGER);
   return safe ? Number(wrapped) : wrapped.toString();
@@ -607,10 +592,10 @@ export function mapPoolSnapshot(
     blocksEpoch: providerPoolData.blocksEpoch,
     liveStake: providerPoolData.liveStake,
     liveSize: providerPoolData.liveSize == null ? null : Number(providerPoolData.liveSize),
-    liveSaturation: Number(providerPoolData.liveSaturation),
+    liveSaturation: providerPoolData.liveSaturation == null ? null : Number(providerPoolData.liveSaturation),
     liveDelegators: providerPoolData.liveDelegators,
     activeStake: providerPoolData.activeStake,
-    activeSize: Number(providerPoolData.activeSize),
+    activeSize: providerPoolData.activeSize == null ? null : Number(providerPoolData.activeSize),
     pledge: providerPoolData.pledge,
     margin: Number(providerPoolData.margin),
     fixedCost: providerPoolData.fixedCost,
@@ -724,8 +709,8 @@ export function mapBareAsset(unit: string): AssetRow | null {
     unit,
     policyId,
     assetNameHex,
-    // hex fallback for non-text and NUL-bearing names
-    assetName: assetNameHex.length > 0 ? decodeAssetName(assetNameHex) : '',
+    // hex fallback for non-text and NUL-bearing names; an asset without a name has null, as in every asset row
+    assetName: assetNameHex.length > 0 ? decodeAssetName(assetNameHex) : null,
     fingerprint: computeCip14Fingerprint(policyId, assetNameHex),
     totalSupply: null,
     mintOrBurnCount: null,
@@ -828,7 +813,7 @@ export function mapBuildResult(txbuildResult: TransactionBuildResult, max_age: n
     builderEngine: txbuildResult.builderEngine,
     network: txbuildResult.network,
     senderAddress: txbuildResult.senderAddress,
-    changeAddress: txbuildResult.changeOutput?.address ?? txbuildResult.senderAddress,
+    changeAddress: txbuildResult.changeAddress ?? txbuildResult.senderAddress,
     unsignedTxCbor: txbuildResult.unsignedTxCbor,
     txBodyHash: txbuildResult.txBodyHash,
     fee: txbuildResult.feeLovelace,
@@ -967,11 +952,6 @@ export function normalizeCostModels(raw: Record<string, unknown>): Record<string
   return result;
 }
 
-/** Hex to UTF-8 display string, hex fallback (see decodeAssetName). */
-function hexToUtf8(hex: string): string {
-  return decodeAssetName(hex);
-}
-
 // ignoreBOM: a leading U+FEFF is part of the asset name's bytes and must survive the round trip
 const strictUtf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 
@@ -988,20 +968,32 @@ export function decodeAssetName(hex: string): string {
   return text.includes('\u0000') ? hex : text;
 }
 
-/** Split an asset unit into policyId and decoded assetName; `lovelace` and malformed units get a null policyId. */
-function parseAssetUnit(unit: string): { policyId: string | null; assetName: string | null } {
-  if (unit === 'lovelace') {
-    return { policyId: null, assetName: 'lovelace' };
-  }
-  if (unit.length < 56 || !/^[a-f0-9]+$/i.test(unit)) {
-    return { policyId: null, assetName: unit };
-  }
+/** The AssetSlice columns of one asset row, as every table that holds asset rows stores them. */
+export interface AssetSliceColumns {
+  asset_quantity: string;
+  asset_policyId: string | null;
+  asset_assetNameHex: string | null;
+  asset_assetName: string | null;
+  asset_fingerprint: string | null;
+}
 
-  const policyId = unit.slice(0, 56);
-  const assetNameHex = unit.slice(56);
-  const assetName = assetNameHex.length > 0 ? hexToUtf8(assetNameHex) : '';
-
-  return { policyId, assetName };
+// The AssetSlice columns of `unit`. A token gets policy id, name in hex and decoded, and its CIP-14
+// fingerprint; an empty name is null. Lovelace and a malformed unit get the unit as name and no other part.
+export function assetSlice(unit: string, quantity: string | number | bigint): AssetSliceColumns {
+  const asset_quantity = String(quantity);
+  const lower = unit.toLowerCase();
+  if (!ASSET_UNIT_REGEX.test(lower)) {
+    return { asset_quantity, asset_policyId: null, asset_assetNameHex: null, asset_assetName: unit, asset_fingerprint: null };
+  }
+  const policyId = lower.slice(0, 56);
+  const nameHex = lower.slice(56);
+  return {
+    asset_quantity,
+    asset_policyId: policyId,
+    asset_assetNameHex: nameHex,
+    asset_assetName: nameHex ? decodeAssetName(nameHex) : null,
+    asset_fingerprint: computeCip14Fingerprint(policyId, nameHex),
+  };
 }
 
 /** CIP-14 fingerprint: bech32("asset", blake2b_160(policyId_bytes + assetName_bytes)). */
@@ -1060,7 +1052,7 @@ export function decodeShelleyAddress(address: string): DecodedAddress {
   if (typeof address !== 'string' || !address.length) return none;
   let bytes: Buffer;
   try {
-    const decoded = bech32.decode(address, 120);
+    const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
     if (decoded.prefix !== 'addr' && decoded.prefix !== 'addr_test' && decoded.prefix !== 'stake' && decoded.prefix !== 'stake_test') return none;
     bytes = Buffer.from(bech32.fromWords(decoded.words));
   } catch {

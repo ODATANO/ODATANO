@@ -13,9 +13,10 @@ import { blake2b_224 } from '@harmoniclabs/crypto';
 import { ogmiosReferenceScript } from '../../utils/reference-script';
 
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionAlreadySubmittedError, TransactionValidationError, normalizeBackendError } from '../../utils/errors';
+import { BackendInitError, ChainSyncClosedError, ChainSyncFrameError, NotFoundError, ProviderUnavailableError, TransactionAlreadySubmittedError, TransactionValidationError, normalizeBackendError, errorText } from '../../utils/errors';
 import { getTxHashFromCbor } from '../../utils/tx-build-helper';
 import { installOgmiosFrameGuard } from './ogmios-frame-guard';
+import { callSignal } from './call-signal';
 import { epochOfSlot, epochStartSlot, slotToPosixSeconds } from '../../utils/epoch-slots';
 import { normalizeCostModels, credentialToStakeAddress, credentialToDrepId, decodeShelleyAddress, sumUtxoAmounts, compareOutRef, ledgerView } from '../../utils/mappers';
 import {
@@ -41,13 +42,20 @@ import {
 
 import { EvaluatingBackend, ChainSyncBackend, ChainSyncCallbacks, ChainSyncHandle, ChainPoint, LedgerStateBackend, EpochStateBackend, EpochLedgerState, RewardAccountStateBackend, AskRewardAccounts } from './cardano-backend';
 
-import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
+import { BECH32_MAX_LENGTH, CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK, OGMIOS_UNEXPECTED_MEMPOOL_ERROR, OGMIOS_UNKNOWN_OUTPUT_REFERENCES } from '../../utils/const';
 import { Network } from '../cardano-client';
 
 const logger = cds.log('OgmiosBackend');
 
-/** Node rejection text for inputs that are no longer unspent. */
-const SPENT_INPUTS = /inputs are spent|unknown output reference|already been included/i;
+/** Text of a mempool refusal whose inputs are spent. The mempool error carries no structured reason. */
+const MEMPOOL_SPENT_INPUTS = /inputs are spent|badinputs|already been included/i;
+
+/** True for a refusal over spent inputs, which a resubmit of a transaction the node already holds also gets. */
+function refusedForSpentInputs(code: number, data: unknown): boolean {
+  if (code === OGMIOS_UNKNOWN_OUTPUT_REFERENCES) return true;
+  const error = (data as { error?: unknown } | null | undefined)?.error;
+  return code === OGMIOS_UNEXPECTED_MEMPOOL_ERROR && MEMPOOL_SPENT_INPUTS.test(String(error ?? ''));
+}
 
 /** Ogmios response shapes not fully typed in @cardano-ogmios/client. */
 interface OgmiosStakePool {
@@ -181,14 +189,14 @@ export function mapOgmiosEpochState(raw: OgmiosEpochStateRaw): EpochLedgerState 
     return {
       poolId,
       vrfKeyHash: p.vrfVerificationKeyHash || '',
-      blocksMinted: 0,
+      blocksMinted: null,
       blocksEpoch: null,
       liveStake: live.toString(),
       liveSize: ratio(live, liveTotal),
       liveSaturation: ratio(live, saturationPoint),
       liveDelegators: null,
-      activeStake: '0',
-      activeSize: 0,
+      activeStake: null,
+      activeSize: null,
       pledge: ogmiosValueToLovelaceString(p.pledge),
       margin: parseOgmiosRatio(p.margin),
       fixedCost: ogmiosValueToLovelaceString(p.cost),
@@ -642,15 +650,16 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       const max = CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY;
       const reserves = ogmiosValueToLovelaceString(pots.reserves);
       return {
+        // the ledger pots give treasury and reserves; circulation and stake are not in them
         supply: {
           max,
           total: (BigInt(max) - BigInt(reserves)).toString(),
-          circulating: '0',
-          locked: '0',
+          circulating: null,
+          locked: null,
           treasury: ogmiosValueToLovelaceString(pots.treasury),
           reserves,
         },
-        stake: { live: '0', active: '0' },
+        stake: { live: null, active: null },
       };
     }, this.name);
   }
@@ -719,8 +728,11 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
   }
 
-  /** A connection of its own with the ledger state at `point` acquired. The caller closes it. */
+  // A connection of its own with the ledger state at `point` acquired. The caller closes it. The
+  // call signal closes it too: a closed socket rejects every pending query, so a stuck caller ends.
   private async openLedgerStateAt(point: ChainPoint, label: string): Promise<{ client: LedgerStateClient; close: () => Promise<void> }> {
+    const signal = callSignal();
+    signal?.throwIfAborted();
     const url = new URL(this.ogmiosUrl);
     const connection = { host: url.hostname, port: Number(url.port) || (url.protocol === 'wss:' ? 443 : 80), tls: url.protocol === 'wss:' };
     const context = await createInteractionContext(
@@ -728,11 +740,21 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       () => { /* closed by close() below */ },
       { connection }
     );
+    const onAbort = () => this.forceCloseContext(context);
     try {
+      if (signal?.aborted) throw signal.reason;
+      signal?.addEventListener('abort', onAbort, { once: true });
       const client = await createLedgerStateQueryClient(context, { point: { slot: point.slot, id: point.hash } });
       // shutdown() closes THIS connection only; the backend's own socket is untouched
-      return { client, close: async () => { try { await client.shutdown(); } catch { /* best effort */ } } };
+      return {
+        client,
+        close: async () => {
+          signal?.removeEventListener('abort', onAbort);
+          try { await client.shutdown(); } catch { /* best effort */ }
+        },
+      };
     } catch (err) {
+      signal?.removeEventListener('abort', onAbort);
       this.forceCloseContext(context);
       throw err;
     }
@@ -828,18 +850,18 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       return {
         poolId,
         vrfKeyHash: pool.vrfVerificationKeyHash || '',
-        blocksMinted: 0,
-        // not in the ledger state; null = unavailable, as on Koios
+        // block counts are not in the ledger state
+        blocksMinted: null,
         blocksEpoch: null,
         liveStake: pool.stake?.ada?.lovelace ? String(pool.stake.ada.lovelace) : '0',
         // no total live stake to divide by; null = unavailable
         liveSize: null,
         // not in the ledger state; null = unavailable
         liveDelegators: null,
-        liveSaturation: 0,
-        // Ogmios pool params have no active stake
-        activeStake: '0',
-        activeSize: 0,
+        // no saturation point and no active stake in the live pool view
+        liveSaturation: null,
+        activeStake: null,
+        activeSize: null,
         // pledge/cost are ValueAdaOnly objects in Ogmios v6; margin is a Ratio string ("1/10")
         pledge: ogmiosValueToLovelaceString(pool.pledge),
         margin: parseOgmiosRatio(pool.margin),
@@ -877,13 +899,14 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         stakeaddress: stakeAddress,
         // a summary exists only for a registered credential
         active: true,
-        activeEpoch: 0,
-        // reward-account summaries carry no controlled amount and no withdrawal totals
-        controlledAmount: '0',
-        rewardsSum: ogmiosRewardBalance(account),
-        withdrawalsSum: '0',
-        reservesSum: '0',
-        treasurySum: '0',
+        // a reward-account summary carries the current balance only: no registration epoch, no
+        // controlled amount, no totals of rewards, withdrawals or pot payments
+        activeEpoch: null,
+        controlledAmount: null,
+        rewardsSum: null,
+        withdrawalsSum: null,
+        reservesSum: null,
+        treasurySum: null,
         withdrawableAmount: ogmiosRewardBalance(account),
         poolId: account.stakePool?.id || null,
         drepId: ogmiosDrepToId(account.delegateRepresentative),
@@ -899,21 +922,26 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       try {
         return await this.txSubmissionClient!.submitTransaction(signedTxCbor);
       } catch (err: unknown) {
-        // JSON-RPC 3000-3999: the node rejected the transaction. Known kinds keep their class
-        // (already submitted = 409, script failure = 400); anything else becomes a 400 with its reason.
-        const known = normalizeBackendError(err, this.name);
-        if (known.statusCode >= 400 && known.statusCode < 500) throw known;
+        // JSON-RPC 3000-3999: the node rejected the transaction, and the code decides, never its text.
+        // Only a node that holds the transaction makes it a 409. The code stays on the error as
+        // originalError.code for the callers to classify.
         const e = err as { code?: unknown; message?: unknown; data?: unknown };
-        if (typeof e?.code === 'number' && e.code >= 3000 && e.code < 4000) {
-          const detail = e.data === undefined ? '' : ` ${JSON.stringify(e.data).slice(0, 800)}`;
-          // spent inputs are also what a resubmit of a transaction the node already holds reports
-          if (SPENT_INPUTS.test(`${String(e.message ?? '')}${detail}`)) {
+        const rpcCode = typeof e?.code === 'number' && e.code >= 3000 && e.code < 4000 ? e.code : null;
+        if (rpcCode !== null) {
+          if (refusedForSpentInputs(rpcCode, e.data)) {
             const txHash = this.txHashOrNull(signedTxCbor);
-            if (txHash && await this.isKnownTransaction(txHash)) throw new TransactionAlreadySubmittedError(txHash, err);
+            const held = txHash ? await this.isKnownTransaction(txHash) : false;
+            if (held === true) throw new TransactionAlreadySubmittedError(txHash!, err);
+            // without the lookup the refusal may be about this very transaction: no verdict
+            if (held === null) {
+              throw new ProviderUnavailableError(`node refused ${txHash} with spent inputs, and whether it holds the transaction could not be read`, this.name, undefined, err);
+            }
           }
-          throw new TransactionValidationError(`node rejected the transaction (${e.code}): ${String(e.message ?? '')}${detail}`, err);
+          const detail = e.data === undefined ? '' : ` ${JSON.stringify(e.data).slice(0, 800)}`;
+          throw new TransactionValidationError(`node rejected the transaction (${rpcCode}): ${String(e.message ?? '')}${detail}`, err);
         }
-        throw err;
+        // no node verdict, whatever the text says: a socket or session failure
+        throw new ProviderUnavailableError(`submit to the node failed without a verdict: ${errorText(err)}`, this.name, undefined, err);
       }
     }, this.name);
   }
@@ -927,16 +955,16 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
     }
   }
 
-  /** Whether the node holds the transaction: in its mempool, or on chain with its first output unspent. */
-  private async isKnownTransaction(txHash: string): Promise<boolean> {
+  /** Whether the node holds the transaction: in its mempool, or on chain with its first output unspent. Null when the lookup failed. */
+  private async isKnownTransaction(txHash: string): Promise<boolean | null> {
     try {
       if (await this.mempoolHas(txHash)) return true;
       const query = await this.scanQueryClient();
       const onChain = await this.withInitTimeout(query.utxo({ outputReferences: [{ transaction: { id: txHash }, index: 0 }] }), 'utxo/known-transaction');
       return onChain.length > 0;
     } catch (err: unknown) {
-      logger.warn(`[OgmiosBackend] could not check whether ${txHash} is known: ${err instanceof Error ? err.message : String(err)}`);
-      return false;
+      logger.warn(`[OgmiosBackend] could not check whether ${txHash} is known: ${errorText(err)}`);
+      return null;
     }
   }
 
@@ -1052,12 +1080,13 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
         epoch: currentEpoch,
         start_time: slotToPosixSeconds(this.network, startSlot),
         end_time: slotToPosixSeconds(this.network, endSlot),
-        first_block_time: slotToPosixSeconds(this.network, startSlot),
+        // block statistics are not in the ledger state
+        first_block_time: null,
         last_block_time: slotToPosixSeconds(this.network, slot),
-        block_count: 0, // Not available from Ogmios state queries
-        tx_count: 0, // Not available from Ogmios state queries
-        output: '0',
-        fees: '0',
+        block_count: null,
+        tx_count: null,
+        output: null,
+        fees: null,
         active_stake: null,
       };
     }, this.name);
@@ -1296,10 +1325,14 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
           await reportStreamError(err);
         }
       },
-      rollBackward: async ({ point }, nextBlock) => {
+      rollBackward: async ({ point, tip }, nextBlock) => {
         try {
           const p = point as { slot: number; id: string } | 'origin';
-          await callbacks.rollBackward(p === 'origin' ? 'origin' : { slot: p.slot, hash: p.id });
+          const t = tip as { slot?: number; id?: string; height?: number } | 'origin';
+          const tipPoint = t && t !== 'origin' && t.slot != null && t.id
+            ? { slot: t.slot, hash: t.id, height: t.height }
+            : undefined;
+          await callbacks.rollBackward(p === 'origin' ? 'origin' : { slot: p.slot, hash: p.id }, tipPoint);
           nextBlock();
         } catch (err) {
           logger.error('[OgmiosBackend] chain-sync rollBackward failed, stream halted:', err);
@@ -1377,6 +1410,7 @@ export class OgmiosBackend implements EvaluatingBackend, ChainSyncBackend, Ledge
       size: block.size?.bytes ?? 0,
       txCount: txs.length,
       fees: totalFees.toString(),
+      previousHash: block.ancestor === 'genesis' ? null : block.ancestor,
     };
     return { block: blockData, txs };
   }

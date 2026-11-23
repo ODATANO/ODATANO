@@ -35,6 +35,10 @@ jobs:
       - run: node scripts/audit-tree.mjs app/wallet
       - run: npm pack --dry-run
       - run: node scripts/smoke-consumer.mjs
+      # the login package that ships reads ODATANO_TRUST_PROXY
+      - run: node scripts/check-login-package.mjs
+      # the BTP module as mta.yaml builds it: loads on CAP 10, installs from its lockfile, npm audit
+      - run: node scripts/build/verify-btp-module.mjs
 
   build-and-release:
     needs: [verify, package-check]
@@ -61,10 +65,8 @@ jobs:
         id: version
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
-          # Heal the recurring `v.1.10.0` typo (leading dot after the v) and
-          # fail fast on anything that is still not a valid image tag, instead
-          # of dying later in buildx with "invalid reference format".
-          VERSION=${VERSION#.}
+          # Only vMAJOR.MINOR.PATCH[-pre] is a release tag; publish-guard.mjs accepts nothing else,
+          # so a typo tag such as v.1.10.0 fails here instead of pushing images nobody can publish.
           if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$'; then
             echo "::error::tag '${GITHUB_REF#refs/tags/}' does not yield a valid version (got '$VERSION'); use vMAJOR.MINOR.PATCH"
             exit 1
@@ -120,26 +122,23 @@ jobs:
       - name: Start the image and probe it
         run: node scripts/smoke-image.mjs odatano:audit
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
+      # The image that passed the audit and the smoke is the one pushed, not a second build.
+      - name: Push the tested Docker image
+        env:
+          IMAGE: ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano
+          VERSION: ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          docker tag odatano:audit "$IMAGE:$VERSION"
+          docker push "$IMAGE:$VERSION"
           # `latest` only for stable releases, so an RC never replaces the stable tag.
-          # The action ignores empty list entries.
-          tags: |
-            ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
-            ${{ steps.version.outputs.prerelease == 'false' && format('ghcr.io/{0}/odatano:latest', steps.repo.outputs.repository_owner_lowercase) || '' }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.version }}
-            BUILD_DATE=${{ steps.version.outputs.build_date }}
-            VCS_REF=${{ steps.version.outputs.git_sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      
+          if [ "$PRERELEASE" = "false" ]; then
+            docker tag odatano:audit "$IMAGE:latest"
+            docker push "$IMAGE:latest"
+          fi
+
       - name: Export Docker image
         run: |
-          docker pull ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }}
           docker save ghcr.io/${{ steps.repo.outputs.repository_owner_lowercase }}/odatano:${{ steps.version.outputs.version }} -o odatano-${{ steps.version.outputs.version }}.tar
           gzip odatano-${{ steps.version.outputs.version }}.tar
       

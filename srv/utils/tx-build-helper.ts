@@ -5,7 +5,7 @@ import { MixedAssetsError, InsufficientFundsError, BackendError, TransactionVali
 import { ERROR_CODES } from './error-codes';
 import { dataFromJson, dataToCbor, type Data } from '@harmoniclabs/plutus-data';
 import { UPLCProgram, UPLCDecoder, Application, UPLCConst, compileUPLC } from '@harmoniclabs/uplc';
-import { Cbor, CborArray, CborBytes, CborMap, CborUInt, CborTag, type CborObj } from '@harmoniclabs/cbor';
+import { Cbor, CborArray, CborBytes, CborMap, CborUInt, CborTag, CborSimple, type CborObj } from '@harmoniclabs/cbor';
 import { Address, Script, ScriptType } from '@harmoniclabs/cardano-ledger-ts';
 
 /** Lovelace amount of a UTxO. */
@@ -60,18 +60,34 @@ export interface TxCacheTargets {
   inputs: Array<{ txHash: string; outputIndex: number }>;
   /** Distinct bech32 addresses receiving outputs (sender change + recipients). */
   outputAddresses: string[];
+  /** Outputs of the transaction, every address kind included. */
+  outputCount: number;
+  /** Last slot in which the transaction is valid (body key 3); null without an expiry. */
+  ttlSlot: number | null;
+  /** First slot in which the transaction is valid (body key 8); null without a start. */
+  validityStartSlot: number | null;
+  /** False when the transaction is marked to fail its scripts: then only its collateral is spent. */
+  isValid: boolean;
+  /** Collateral inputs (body key 13), spent instead of the inputs when the scripts fail. */
+  collateralInputs: Array<{ txHash: string; outputIndex: number }>;
+  /** Whether the body names a collateral return (key 16). It is output `outputCount` when the scripts fail. */
+  hasCollateralReturn: boolean;
 }
 
 // Consumed inputs and output addresses, i.e. the UTxO-cache rows a submit makes stale.
 // Outputs with undecodable Byron addresses are skipped.
 export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   let body: CborMap;
+  let isValid = true;
   try {
     const tx = Cbor.parse(fromHex(txCbor));
     if (!(tx instanceof CborArray) || !(tx.array[0] instanceof CborMap)) {
       throw new Error('not a transaction');
     }
     body = tx.array[0];
+    // [body, witnesses, isValid, auxiliary data] since Alonzo; a body alone has no flag
+    const flag = tx.array.length === 4 ? tx.array[2] : undefined;
+    if (flag instanceof CborSimple && flag.simple === false) isValid = false;
   } catch (err: unknown) {
     throw new TransactionValidationError('Failed to parse transaction CBOR', err, ERROR_CODES.TX_PARSE_FAILED);
   }
@@ -79,25 +95,25 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
   const bodyValue = (key: number): CborObj | undefined =>
     body.map.find(e => e.k instanceof CborUInt && e.k.num === BigInt(key))?.v;
 
-  // key 0: inputs, plain array or CBOR tag-258 set (Conway)
-  const inputs: TxCacheTargets['inputs'] = [];
-  let inputsObj = bodyValue(0);
-  if (inputsObj instanceof CborTag) inputsObj = inputsObj.data;
-  if (inputsObj instanceof CborArray) {
-    for (const entry of inputsObj.array) {
-      if (
-        entry instanceof CborArray &&
-        entry.array[0] instanceof CborBytes &&
-        entry.array[1] instanceof CborUInt
-      ) {
-        inputs.push({ txHash: toHex(entry.array[0].bytes), outputIndex: Number(entry.array[1].num) });
+  // keys 0 and 13: inputs and collateral inputs, plain array or CBOR tag-258 set (Conway)
+  const outRefs = (key: number): TxCacheTargets['inputs'] => {
+    const refs: TxCacheTargets['inputs'] = [];
+    let set = bodyValue(key);
+    if (set instanceof CborTag) set = set.data;
+    if (!(set instanceof CborArray)) return refs;
+    for (const entry of set.array) {
+      if (entry instanceof CborArray && entry.array[0] instanceof CborBytes && entry.array[1] instanceof CborUInt) {
+        refs.push({ txHash: toHex(entry.array[0].bytes), outputIndex: Number(entry.array[1].num) });
       }
     }
-  }
+    return refs;
+  };
+  const inputs = outRefs(0);
 
   // key 1: outputs, post-Alonzo map form ({0: address, ...}) or legacy array form ([address, amount, ...])
   const outputAddresses = new Set<string>();
   const outputsObj = bodyValue(1);
+  const outputCount = outputsObj instanceof CborArray ? outputsObj.array.length : 0;
   if (outputsObj instanceof CborArray) {
     for (const output of outputsObj.array) {
       const addrObj = output instanceof CborMap
@@ -112,7 +128,15 @@ export function extractTxCacheTargets(txCbor: string): TxCacheTargets {
     }
   }
 
-  return { inputs, outputAddresses: [...outputAddresses] };
+  const ttl = bodyValue(3);
+  const ttlSlot = ttl instanceof CborUInt ? Number(ttl.num) : null;
+  const start = bodyValue(8);
+  const validityStartSlot = start instanceof CborUInt ? Number(start.num) : null;
+
+  return {
+    inputs, outputAddresses: [...outputAddresses], outputCount, ttlSlot, validityStartSlot,
+    isValid, collateralInputs: outRefs(13), hasCollateralReturn: bodyValue(16) !== undefined,
+  };
 }
 
 // Maps Buildooor errors to typed BackendErrors. `context` is appended to the message.

@@ -1,5 +1,5 @@
 using {odatano.cardano as db} from '../db/schema';
-using {Bech32} from '../db/types';
+using {Bech32, ResolvedOutcome} from '../db/types';
 
 // External signing: signing requests, signature checks, submission and HSM signing.
 // The service itself is 'any': CAP checks the service before the operation, so anything stricter
@@ -185,6 +185,16 @@ service CardanoSignService @(impl: './cardano-sign-service') {
                                 @title: 'Defer Submit'
                                 @description: 'When true, sign + verify + claim run on the caller''s transaction and the network submit happens detached AFTER the caller''s commit (see SubmitVerifiedTransaction.deferSubmit).'
                                 deferSubmit: Boolean)   returns TransactionSubmissions;
+
+    @title      : 'Resolve Signing Request'
+    @description: 'Settle an unresolved signing request after reading the chain: confirmed when its transaction is on chain with passing scripts (the submission record is then written), failed when it is not and can no longer land; failed is refused with 409 while the transaction is not expired and an input of it is unspent. txHash, when given, must be the request transaction.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action ResolveSigningRequest(
+                                 @title: 'Signing Request ID' signingRequestId: UUID not null,
+                                 @title: 'Outcome' @assert.range outcome: ResolvedOutcome not null,
+                                 @title: 'Transaction Hash' txHash: String(64),
+                                 @title: 'Note' note: String(300)) returns SigningRequests;
 
     @title      : 'Get HSM Status'
     @description: 'Check the current status of the HSM connection and key availability.'

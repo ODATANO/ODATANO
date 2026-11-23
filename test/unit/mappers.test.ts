@@ -36,6 +36,7 @@ import {
   credentialToDrepId,
   decodeShelleyAddress,
   ledgerView,
+  assetSlice,
 } from '../../srv/utils/mappers';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 import type { Transaction } from '../../srv/utils/types';
@@ -537,6 +538,54 @@ describe('mappers', () => {
     });
   });
 
+  describe('mapAddressTransactions: what an address really spent', () => {
+    const addr = 'addr_test1abc';
+    const lovelace = (quantity: string) => [{ unit: 'lovelace', quantity }];
+    const net = (tx: Record<string, unknown>) => mapAddressTransactions(addr, [{ hash: 'tx1', blockTime: 1, ...tx } as any])[0].netAmount;
+
+    it('does not count a reference input or the collateral of a valid transaction as spent', () => {
+      expect(net({
+        inputs: [
+          { txHash: 'a', outputIndex: 0, address: addr, amount: lovelace('10000000') },
+          { txHash: 'b', outputIndex: 0, address: addr, amount: lovelace('5000000'), isCollateral: true },
+          { txHash: 'c', outputIndex: 0, address: addr, amount: lovelace('3000000'), isReference: true },
+        ],
+        outputs: [{ txHash: 'tx1', outputIndex: 0, address: addr, amount: lovelace('9800000'), isCollateral: false }],
+      })).toBe('-200000');
+    });
+
+    it('counts the collateral when the script phase failed', () => {
+      expect(net({
+        spendsCollaterals: true,
+        inputs: [{ txHash: 'b', outputIndex: 0, address: addr, amount: lovelace('5000000'), isCollateral: true }],
+        outputs: [{ txHash: 'tx1', outputIndex: 0, address: addr, amount: lovelace('4700000'), isCollateral: true }],
+      })).toBe('-300000');
+    });
+  });
+
+  describe('assetSlice: one form of asset row for every table', () => {
+    const policy = 'a'.repeat(56);
+
+    it('fills policy, name in hex and decoded, and the CIP-14 fingerprint', () => {
+      expect(assetSlice(policy + '546f6b656e', '7')).toEqual({
+        asset_quantity: '7', asset_policyId: policy, asset_assetNameHex: '546f6b656e', asset_assetName: 'Token',
+        asset_fingerprint: computeCip14Fingerprint(policy, '546f6b656e'),
+      });
+    });
+
+    it('decodes UTF-8 beyond ASCII and keeps a binary name as hex', () => {
+      const utf8 = Buffer.from('Ünïcode', 'utf8').toString('hex');
+      expect(assetSlice(policy + utf8, 1).asset_assetName).toBe('Ünïcode');
+      expect(assetSlice(policy + 'ff00', 1).asset_assetName).toBe('ff00');
+    });
+
+    it('gives a policy-only token no name, and lovelace and a malformed unit no parts', () => {
+      expect(assetSlice(policy, 1n)).toMatchObject({ asset_assetNameHex: '', asset_assetName: null, asset_quantity: '1' });
+      expect(assetSlice('lovelace', '5')).toEqual({ asset_quantity: '5', asset_policyId: null, asset_assetNameHex: null, asset_assetName: 'lovelace', asset_fingerprint: null });
+      expect(assetSlice('zz'.repeat(30), '1').asset_policyId).toBeNull();
+    });
+  });
+
   describe('mapAddressAssets', () => {
     it('should map invalid/short asset units with null policyId and raw assetName', () => {
       const rows = mapAddressAssets('addr_test1abc', '2024-01-01', '2025-01-01', [
@@ -764,7 +813,8 @@ describe('crawler analytics mappers', () => {
     it('handles a nameless asset (policy only)', () => {
       const row = mapBareAsset(POLICY)!;
       expect(row.assetNameHex).toBe('');
-      expect(row.assetName).toBe('');
+      // null, as assetSlice writes it in every asset row
+      expect(row.assetName).toBeNull();
       expect(row.fingerprint).toMatch(/^asset1/);
     });
 

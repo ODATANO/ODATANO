@@ -248,7 +248,7 @@ describe('Keyed reads honour $expand / $select', () => {
         .persist();
       // indexAddress also pulls recent txs (best-effort) — keep it quiet and empty
       nock('https://preview.koios.rest')
-        .post('/api/v1/address_txs')
+        .post('/api/v1/address_txs').query(true)
         .reply(200, [])
         .persist();
       // /address_utxos is already mocked by setupKoiosMocks() with mockUtxosAdaOnly

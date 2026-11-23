@@ -1,7 +1,7 @@
 import { BlockFrostAPI as BlockFrostAPIActual } from '@blockfrost/blockfrost-js';
 import { N_COST_MODEL_PLUTUS_V3 } from '@harmoniclabs/cardano-costmodels-ts';
 import { BlockfrostBackend } from '../../srv/blockchain/backends/blockfrost-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, TransactionValidationError } from '../../srv/utils/errors';
 
 // Mock the BlockFrostAPI
 vi.mock('@blockfrost/blockfrost-js', () => {
@@ -96,6 +96,66 @@ describe('BlockfrostBackend submitTransaction mock test', () => {
   });
 });
 
+describe('BlockfrostBackend: SDK options, refusals and batches', () => {
+  const sdkError = (status_code: number, message: string, body?: unknown) =>
+    Object.assign(new Error(message), { name: 'BlockfrostServerError', status_code, error: 'Bad Request', ...(body ? { body } : {}) });
+
+  it('sets the request timeout in the constructor and lets the client do the retries', () => {
+    BlockFrostAPI.mockClear();
+    new BlockfrostBackend(NETWORK, 4321, 'test-key');
+    const options = BlockFrostAPI.mock.calls[0][0] as { requestTimeout?: number; retrySettings?: { limit?: number } };
+    expect(options.requestTimeout).toBe(4321);
+    expect(options.retrySettings?.limit).toBe(0);
+  });
+
+  it('turns a submit 400 into a validation error with the node reason', async () => {
+    BlockFrostAPI.mockImplementation(function () { return {
+      txSubmit: vi.fn().mockRejectedValue(sdkError(400, 'Bad Request', { contents: { error: ['BadInputsUTxO'] } })),
+    }; });
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    const err = await backend.submitTransaction('84a0').catch((e: unknown) => e) as Error & { statusCode?: number };
+    expect(err).toBeInstanceOf(TransactionValidationError);
+    expect(err.message).toBe('node rejected the transaction: BadInputsUTxO');
+  });
+
+  it('leaves an unknown hash out of a batch instead of failing it', async () => {
+    const tx = { hash: 'a'.repeat(64) };
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    vi.spyOn(backend, 'getTransaction').mockImplementation(async (h: string) => {
+      if (h === tx.hash) return tx as never;
+      throw new NotFoundError('Transaction', 'blockfrost');
+    });
+    const batch = await backend.getTransactionsBatch([tx.hash, 'b'.repeat(64)]);
+    expect([...batch.keys()]).toEqual([tx.hash]);
+  });
+
+  it('never answers part of a block: a short list or an unknown transaction is a 503', async () => {
+    const tx = { hash: 'a'.repeat(64) };
+    BlockFrostAPI.mockImplementation(function () { return { blocksTxsAll: vi.fn().mockResolvedValue([tx.hash, 'b'.repeat(64)]) }; });
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    vi.spyOn(backend, 'getTransaction').mockImplementation(async (h: string) => {
+      if (h === tx.hash) return tx as never;
+      throw new NotFoundError('Transaction', 'blockfrost');
+    });
+    await expect(backend.getBlockTransactions('c'.repeat(64))).rejects.toMatchObject({ statusCode: 503 });
+    await expect(backend.getBlockTransactions('c'.repeat(64), 3)).rejects.toThrow('2/3 transaction(s)');
+    expect(await backend.getBlockTransactions('c'.repeat(64), 0)).toEqual([]);
+  });
+
+  it('lists the addresses of an account without reading their UTxOs', async () => {
+    const addressesUtxosAll = vi.fn();
+    BlockFrostAPI.mockImplementation(function () { return {
+      accounts: vi.fn().mockResolvedValue({ stake_address: 'stake_test1x', registered: true, active_epoch: 1, controlled_amount: '1', rewards_sum: '0', withdrawals_sum: '0', reserves_sum: '0', treasury_sum: '0', withdrawable_amount: '0', pool_id: null, drep_id: null }),
+      accountsAddressesAll: vi.fn().mockResolvedValue([{ address: 'addr_test1a' }, { address: 'addr_test1b' }]),
+      addressesUtxosAll,
+    }; });
+    const backend = new BlockfrostBackend(NETWORK, TIMEOUT_MS, 'test-key');
+    const account = await backend.getAccount('stake_test1x');
+    expect(account.addresses).toEqual(['addr_test1a', 'addr_test1b']);
+    expect(addressesUtxosAll).not.toHaveBeenCalled();
+  });
+});
+
 describe('BlockfrostBackend getPool mock test', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -113,7 +173,9 @@ describe('BlockfrostBackend getPool mock test', () => {
       live_saturation: 0.75,
       active_stake: '45000000000000',
       active_size: 0.045,
-      live_pledge: '1000000000000',
+      // the certificate pledge; live_pledge is what the owners hold and differs
+      declared_pledge: '1000000000000',
+      live_pledge: '7000000',
       margin_cost: 0.02,
       fixed_cost: '340000000',
       reward_account: 'stake1uxyz789'
@@ -172,6 +234,7 @@ describe('BlockfrostBackend getPool mock test', () => {
       live_saturation: 0,
       active_stake: null,
       active_size: 0,
+      declared_pledge: null,
       live_pledge: null,
       margin_cost: 0,
       fixed_cost: null,

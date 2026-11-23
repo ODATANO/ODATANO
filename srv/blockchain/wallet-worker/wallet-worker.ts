@@ -12,23 +12,31 @@ import {
 } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
 import { getTxHashFromCbor } from '../../utils/tx-build-helper';
-import { isTransactionOnChain } from '../transaction-presence';
+import { attemptSubmit, RESUBMIT_WINDOW_MS } from '../signing/submission-finalizer';
+import { getExternalSignerModule } from '../signing/external-signer';
+import { parseTransaction } from '../../cbor';
 import { TransactionSubmissions } from '#cds-models/odatano/cardano';
 import { ConfirmationTracker } from './confirmation-tracker';
 import { LeaseHeartbeat } from './lease-heartbeat';
-import { preparePayoutRequest, prepareWorkerBuildRequest } from './build-request';
+import { parseJobRequest, preparePayoutRequest, prepareWorkerBuildRequest, submitSignedProblem } from './build-request';
 import { emitServiceEvent } from '../../utils/service-events';
 import { createWorkerSigner, type WorkerSigner, type WorkerWalletConfig } from './signers';
+import { isExpired, judgeLanding } from '../signing/landing-proof';
+import { InvalidationUnfundedError, checkInvalidation, pickInvalidationInput, resendInvalidation, sendInvalidation, type OutputRef } from './invalidation';
 import {
   JOB_ERROR_CODES,
   bumpWalletStats,
   failOrphanedBuildingJobs,
+  findInvalidatingJobs,
   findNextDueJob,
   findOrphanedSubmittingJob,
+  findSubmittedJobs,
   getJobById,
   markBuilding,
   markFailed,
   markFailedAfterSend,
+  markSpendsNoWalletUtxo,
+  markUnresolved,
   markSubmitted,
   markSubmitting,
   recoverInterruptedJobs,
@@ -44,7 +52,7 @@ import {
   type WalletJobRow,
 } from './job-store';
 
-const { SELECT } = cds.ql;
+const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoWalletWorker');
 
 // Each tick leases every wallet with pending work and runs its next job up to the confirmation tracker.
@@ -64,7 +72,7 @@ export interface WalletWorkerConfig {
 export interface WalletWorkerDeps {
   client: CardanoClient;
   indexer: CardanoIndexer;
-  network: string;
+  network: Network;
   config: WalletWorkerConfig;
   instanceId: string;
 }
@@ -95,12 +103,22 @@ export class CardanoWalletWorker {
   private readonly executionPromises = new Set<Promise<void>>();
   private readonly tracker: ConfirmationTracker;
   private dispatchTimer: ReturnType<typeof setInterval> | null = null;
+  /** Earliest next reconcile per job with an open submit, and how often it was tried. */
+  private readonly reconcileBackoff = new Map<string, { attempts: number; notBefore: number }>();
+  /** Jobs whose transaction has no expiry, has not landed and still can: the unspent inputs, by job. */
+  private readonly staleJobs = new Map<string, { walletId: string; unspentInputs: OutputRef[] }>();
+  /** Earliest next look at a job's invalidation, and the tip height an own output was first seen at. */
+  private readonly invalidationNotBefore = new Map<string, number>();
+  private readonly invalidationSeen = new Map<string, number>();
+  /** Sends of a stored self-transfer not seen on chain yet, and the earliest next one. */
+  private readonly invalidationResend = new Map<string, { attempts: number; notBefore: number }>();
   private running = false;
   private tickInFlight: Promise<void> | null = null;
 
   constructor(private readonly deps: WalletWorkerDeps) {
     this.tracker = new ConfirmationTracker({
       client: deps.client,
+      indexer: deps.indexer,
       options: {
         confirmationDepth: deps.config.confirmationDepth,
         confirmationTimeoutMs: deps.config.confirmationTimeoutMs,
@@ -110,15 +128,32 @@ export class CardanoWalletWorker {
       onFinal: ({ jobId, walletId, outcome, kind, txHash, errorCode, errorMessage }) => {
         logger.debug(`Wallet ${walletId} unblocked (job ${outcome}), next tick dispatches`);
         // Terminal outcomes only, after the commit, so subscribers reading the row see the announced state.
-        emitServiceEvent('CardanoWorkerService', outcome === 'confirmed' ? 'jobConfirmed' : 'jobFailed', {
+        const event = outcome === 'confirmed' ? 'jobConfirmed' : outcome === 'failed' ? 'jobFailed' : 'jobUnresolved';
+        emitServiceEvent('CardanoWorkerService', event, {
           jobId,
           walletId,
           kind,
           txHash,
-          ...(outcome === 'failed' ? { errorCode: errorCode ?? null, errorMessage: errorMessage ?? null } : {}),
+          ...(outcome === 'failed' ? { errorCode: errorCode ?? null } : {}),
+          ...(outcome !== 'confirmed' ? { errorMessage: errorMessage ?? null } : {}),
         });
         void this.tickSafe();
       },
+      onStale: ({ jobId, walletId }, unspentInputs) => {
+        this.staleJobs.set(jobId, { walletId, unspentInputs });
+      },
+    });
+  }
+
+  /** A terminal outcome after its commit, so subscribers reading the row see the announced state. */
+  private announce(job: WalletJobRow, outcome: 'failed' | 'unresolved', errorCode: string, err: unknown): void {
+    emitServiceEvent('CardanoWorkerService', outcome === 'failed' ? 'jobFailed' : 'jobUnresolved', {
+      jobId: job.ID,
+      walletId: job.walletId,
+      kind: job.kind,
+      txHash: job.txHash,
+      ...(outcome === 'failed' ? { errorCode } : {}),
+      errorMessage: err instanceof Error ? err.message : err != null ? String(err) : null,
     });
   }
 
@@ -172,6 +207,11 @@ export class CardanoWalletWorker {
       logger.error('Wallet worker not started: no wallet signer could be initialized');
       return;
     }
+    // a confirmation needs a transaction lookup or a ledger read of the transaction's outputs
+    if (!this.deps.client.supports('getTransaction') && !this.deps.client.supports('isUtxoUnspent')) {
+      logger.error('Wallet worker not started: no backend can confirm a transaction (getTransaction or isUtxoUnspent)');
+      return;
+    }
 
     // 2. Crash recovery: fail interrupted builds, re-watch submitted jobs; `submitting`
     //    rows are reconciled by the first tick.
@@ -179,19 +219,7 @@ export class CardanoWalletWorker {
     if (recovery.submittingToReconcile.length) {
       logger.warn(`${recovery.submittingToReconcile.length} job(s) with an unresolved submit will be reconciled on the next dispatch tick`);
     }
-    for (const job of recovery.submittedToReconcile) {
-      if (!job.txHash) continue; // defensive: submitted implies txHash
-      this.tracker.track({
-        jobId: job.ID,
-        walletId: job.walletId,
-        kind: job.kind,
-        txHash: job.txHash,
-        signedTxCbor: job.signedTxCbor,
-        submittedAt: job.submittedAt,
-        confirmedSlot: job.confirmedSlot,
-        confirmedHeight: job.confirmedHeight,
-      });
-    }
+    this.trackSubmitted(recovery.submittedToReconcile);
 
     // 3. Go.
     this.running = true;
@@ -232,6 +260,10 @@ export class CardanoWalletWorker {
   private async tick(): Promise<void> {
     // Interrupted submits first: a stuck `submitting` row blocks its wallet queue.
     await this.reconcileOrphanedSubmissions();
+    // Submitted jobs of a stopped or crashed instance are watched here too. track() is idempotent.
+    await this.adoptSubmittedJobs();
+    // Transactions without an expiry that can still land get an input spent by a self-transfer.
+    await this.invalidateStaleJobs();
 
     // The next due job of every idle wallet this instance signs for: one row per wallet.
     const idle = this.getWalletIds().filter(walletId => !this.executing.has(walletId));
@@ -269,6 +301,28 @@ export class CardanoWalletWorker {
     }
   }
 
+  /** Watch every submitted job of the wallets this instance signs for until it confirms or fails. */
+  private async adoptSubmittedJobs(): Promise<void> {
+    const rows = await runWithoutAmbientTx(() => cds.tx((tx) => findSubmittedJobs(tx)));
+    this.trackSubmitted(rows.filter((row) => this.signers.has(row.walletId)));
+  }
+
+  private trackSubmitted(rows: WalletJobRow[]): void {
+    for (const job of rows) {
+      if (!job.txHash) continue; // submitted implies txHash
+      this.tracker.track({
+        jobId: job.ID,
+        walletId: job.walletId,
+        kind: job.kind,
+        txHash: job.txHash,
+        signedTxCbor: job.signedTxCbor,
+        submittedAt: job.submittedAt,
+        confirmedSlot: job.confirmedSlot,
+        confirmedHeight: job.confirmedHeight,
+      });
+    }
+  }
+
   /** Adopt `submitting` rows left by a dead executor and resolve them against the chain, under the wallet lease. */
   private async reconcileOrphanedSubmissions(): Promise<void> {
     const { instanceId } = this.deps;
@@ -279,7 +333,7 @@ export class CardanoWalletWorker {
 
       const orphan = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
         const stuck = await findOrphanedSubmittingJob(tx, walletId);
-        if (!stuck) return null;
+        if (!stuck || (this.reconcileBackoff.get(stuck.ID)?.notBefore ?? 0) > Date.now()) return null;
         return (await tryAcquireWalletLease(tx, walletId, instanceId)) ? stuck : null;
       }));
       if (!orphan) continue;
@@ -328,18 +382,19 @@ export class CardanoWalletWorker {
       let fee: string | number | null = null;
       let buildId: string | null = null;
 
+      const request = parseJobRequest(job.request);
+      if (!request) throw new BackendError('requestJson must be a JSON object', 400, ERROR_CODES.INVALID_INPUT, undefined, undefined, 'requestJson');
       if (job.kind === 'submitSigned') {
-        const request = JSON.parse(job.request ?? '{}') as { signedTxCbor?: string };
-        if (!request.signedTxCbor) {
-          throw new BackendError('submitSigned job has no signedTxCbor in its request', 400, ERROR_CODES.INVALID_INPUT);
-        }
-        signedTxCbor = request.signedTxCbor;
+        // jobs queued before the expiry rule are refused here, before anything is sent
+        const problem = submitSignedProblem(request, this.deps.network);
+        if (problem) throw new BackendError(problem, 400, ERROR_CODES.INVALID_INPUT, undefined, undefined, 'requestJson');
+        signedTxCbor = request.signedTxCbor as string;
       } else {
-        const rawReq = JSON.parse(job.request ?? '{}') as Record<string, unknown>;
+        const rawReq = request;
         // The worker wallet is always the sender and change target. It never spends from foreign addresses.
         rawReq.network = this.deps.network;
         rawReq.senderAddress = signer.getAddress();
-        if (!rawReq.changeAddress) rawReq.changeAddress = signer.getAddress();
+        rawReq.changeAddress = signer.getAddress();
         const build = this.buildOf(job, rawReq);
 
         // Lease lost → abort BEFORE building; orphan cleanup fails the row once the lease is provably dead.
@@ -353,6 +408,9 @@ export class CardanoWalletWorker {
         buildId = (buildResult.id as string) ?? null;
 
         signedTxCbor = signer.signTransaction(unsignedTxCbor, buildResult.txBodyHash as string);
+        // a signature that misses a key the body requires is refused by the node: fail before sending
+        const requiredSigners = new Set([signer.getPublicKeyHash(), ...(parseTransaction(unsignedTxCbor).requiredSigners ?? [])].map((k) => k.toLowerCase()));
+        getExternalSignerModule().verifyOrThrow(signedTxCbor, buildResult.txBodyHash as string, { requiredSigners: [...requiredSigners] });
       }
 
       // Hash from the signed bytes, so the row can name the tx before anyone has seen it.
@@ -440,43 +498,40 @@ export class CardanoWalletWorker {
       }
 
       logger.warn(`Job ${job.ID}: reconciling interrupted submit of tx ${job.txHash}`);
-      let submitError: unknown;
-      try {
-        const txHash = await this.submitWithAlreadyKnownTolerance(job.signedTxCbor);
-        await this.adoptSubmitted(job, txHash, job.signedTxCbor);
-        logger.info(`Job ${job.ID}: re-submitted the original signed tx (${txHash}), now awaiting confirmation`);
-        return;
-      } catch (err) {
-        submitError = err;
-      }
+      // The same bytes again while young, later the chain alone. 'failed' only with proof that it cannot land.
+      const sentAtMs = job.submittedAt ? Date.parse(job.submittedAt) : NaN;
+      const ageMs = Number.isFinite(sentAtMs) ? Date.now() - sentAtMs : 0;
+      const { outcome, error, finalRefusal, unspentInputs } = await attemptSubmit(
+        job.signedTxCbor, job.txHash, !(ageMs > RESUBMIT_WINDOW_MS), this.deps.indexer, this.deps.client,
+        Number.isFinite(sentAtMs) ? sentAtMs : null);
 
-      // A rejection may mean the tx is already on-chain (inputs spent), so the chain decides.
-      let onChain: boolean;
-      try {
-        // null: no backend can look transactions up, so the re-submit above is the only evidence
-        onChain = await isTransactionOnChain(this.deps.indexer, this.deps.client, job.txHash) === true;
-      } catch (lookupErr) {
-        logger.warn(`Job ${job.ID}: chain lookup for ${job.txHash} inconclusive, retrying next tick:`, lookupErr);
-        return;
-      }
-
-      if (onChain) {
-        logger.info(`Job ${job.ID}: tx ${job.txHash} is on-chain despite the failed submit, awaiting confirmation`);
+      if (outcome === 'accepted') {
+        this.reconcileBackoff.delete(job.ID);
         await this.adoptSubmitted(job, job.txHash, job.signedTxCbor);
+        logger.info(`Job ${job.ID}: tx ${job.txHash} is with the node or on chain, now awaiting confirmation`);
+        return;
+      }
+      if (outcome === 'unknown') {
+        if (unspentInputs) this.staleJobs.set(job.ID, { walletId: job.walletId, unspentInputs });
+        const attempts = (this.reconcileBackoff.get(job.ID)?.attempts ?? 0) + 1;
+        this.reconcileBackoff.set(job.ID, { attempts, notBefore: Date.now() + retryBackoffMs(attempts) });
+        logger.warn(`Job ${job.ID}: tx ${job.txHash} may still land, next check in ${retryBackoffMs(attempts) / 1000}s:`, error);
         return;
       }
 
-      const ageMs = job.submittedAt ? Date.now() - Date.parse(job.submittedAt) : 0;
-      const expired = ageMs > this.deps.config.confirmationTimeoutMs;
-      if (isTransientJobError(submitError) && !expired) {
-        logger.warn(`Job ${job.ID}: re-submit failed transiently and tx is not on-chain, retrying next tick:`, submitError);
+      this.reconcileBackoff.delete(job.ID);
+      if (outcome === 'unresolved') {
+        logger.error(`Job ${job.ID}: tx ${job.txHash} can no longer land and nothing shows whether it did; unresolved, an operator resolves it:`, error);
+        const marked = await runWithoutAmbientTx(() => cds.tx((tx) => markUnresolved(tx, job.ID, error ?? new Error('unresolved'))))
+          .catch((persistErr) => { logger.error(`Job ${job.ID}: unresolved persist failed:`, persistErr); return false; });
+        if (marked) this.announce(job, 'unresolved', JOB_ERROR_CODES.OUTCOME_UNRESOLVED, error);
         return;
       }
-
-      // Not on-chain and not submittable now. The job fails and keeps its idempotency key.
-      const code = expired ? JOB_ERROR_CODES.TX_DROPPED : JOB_ERROR_CODES.SUBMIT_REJECTED;
-      logger.error(`Job ${job.ID}: tx ${job.txHash} is not on-chain and cannot be submitted (${code}), failing:`, submitError);
-      await this.failReconciled(job, code, submitError);
+      // It landed with failing scripts, or it can never land. The job fails and keeps its idempotency key.
+      const code = outcome === 'scriptFailed' ? JOB_ERROR_CODES.SCRIPT_FAILED
+        : finalRefusal ? JOB_ERROR_CODES.SUBMIT_REJECTED : JOB_ERROR_CODES.TX_DROPPED;
+      logger.error(`Job ${job.ID}: tx ${job.txHash} fails as ${code}:`, error);
+      await this.failReconciled(job, code, error);
     } finally {
       heartbeat.stop();
       await runWithoutAmbientTx(() => cds.tx((tx) => releaseWalletLease(tx, job.walletId, instanceId)))
@@ -485,10 +540,129 @@ export class CardanoWalletWorker {
   }
 
   private async failReconciled(job: WalletJobRow, code: string, err: unknown): Promise<void> {
-    await runWithoutAmbientTx(() => cds.tx(async (tx) => {
-      const transitioned = await markFailedAfterSend(tx, job.ID, code, err ?? new Error(code));
-      if (transitioned) await bumpWalletStats(tx, job.walletId, 'failed');
-    })).catch((persistErr) => logger.error(`Job ${job.ID}: failure persist failed:`, persistErr));
+    const transitioned = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+      const done = await markFailedAfterSend(tx, job.ID, code, err ?? new Error(code));
+      if (done) {
+        await bumpWalletStats(tx, job.walletId, 'failed');
+        if (job.txHash) await tx.run(UPDATE.entity(TransactionSubmissions).set({ status: 'failed' }).where({ txHash: job.txHash, status: { in: ['submitted', 'pending'] } }));
+      }
+      return done;
+    })).catch((persistErr) => { logger.error(`Job ${job.ID}: failure persist failed:`, persistErr); return false; });
+    if (transitioned) this.announce(job, 'failed', code, err);
+  }
+
+  /** One invalidation per wallet at a time: the job already being invalidated first, else a stale one. */
+  private async invalidateStaleJobs(): Promise<void> {
+    const { instanceId } = this.deps;
+    const now = Date.now();
+    for (const walletId of this.getWalletIds()) {
+      if (!this.running) return;
+      if (this.executing.size >= this.deps.config.maxConcurrentWallets) return;
+      if (this.executing.has(walletId)) continue;
+      const signer = this.signers.get(walletId)!;
+      const target = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+        const inProgress = (await findInvalidatingJobs(tx, walletId))[0];
+        const staleId = [...this.staleJobs].find(([, s]) => s.walletId === walletId)?.[0];
+        const id = inProgress?.ID ?? staleId;
+        if (!id || (this.invalidationNotBefore.get(id) ?? 0) > now) return null;
+        if (!(await tryAcquireWalletLease(tx, walletId, instanceId))) return null;
+        // read under the lease: another instance may have stored a self-transfer meanwhile
+        return getJobById(tx, id);
+      }));
+      if (!target) continue;
+      this.invalidationNotBefore.set(target.ID, now + 60_000);
+      this.spawn(walletId, () => this.handleInvalidation(target, signer));
+    }
+  }
+
+  // The job's own transaction first: landed means the tracker takes it. Then its self-transfer:
+  // deep enough fails the job as INVALIDATED, unable to land sends a new one.
+  private async handleInvalidation(job: WalletJobRow, signer: WorkerSigner): Promise<void> {
+    const heartbeat = this.leaseHeartbeat(job.walletId);
+    try {
+      if (!job.signedTxCbor || !job.txHash || (job.status !== 'submitted' && job.status !== 'submitting')) {
+        this.staleJobs.delete(job.ID);
+        return;
+      }
+      const sentAtMs = job.submittedAt ? Date.parse(job.submittedAt) : NaN;
+      const own = await judgeLanding(job.signedTxCbor, job.txHash, this.deps, Number.isFinite(sentAtMs) ? sentAtMs : null);
+      if (own.verdict === 'onChain' || own.verdict === 'scriptFailed') {
+        this.staleJobs.delete(job.ID);
+        if (job.status === 'submitting') await this.adoptSubmitted(job, job.txHash, job.signedTxCbor);
+        return;
+      }
+      const unspentInputs = own.verdict === 'stale' ? own.unspentInputs : this.staleJobs.get(job.ID)?.unspentInputs ?? [];
+
+      if (job.invalidationTxHash && job.invalidationTxCbor) {
+        const state = await checkInvalidation(this.deps, job, this.invalidationSeen);
+        if (state === 'confirmed') return await this.finishInvalidated(job);
+        if (state === 'unknown') {
+          const err = new Error(`Transaction ${job.txHash} has no expiry; the input its self-transfer ${job.invalidationTxHash} spends is spent and nothing shows by which transaction`);
+          const marked = await runWithoutAmbientTx(() => cds.tx((tx) => markUnresolved(tx, job.ID, err)));
+          if (marked) { this.tracker.untrack(job.ID); this.announce(job, 'unresolved', JOB_ERROR_CODES.OUTCOME_UNRESOLVED, err); }
+          return;
+        }
+        if (state === 'included') return;
+        if (state === 'waiting') return await this.resendWaitingInvalidation(job, heartbeat);
+        this.invalidationResend.delete(job.ID);
+      }
+      if (own.verdict !== 'stale') return; // not stale (any more): nothing to spend
+      const { input, held } = await pickInvalidationInput(this.deps, signer.getAddress(), unspentInputs);
+      if (!input) {
+        // every input is unspent and none is the wallet's: it cannot take the wallet funds
+        this.staleJobs.delete(job.ID);
+        this.invalidationNotBefore.set(job.ID, Date.now() + 60 * 60_000);
+        const released = await runWithoutAmbientTx(() => cds.tx((tx) => markSpendsNoWalletUtxo(tx, job.ID)));
+        if (released) logger.warn(`Job ${job.ID}: tx ${job.txHash} has no expiry and can still land, but spends no UTxO of the wallet; it stays open and no longer holds the wallet queue`);
+        return;
+      }
+      if (!(await heartbeat.fence())) return;
+      const keep = [...this.staleJobs].filter(([id, s]) => id !== job.ID && s.walletId === job.walletId).flatMap(([, s]) => s.unspentInputs);
+      await sendInvalidation(this.deps, job, signer, input, { held, keep });
+    } catch (err) {
+      if (err instanceof InvalidationUnfundedError) {
+        this.invalidationNotBefore.set(job.ID, Date.now() + 60 * 60_000);
+        logger.warn(`Job ${job.ID}: tx ${job.txHash} has no expiry and can still land; the wallet cannot fund the self-transfer that would end it (${err.message}). Next try in an hour`);
+        return;
+      }
+      logger.warn(`Job ${job.ID}: invalidation step failed (next tick retries):`, err);
+    } finally {
+      heartbeat.stop();
+      await runWithoutAmbientTx(() => cds.tx((tx) => releaseWalletLease(tx, job.walletId, this.deps.instanceId)))
+        .catch(() => undefined);
+    }
+  }
+
+  // The stored self-transfer, not on chain yet and not expired: the same bytes again, waiting 1, 2, 4
+  // and up to 30 minutes between sends.
+  private async resendWaitingInvalidation(job: WalletJobRow, heartbeat: LeaseHeartbeat): Promise<void> {
+    if (isExpired(job.invalidationTxCbor!, this.deps.network)) return;
+    const state = this.invalidationResend.get(job.ID) ?? { attempts: 0, notBefore: 0 };
+    if (state.notBefore > Date.now() || !(await heartbeat.fence())) return;
+    await resendInvalidation(this.deps, job);
+    const attempts = state.attempts + 1;
+    this.invalidationResend.set(job.ID, { attempts, notBefore: Date.now() + Math.min(60_000 * 2 ** (attempts - 1), 30 * 60_000) });
+  }
+
+  private async finishInvalidated(job: WalletJobRow): Promise<void> {
+    const err = new Error(`Self-transfer ${job.invalidationTxHash} spent an input of transaction ${job.txHash} and is past rollback depth; ${job.txHash} can never land`);
+    const transitioned = await runWithoutAmbientTx(() => cds.tx(async (tx) => {
+      const done = await markFailedAfterSend(tx, job.ID, JOB_ERROR_CODES.INVALIDATED, err);
+      if (done) {
+        await bumpWalletStats(tx, job.walletId, 'failed');
+        await tx.run(UPDATE.entity(TransactionSubmissions).set({ status: 'failed' }).where({ txHash: job.txHash!, status: { in: ['submitted', 'pending'] } }));
+      }
+      return done;
+    }));
+    this.staleJobs.delete(job.ID);
+    this.invalidationSeen.delete(job.ID);
+    this.invalidationNotBefore.delete(job.ID);
+    this.invalidationResend.delete(job.ID);
+    this.tracker.untrack(job.ID);
+    if (transitioned) {
+      logger.warn(`Job ${job.ID}: failed as INVALIDATED`);
+      this.announce(job, 'failed', JOB_ERROR_CODES.INVALIDATED, err);
+    }
   }
 
   /** The job's build, ready to run in a transaction. A malformed request throws 400 INVALID_INPUT here. */
@@ -497,7 +671,7 @@ export class CardanoWalletWorker {
       const request = preparePayoutRequest(raw);
       return (tx) => this.deps.indexer.indexPlutusBuildResult(tx, request) as Promise<Record<string, unknown>>;
     }
-    const request = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, raw, this.deps.network as Network);
+    const request = prepareWorkerBuildRequest(job.kind as WalletJobKindValue, raw, this.deps.network);
     return (tx) => this.buildForKind(tx, job, request);
   }
 

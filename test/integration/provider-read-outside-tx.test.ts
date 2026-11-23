@@ -45,7 +45,7 @@ describe('Provider read outside the request transaction', () => {
     await test.data.reset();
     setupNocks();
     setupKoiosMocks();
-    nock('https://preview.koios.rest').post('/api/v1/address_txs').reply(200, []).persist();
+    nock('https://preview.koios.rest').post('/api/v1/address_txs').query(true).reply(200, []).persist();
   });
 
   afterEach(() => {

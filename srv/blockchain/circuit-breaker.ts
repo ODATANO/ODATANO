@@ -87,6 +87,12 @@ export class CircuitBreakerManager {
     }
   }
 
+  // A verdict about the request (404, 400) shows the backend is up. It counts toward closing a
+  // half-open circuit, but in the closed state it does not wipe the count of real failures.
+  recordVerdict(backendName: string): void {
+    if (this.circuits.get(backendName)?.state === 'half-open') this.recordSuccess(backendName);
+  }
+
   /** Record a failed call to a backend. */
   recordFailure(backendName: string): void {
     let entry = this.circuits.get(backendName);

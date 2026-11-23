@@ -1,25 +1,24 @@
 # Docker Deployment
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
 ## What the stack contains
 
-`docker-compose.yml` starts **three** services, not one:
+`docker-compose.yml` starts three services:
 
 | Service | Image | Role |
 |---|---|---|
-| `cardano-node` | `ghcr.io/intersectmbo/cardano-node:11.0.1` | Full node. Syncs the chain into the `node-db` volume and exposes a socket via `node-ipc`. |
-| `ogmios` | `cardanosolutions/ogmios:v7.0.0` | WebSocket bridge to the node on port `1337`. Healthy once it is *connected* to the node. |
-| `odatano` | `odatano:${VERSION:-0.1.0}` (built locally) | The API on port `4004`, wired to `BACKENDS=ogmios,koios` and `OGMIOS_URL=ws://ogmios:1337`. |
+| `cardano-node` | `ghcr.io/intersectmbo/cardano-node:11.0.1` | Full node on Preview. Syncs the chain into the volume `node-db` and offers its socket in the volume `node-ipc`. |
+| `ogmios` | `cardanosolutions/ogmios:v7.0.0` | WebSocket bridge to the node on port `1337`. Healthy once it is connected to the node. |
+| `odatano` | `odatano:${VERSION:-0.1.0}`, built locally | The API on port `4004`, with `BACKENDS=ogmios,koios` and `OGMIOS_URL=ws://ogmios:1337`. |
 
-`odatano` waits for the Ogmios healthcheck (`condition: service_healthy`), which reports healthy as
-soon as Ogmios can talk to the node — **not** when the chain is fully synced. Expect the node to
-need hours on a first start; until it catches up, Ogmios answers `202` instead of `200` and the
-Ogmios-backed paths return stale or empty results while Koios still serves.
+`odatano` starts when Ogmios is healthy. Healthy means connected to the node, not synced. A first sync
+takes hours. Until the node has caught up, Ogmios answers `/health` with `202` instead of `200`. Results
+that come from Ogmios are stale or empty in that time; Koios still answers.
 
-> On a restart the node first **validates its existing ChainDB** ("Validating chunk N of M"). It
-> creates `/ipc/node.socket` only when that finishes, so Ogmios logs `HealthFailedToConnect` until
-> then. That is normal startup, not a failure.
+> On a restart the node first checks its stored chain (`Validating chunk N of M` in its log). It creates
+> `/ipc/node.socket` only after that, so Ogmios logs `HealthFailedToConnect` until then. This is a normal
+> start, not a failure.
 
 ## Quick Start
 
@@ -29,15 +28,15 @@ Ogmios-backed paths return stale or empty results while Koios still serves.
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
 
-cp .env.example .env          # then set ODATANO_HTTP_PASSWORD; KOIOS_API_KEY is optional
-docker compose up -d          # builds the odatano image, starts all three services
+echo "ODATANO_HTTP_PASSWORD=choose-a-password" > .env
+docker compose up -d          # builds the odatano image and starts all three services
 
-# follow the node's initial sync
+# the first sync of the node
 docker compose logs -f cardano-node
 
-# once Ogmios reports healthy:
+# once Ogmios is healthy:
 curl http://localhost:1337/health
-curl http://localhost:4004/odata/v4/cardano/NetworkInformation
+curl -u odatano:choose-a-password http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
 Both ports are published on `127.0.0.1` only. Ogmios has no authentication, so keep `1337` local.
@@ -46,7 +45,7 @@ the `odatano` service in `docker-compose.yml`.
 
 ### Backends only
 
-To run just the node + Ogmios and point a local (non-container) ODATANO at them:
+To run the node and Ogmios alone and point a local ODATANO at them:
 
 ```bash
 docker compose up -d cardano-node ogmios
@@ -55,54 +54,71 @@ docker compose up -d cardano-node ogmios
 
 ### Pre-built image
 
+Every release is published as `ghcr.io/odatano/odatano:<version>`. A release candidate does not move the
+tag `latest`, so name the version:
+
 ```bash
-curl -O https://raw.githubusercontent.com/ODATANO/ODATANO/main/docker-compose.yml
-
-# Pin the version the compose file interpolates, and use the published image
-# instead of the local build by commenting out the `build:` block of `odatano`.
-echo "VERSION=2.0.0-rc.3" >> .env
-echo "ODATANO_HTTP_PASSWORD=choose-a-password" >> .env
-echo "KOIOS_API_KEY=your-koios-token" >> .env   # optional, raises the Koios rate limit
-
-docker compose up -d
+docker run -d --name odatano -p 127.0.0.1:4004:4004 -v odatano-data:/data \
+  -e ODATANO_HTTP_PASSWORD=choose-a-password \
+  -e NETWORK=preview -e BACKENDS=koios \
+  ghcr.io/odatano/odatano:<version>
 ```
 
-`VERSION` is the supported way to select the tag — `image: odatano:${VERSION:-0.1.0}` reads it from
-`.env`. Hardcoding a tag into the compose file is not necessary.
+To use it in the compose stack, set `image:` of the `odatano` service to that name and remove its
+`build:` block.
 
 ### Authentication
 
-The image runs `NODE_ENV=production` with HTTP basic auth through `@odatano/cap-auth`
-(`docker/cds-config.mjs`, `docker/entrypoint.sh`):
+The image uses HTTP basic auth through `@odatano/cap-auth`. The entrypoint builds the login from these
+variables (`docker/cds-config.mjs`):
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ODATANO_HTTP_PASSWORD` | required | Password of the operator user |
 | `ODATANO_HTTP_USER` | `odatano` | Operator user |
 | `ODATANO_HTTP_ROLES` | `Read,Transact,Sign,Admin` | Comma-separated roles of the user. `Read` alone gives a read-only login |
-| `ODATANO_AUTH` | `basic` | `dummy` = unauthenticated, local testing only |
+| `ODATANO_AUTH` | `basic` | `dummy` = no authentication, for local tests only. It starts only with the next variable |
+| `ODATANO_ALLOW_UNAUTHENTICATED` | unset | `yes-anyone-who-reaches-the-port-is-admin` confirms `ODATANO_AUTH=dummy`. Every start then logs an error line |
+| `ODATANO_TRUST_PROXY` | `0` | Number of reverse proxies in front of the container, 0 to 10. The login throttle then keys on the client address before them. Needs `@odatano/cap-auth` 0.2.0; with an older one the start refuses |
 
-Anonymous requests reach only `getLiveness()`, `getReadiness()` and `VerifyDataSignature`; everything else is
-challenged. Agent tokens (`x-agent-token`, `AGENT_GRANTS_ENABLED=true`) pass on the service paths.
+The image runs with `NODE_ENV=production` and holds no development users. The operator user is the only
+login.
+
+Requests without a login reach only `getLiveness()`, `getReadiness()`, `VerifyDataSignature` and the
+`$metadata` of the sign and indexer services. Everything else is challenged. Agent tokens (`x-agent-token`, `AGENT_GRANTS_ENABLED=true`) pass on the
+service paths.
+
+After 20 failed logins in 15 minutes for one client address and user, the answer is 429 with `Retry-After`,
+for the right password too. Unknown agent tokens are throttled the same way per client address; a valid
+token is always admitted.
+
+Behind a reverse proxy, set `ODATANO_TRUST_PROXY` to the number of proxies. Otherwise every client shares
+the proxy's address, and one guessing client locks the operator out. The port must then be reachable only
+through the proxy: a client that reaches it directly writes its own `X-Forwarded-For` and picks a new key
+per request.
 
 ### Database
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`); the schema is brought up to date on every boot (`ODATANO_DB_DEPLOY=never` skips it) |
-| `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set; seeded on the first boot, and brought up to date on every later one |
+| `ODATANO_DB_URL` | unset | `postgres://user:pw@host:5432/db` selects PostgreSQL (`sslmode=disable\|require\|verify-full`) |
+| `ODATANO_DB_PATH` | `/data/db.sqlite` | SQLite file when no URL is set. The first start creates it |
+| `ODATANO_DB_DEPLOY` | `auto` | `never` skips the schema deployment at start |
+| `ODATANO_DB_WAIT_SECONDS` | `60` | How long the start waits for PostgreSQL to accept connections |
 | `ODATANO_SQLITE_TIMEOUT_MS` | `5000` | How long a SQLite writer waits for the lock |
 
-Moving an existing SQLite deployment to PostgreSQL: stop the service, then run the image's
-`migrate` mode once against the freshly created database and start the service with
-`ODATANO_DB_URL` set:
+The compose file keeps `/data` in the volume `odatano-data`, so the SQLite file survives
+`docker compose down` and the one-off `run` containers below see it.
+
+To move a SQLite deployment to PostgreSQL, stop the service and run the `migrate` mode of the image once,
+with `ODATANO_DB_URL` set to the new, empty database:
 
 ```bash
 docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite
 ```
 
-It brings the SQLite file to the schema of this version, deploys the schema to PostgreSQL, copies
-every table through CAP and verifies the row counts.
+It brings the SQLite file to the schema of this version, deploys the schema to PostgreSQL, copies every
+table through CAP and compares the row counts. Then start the service with `ODATANO_DB_URL` set.
 
 ### Schema changes at start
 
@@ -111,22 +127,24 @@ service listens. It runs in two parts:
 
 1. The changes CAP's additive deployment refuses, each only where the database still needs it:
    - `TransactionInputs`, `TransactionOutputs` and their asset tables keyed by `Transactions.txSeq`
-     instead of the transaction hash (databases from before that layout).
+     instead of the transaction hash.
    - `Blocks.time` from text to a timestamp.
    - The columns `walletId` and `allowedJobKinds` of `CardanoAgentGrants` removed.
-   - The table `TransactionInputAssets` renamed to `TransactionInputAssetCopies`; the old name becomes a
-     view (see "Input assets" in the User Guide).
+   - The table `TransactionInputAssets` renamed to `TransactionInputAssetCopies`. The old name becomes a
+     view (see [Input assets](CRAWLER_GUIDE.md#input-assets) in the Crawler Guide).
 2. CAP's additive deployment: new tables, new columns, and every view.
 
-Part 1 runs in one transaction and refuses while a crawler holds its lease, so every instance on
-the database has to be stopped. A SQLite file created by an earlier image has no record of its
-schema (`cds_model`); the first start writes one from the tables and columns the file holds.
+Part 1 runs in one transaction. It refuses while a crawler holds its lease, so stop every instance that
+uses the database. On PostgreSQL two instances that start at once deploy one after the other; the second
+logs that it waits. A SQLite file created by an earlier image has no record of its schema (`cds_model`);
+the first start writes one from the tables and columns the file holds.
 
-On a large database run both parts as a step of their own, so the start itself has nothing left to do:
+On a large database run both parts as a step of their own. The start itself then has nothing left to do:
 
 ```bash
 docker compose stop odatano
 docker compose run --rm --no-deps odatano migrate-schema --dry-run   # the steps that are due, nothing changed
+docker compose run --rm --no-deps odatano deploy-schema --dry-run    # the same report
 docker compose run --rm --no-deps odatano deploy-schema              # part 1 and part 2, then exits
 docker compose up -d odatano
 ```
@@ -140,15 +158,18 @@ What to plan for:
   Back up the database before the first start of this version; the backup is the only way back.
 - `Blocks.time` rewrites the table and its indexes once. Measured on a copy of a mainnet database:
   9.7 million rows in 1.6 to 2.7 minutes, 3.5 GB of write-ahead log.
-- The txSeq step copies four tables: plan disk space for a second copy of them, and on PostgreSQL run
+- The txSeq step copies four tables. Plan disk space for a second copy of them. On PostgreSQL run
   `VACUUM (PARALLEL 0) odatano_cardano_transactions` afterwards. Measured: 68 million rows in 15 minutes
   on a 1 GB PostgreSQL. Without `PARALLEL 0` the PostgreSQL container needs a `shm_size` above
   `maintenance_work_mem`.
 - The other steps change no rows.
-- The server recreates its table indexes on the next start, which takes a while on a large database.
+- The service creates missing table indexes at start. On PostgreSQL it builds them `CONCURRENTLY` in the
+  background while the service answers; one instance builds, the others skip. Queries a new index serves
+  are slow until it exists. On SQLite the start waits for the indexes before it answers.
 
-A plugin deployment runs `node node_modules/@odatano/core/scripts/migrate-schema.mjs` with its own `db`
-configuration and then `cds deploy`.
+A plugin deployment runs `node node_modules/@odatano/core/scripts/deploy-schema.mjs` with its own `db`
+configuration, `--dry-run` first. A plain `cds deploy` drops and recreates every table of a kept SQLite
+database.
 
 ### Health probes
 
@@ -156,79 +177,42 @@ configuration and then `cds deploy`.
 curl http://localhost:1337/health                                    # Ogmios: 200 near tip, 202 while syncing
 curl http://localhost:4004/odata/v4/cardano-indexer/getLiveness\(\)    # API liveness, no credentials (Docker/compose healthcheck)
 curl http://localhost:4004/odata/v4/cardano-indexer/getReadiness\(\)   # 200 ready, 503 while context, database or a configured HSM is missing
-curl http://localhost:4004/odata/v4/cardano-indexer/getStatus\(\)      # crawler cursor + progress (if enabled)
-curl http://localhost:4004/odata/v4/cardano-worker/GetWorkerStatus\(\) # worker state + queue depth (if enabled)
+curl -u "odatano:$ODATANO_HTTP_PASSWORD" http://localhost:4004/odata/v4/cardano-indexer/getStatus\(\)      # crawler cursor + progress (if enabled)
+curl -u "odatano:$ODATANO_HTTP_PASSWORD" http://localhost:4004/odata/v4/cardano-worker/GetWorkerStatus\(\) # worker state + queue depth (if enabled)
 ```
 
-Note the last two are OData **functions** — HTTP GET with `()`. POST returns 405.
+The last two are OData functions: HTTP GET with `()`, and POST answers 405. They need the login; the
+probes above them do not.
 
 ## Configuration
 
-The `.env` file configures the service. Copy `.env.example` as a starting point:
+Compose reads `.env` only to fill in its own file. The `odatano` service receives these variables:
 
-```env
-# Network: mainnet, preview, preprod (default: preview)
-NETWORK=preview
+| Variable | Value in `docker-compose.yml` |
+|---|---|
+| `NETWORK` | `preview`, fixed. The node configuration in `config/preview` belongs to it |
+| `BACKENDS` | from `.env`, default `ogmios,koios` |
+| `OGMIOS_URL` | `ws://ogmios:1337` |
+| `KOIOS_API_KEY`, `BLOCKFROST_API_KEY` | from `.env`, optional |
+| `PRIMARY_TIMEOUT_MS`, `FALLBACK_TIMEOUT_MS` | `15000` |
+| `INDEX_TTL_MS` | `600000` |
+| `ODATANO_HTTP_PASSWORD` | from `.env`, required |
+| `ODATANO_TRUST_PROXY` | from `.env`, default `0` |
+| `AGENT_GRANTS_ENABLED` | from `.env`, default `false` |
+| `PORT` | `4004` |
 
-# Backends, comma-separated: koios, ogmios, blockfrost, odatano (default: koios; docker-compose: ogmios,koios)
-BACKENDS=ogmios,koios
-
-# Koios token (optional, https://koios.rest): raises the public-tier rate limit
-KOIOS_API_KEY=
-
-# Blockfrost API key, only with blockfrost in BACKENDS (https://blockfrost.io)
-# BLOCKFROST_API_KEY=
-
-# Cache TTL in milliseconds (default: 3600000 = 1 hour)
-INDEX_TTL_MS=3600000
-OGMIOS_URL=ws://ogmios:1337   # set by docker-compose; only needed when running outside it
-
-# --- HSM signing (optional; server-side keys) -------------------------------
-HSM_ENABLED=false
-# HSM_REQUIRES_ROLE is MANDATORY when HSM_ENABLED=true — startup throws ConfigError
-# without it. It names the role required for SignWithHsm / SignAndSubmitWithHsm and
-# for SubmitWalletJob against an HSM-backed wallet (403 ODATANO_FORBIDDEN otherwise).
-HSM_REQUIRES_ROLE=
-HSM_SLOT=0
-HSM_PIN=
-HSM_KEY_LABEL=cardano-signing-key
-
-# --- Chain crawler / pre-sync (off by default) ------------------------
-CRAWLER_ENABLED=false
-CRAWLER_START_SLOT=              # required when enabled
-CRAWLER_START_HASH=              # required when enabled
-CRAWLER_START_HEIGHT=
-CRAWLER_SOURCE=auto              # ogmios | pagination | auto
-CRAWLER_CONFIRMATION_DEPTH=3
-CRAWLER_BATCH_SIZE=20
-CRAWLER_POLL_INTERVAL_MS=20000
-# chain-sync needs `ogmios` listed in BACKENDS — a reachable Ogmios alone is not enough
-
-# --- Wallet worker (off by default) -----------------------------------
-WALLET_WORKER_ENABLED=false
-# JSON array: [{"walletId":"treasury","signerType":"software","keyEnv":"TREASURY_KEY"}]
-# signerType hsm | software; the software key is read from the env var named in keyEnv
-# (plain 64-hex or AES-256-GCM iv:tag:ciphertext) and never persisted.
-WALLET_WORKER_WALLETS=
-# Optional per wallet: "requiresRole":"<role>". Only callers with that role may queue jobs for it.
-WALLET_WORKER_MAX_CONCURRENT=4
-WALLET_WORKER_CONFIRMATION_DEPTH=3
-WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000
-WALLET_WORKER_POLL_INTERVAL_MS=2000
-WALLET_WORKER_MAX_ATTEMPTS=3
-WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
-
-```
+- Add every other setting to the `environment` list of the `odatano` service. That holds for the variables
+  of the tables above, such as `ODATANO_HTTP_ROLES` and `ODATANO_DB_URL`, and for the crawler and the
+  wallet worker. [Environment Configuration](PRODUCTION_DEPLOYMENT.md#environment-configuration) in the
+  Production guide lists them.
+- `VERSION` in `.env` names the tag of the image the stack builds.
+- The image sets `NODE_ENV=production` itself.
+- HSM signing is not available in the image: it contains no PKCS#11 binding.
 
 ## Commands
 
 ```bash
-# Start
-docker compose up -d
-
-# Logs
-docker compose logs -f
-
-# Stop
-docker compose down
+docker compose up -d      # start
+docker compose logs -f    # logs
+docker compose down       # stop and remove the containers; the volumes stay, the SQLite file included
 ```

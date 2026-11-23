@@ -38,6 +38,7 @@ import {
   ASSET_COLUMNS, pruneInputAssetCopies, restoreInputAssetCopies,
   referenceStatement, deleteCopiesStatement, keptStatement, restoreCopiesStatement, dropReferenceStatement, bothStatement,
 } from '../../srv/blockchain/crawler/input-asset-copies';
+import { KEY_LOOKUPS_ONLY } from '../../srv/blockchain/crawler/window-plan';
 
 const h = (c: string) => c.repeat(64);
 const SPENDER = 1000 * 65536;
@@ -165,6 +166,16 @@ describe('walk over slot windows', () => {
     ]);
     expect(r).toEqual({ atSlot: 349, toSlot: 349, referenced: 15, kept: 6, deleted: 27 });
     expect(seen).toEqual([199, 299, 349]);
+  });
+
+  it('tells PostgreSQL in every window to find the rows by key', async () => {
+    (cds.db as unknown as { kind: string }).kind = 'postgres';
+
+    await pruneInputAssetCopies({ fromSlot: 0, toSlot: 1_000_000, slotWindow: 200 });
+
+    // two windows; each starts with the planner settings
+    expect(statements().map(s => s.sql).filter((_, i) => i % 5 === 0)).toEqual([KEY_LOOKUPS_ONLY, KEY_LOOKUPS_ONLY]);
+    expect(statements()).toHaveLength(10);
   });
 
   it('keeps to the slots the caller asked for', async () => {

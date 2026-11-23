@@ -10,7 +10,7 @@ const { dbRun, fakeDb } = vi.hoisted(() => {
 });
 vi.mock('@sap/cds', () => {
   const select = (op: string) => (entity: string) => {
-    const q: any = { _op: op, entity };
+    const q: any = { _op: op, entity, SELECT: {} };
     q.columns = () => q;
     q.where = (where: unknown) => { q._where = where; return q; };
     q.orderBy = () => q;

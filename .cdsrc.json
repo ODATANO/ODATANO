@@ -1,5 +1,27 @@
 {
+  "build": {
+    "tasks": [
+      {
+        "for": "nodejs", "src": "srv", "dest": "../gen/srv",
+        "options": { "contentPackageLockJson": false, "contentCdsrcJson": false }
+      },
+      { "for": "hana", "src": "db", "dest": "../gen/db" }
+    ]
+  },
+  "typer": { "ieee754compatible": true },
   "requires": {
+    "db": {
+      "kind": "sqlite",
+      "credentials": { "url": "db.sqlite" },
+      "client": { "timeout": 5000 }
+    },
+    "[production]": {
+      "db": {
+        "kind": "hana",
+        "pool": { "acquireTimeoutMillis": 30000, "min": 0, "max": 10 }
+      },
+      "auth": "xsuaa"
+    },
     "[development]": {
       "auth": {
         "kind": "mocked",

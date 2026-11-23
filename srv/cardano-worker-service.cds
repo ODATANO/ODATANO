@@ -1,4 +1,4 @@
-using { WalletJobKind } from '../db/types';
+using { WalletJobKind, ResolvedOutcome } from '../db/types';
 using {odatano.cardano as db} from '../db/schema';
 
 // Async wallet jobs signed with server-held keys, which are never accepted or returned here.
@@ -44,6 +44,8 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         submittedAt  : Timestamp;
         confirmedAt  : Timestamp;
         finishedAt   : Timestamp;
+        resolution   : String(500);
+        invalidationTxHash : String(64);
     }
 
     @title      : 'Worker Status'
@@ -53,6 +55,7 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         executing            : many String;
         awaitingConfirmation : Integer;
         pendingJobs          : Integer;
+        unresolvedJobs       : Integer; // jobs an operator has to resolve (ResolveJob)
     }
 
     /** Terminal job outcome. Subscribe in process, or wait over HTTP with GetJobStatus(waitMs). */
@@ -69,6 +72,15 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
         kind         : String(12);
         txHash       : String(64);   // null when the job never reached the chain
         errorCode    : String(50);
+        errorMessage : String(500);
+    }
+
+    /** The transaction can no longer land and nothing shows whether it did; ResolveJob settles it. */
+    event jobUnresolved {
+        jobId        : UUID;
+        walletId     : String(50);
+        kind         : String(12);
+        txHash       : String(64);
         errorMessage : String(500);
     }
 
@@ -92,7 +104,7 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
     ) returns Boolean;
 
     @title      : 'Get Job Status'
-    @description: 'Current lifecycle state of a wallet job (non-admins: own jobs only). With waitMs the call answers as soon as the job is confirmed, failed or cancelled, or after that time with the state it has then. Keep waitMs below the timeout of the proxies in front of the service.'
+    @description: 'Current lifecycle state of a wallet job (non-admins: own jobs only). With waitMs the call answers as soon as the job is confirmed, failed, cancelled or unresolved, or after that time with the state it has then. Keep waitMs below the timeout of the proxies in front of the service.'
     @odatano.agent: 'operator'
     function GetJobStatus(
         @title: 'Job Id' jobId : UUID,
@@ -103,6 +115,17 @@ service CardanoWorkerService @(impl: './cardano-worker-service') {
     @description: 'Live worker summary: running state, wallets, in-flight executions, confirmation backlog, queue depth'
     @odatano.agent: 'operator'
     function GetWorkerStatus() returns WorkerStatus;
+
+    @title      : 'Resolve Job'
+    @description: 'Settle an unresolved job after reading the chain: confirmed when its transaction is on chain with passing scripts, failed when it is not and can no longer land. failed is refused with 409 while the transaction is not expired and an input of it is unspent. txHash, when given, must be the job transaction. The job and its submission record follow the outcome; the job keeps its idempotency key either way.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action ResolveJob(
+        @title: 'Job Id' jobId : UUID not null,
+        @title: 'Outcome' @assert.range outcome : ResolvedOutcome not null,
+        @title: 'Transaction Hash' txHash : String(64),
+        @title: 'Note' note : String(300)
+    ) returns JobStatus;
 
     @title      : 'Pause Worker'
     @description: 'Stop the local worker instance (finishes in-flight steps; queued jobs stay pending).'

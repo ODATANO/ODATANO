@@ -10,3 +10,14 @@ export function chunk<T>(arr: T[], size: number): T[][] {
 
 /** Max bind variables per IN-list, below every supported driver's cap. */
 export const IN_CHUNK = 500;
+
+// Calls `fn` for `items` with at most `size` calls running at once, past a failed call too: its slot
+// holds the rejection. Stops before a batch once `signal` aborted.
+export async function settleInBatches<T, R>(items: T[], size: number, fn: (item: T) => Promise<R>, signal?: AbortSignal): Promise<PromiseSettledResult<R>[]> {
+  const out: PromiseSettledResult<R>[] = [];
+  for (const batch of chunk(items, size)) {
+    signal?.throwIfAborted();
+    out.push(...await Promise.allSettled(batch.map(fn)));
+  }
+  return out;
+}

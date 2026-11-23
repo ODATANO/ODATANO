@@ -62,7 +62,7 @@ const UNIT = `${'p'.repeat(56)}746f6b`;
 
 beforeEach(() => {
   tables = {
-    Blocks: [10, 11, 13].map(h => ({ hash: `h${h}`, height: h, time: '2026-09-27T00:00:00.000Z', slot: h * 20, slotLeader: 'pool1x', epochNumber: 5, epochSlot: 1, size: 100, txCount: 1, fees: '170000' })),
+    Blocks: [10, 11, 13].map(h => ({ hash: `h${h}`, height: h, time: '2026-09-27T00:00:00.000Z', slot: h * 20, slotLeader: 'pool1x', epochNumber: 5, epochSlot: 1, size: 100, txCount: 1, fees: '170000', previousHash: h === 11 ? 'h10' : null })),
     Transactions: [{ hash: T1, txSeq: '700', blockHash: B1, blockHeight: 12, slot: '240', txIndex: 0, fee: '170000', deposit: '0', size: 300, blockTime: '1790000000' }],
     TransactionInputs: [
       { txSeq: '700', inputIndex: 1, address_address: 'addr_in2', spentTxHash: '9'.repeat(64), spentOutputIndex: 3, isCollateral: true, isReference: false },
@@ -90,25 +90,29 @@ describe('stored chain in the provider shape', () => {
   it('maps a block row back to BlockData (ISO time -> unix seconds)', () => {
     expect(blockRowToData(tables.Blocks[0])).toEqual({
       time: Date.parse('2026-09-27T00:00:00.000Z') / 1000, height: 10, hash: 'h10', slot: 200, slotLeader: 'pool1x',
-      epoch: 5, epochSlot: 1, size: 100, txCount: 1, fees: '170000',
+      epoch: 5, epochSlot: 1, size: 100, txCount: 1, fees: '170000', previousHash: null,
     });
   });
 
   it('returns next blocks only as long as the heights are contiguous', async () => {
-    const next = await readNextBlocks(db as never, 9, 5);
+    const next = await readNextBlocks(db as never, 9, 5, 'h9');
     expect(next.map(b => b.height)).toEqual([10, 11]); // 12 is missing, 13 is not reached
-    // a single operator per column object; two render as `height > $1 <= $2` (a Postgres syntax error)
-    expect(db.run.mock.calls.at(-1)![0].q.where).toEqual({ height: { between: 10, and: 14 } });
+    // the stored parent hash, null where the store does not know it; never a made-up one
+    expect(next.map(b => b.previousHash)).toEqual([null, 'h10']);
+    // one height past the page, to tell two rows at the last height apart; a single operator per
+    // column object, two render as `height > $1 <= $2` (a Postgres syntax error)
+    expect(db.run.mock.calls.at(-1)![0].q.where).toEqual({ height: { between: 10, and: 15 } });
   });
 
-  it('assembles a transaction with its children in order, lovelace first, burn as negative mint', async () => {
+  it('assembles a transaction with its children in order, lovelace first, and leaves the mint to the reader', async () => {
     const tx = (await readTransactionsByHash(db as never, [T1])).get(T1)!;
     expect(tx).toMatchObject({ hash: T1, blockHash: B1, blockHeight: 12, slot: 240, index: 0, fee: '170000', blockTime: 1790000000, size: 300 });
     expect(tx.inputs.map(i => i.outputIndex)).toEqual([0, 3]);
     expect(tx.inputs[0]).toMatchObject({ address: 'addr_in1', inlineDatum: 'd87980', amount: [{ unit: 'lovelace', quantity: '2000000' }, { unit: UNIT, quantity: '5' }] });
     expect(tx.inputs[1]).toMatchObject({ isCollateral: true, amount: [] });
     expect(tx.outputs).toEqual([{ address: 'addr_out', amount: [{ unit: 'lovelace', quantity: '1830000' }], txHash: T1, outputIndex: 0, dataHash: null, inlineDatum: null, isCollateral: false, referenceScriptHash: 'ab'.repeat(28), referenceScriptSize: null, referenceScriptType: null }]);
-    expect(tx.mint).toEqual([{ unit: UNIT, quantity: '-5' }]);
+    // AssetHistory may hold only part of the mint, so the reader derives it from inputs and outputs
+    expect(tx.mint).toBeUndefined();
     expect(tx.certificates).toEqual([{ certIndex: 0, kind: 'pool_delegation', stakeAddress: 'stake_test1x', poolId: 'pool1x', drepId: null, deposit: null, epoch: null }]);
     expect(tx.withdrawals).toEqual([{ stakeAddress: 'stake_test1x', amount: '42' }]);
     expect(tx.redeemers).toEqual([

@@ -1,60 +1,40 @@
 /**
- * ExtractPaymentKeyHash: the pure bech32 decoding the handler runs after
- * isValidBech32Address passes. No cds, no backend.
+ * ExtractPaymentKeyHash answers with `decodeShelleyAddress(address).paymentCredential` when the
+ * address has a key credential, and refuses a script credential or an address without one.
  */
 
 import { bech32 } from 'bech32';
+import { decodeShelleyAddress } from '../../srv/utils/mappers';
 import { TEST_FIXTURES } from '../integration/test-fixtures';
 
 const BECH32_MAX = 2000;
 
-function extract(address: string): string {
-  const decoded = bech32.decode(address, BECH32_MAX);
-  const bytes = Buffer.from(bech32.fromWords(decoded.words));
-  return bytes.slice(1, 29).toString('hex');
+/** Testnet address of `type` (header high nibble) over the given credentials. */
+function address(type: number, ...credentials: string[]): string {
+  const bytes = Buffer.concat([Buffer.from([type << 4]), ...credentials.map(c => Buffer.from(c, 'hex'))]);
+  return bech32.encode('addr_test', bech32.toWords(bytes), BECH32_MAX);
 }
 
-describe('ExtractPaymentKeyHash (bech32 decoding)', () => {
-
-  it('returns a 56-char lowercase hex string', () => {
-    const hash = extract(TEST_FIXTURES.addressWithFunds);
-    expect(hash).toMatch(/^[0-9a-f]{56}$/);
+describe('ExtractPaymentKeyHash decoding', () => {
+  it('returns the payment part of a base address, not the stake part', () => {
+    const decoded = decodeShelleyAddress(TEST_FIXTURES.addressWithAssets);
+    const bytes = Buffer.from(bech32.fromWords(bech32.decode(TEST_FIXTURES.addressWithAssets, BECH32_MAX).words));
+    expect(decoded.paymentCredential).toBe(bytes.subarray(1, 29).toString('hex'));
+    expect(decoded.paymentCredential).not.toBe(bytes.subarray(29, 57).toString('hex'));
+    expect(decoded.isScript).toBe(false);
   });
 
-  it('is deterministic — same address returns same hash', () => {
-    const a = extract(TEST_FIXTURES.addressWithFunds);
-    const b = extract(TEST_FIXTURES.addressWithFunds);
-    expect(a).toBe(b);
+  it('returns the credential of an enterprise key address', () => {
+    expect(decodeShelleyAddress(address(6, 'ab'.repeat(28)))).toMatchObject({ paymentCredential: 'ab'.repeat(28), isScript: false });
   });
 
-  it('different addresses produce different payment hashes', () => {
-    const a = extract(TEST_FIXTURES.addressWithFunds);
-    const b = extract(TEST_FIXTURES.emptyAddress);
-    expect(a).not.toBe(b);
+  it('marks a script payment credential, which the action refuses', () => {
+    expect(decodeShelleyAddress(address(7, 'cd'.repeat(28)))).toMatchObject({ paymentCredential: 'cd'.repeat(28), isScript: true });
+    expect(decodeShelleyAddress(address(1, 'cd'.repeat(28), 'ab'.repeat(28))).isScript).toBe(true);
   });
 
-  it('base (57-byte) address returns the payment part, not the stake part', () => {
-    const baseAddr = TEST_FIXTURES.addressWithAssets;
-    const paymentHash = extract(baseAddr);
-
-    const decoded = bech32.decode(baseAddr, BECH32_MAX);
-    const bytes = Buffer.from(bech32.fromWords(decoded.words));
-    const stakeHash = bytes.slice(29, 57).toString('hex');
-
-    expect(bytes.length).toBe(57);
-    expect(paymentHash).not.toBe(stakeHash);
-    expect(paymentHash).toBe(bytes.slice(1, 29).toString('hex'));
-  });
-
-  it('enterprise (29-byte) address returns the 28-byte credential', () => {
-    const enterpriseAddr = TEST_FIXTURES.addressWithFunds;
-    const decoded = bech32.decode(enterpriseAddr, BECH32_MAX);
-    const bytes = Buffer.from(bech32.fromWords(decoded.words));
-    expect(bytes.length).toBe(29);
-    expect(extract(enterpriseAddr)).toBe(bytes.slice(1, 29).toString('hex'));
-  });
-
-  it('throws on malformed bech32 input', () => {
-    expect(() => extract('not-an-address')).toThrow();
+  it('has no payment credential for a reward address or malformed input', () => {
+    expect(decodeShelleyAddress(TEST_FIXTURES.validStakeAddress).paymentCredential).toBeNull();
+    expect(decodeShelleyAddress('not-an-address').paymentCredential).toBeNull();
   });
 });

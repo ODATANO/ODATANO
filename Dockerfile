@@ -26,16 +26,18 @@ RUN npm rebuild pkcs11js || echo "pkcs11js native build skipped (optional; HSM u
 # and the runtime image has no TypeScript loader. `npm run build` emits into dist/, which nothing serves.
 RUN npm run build:plugin
 
-# The SQLite seed, deployed with schema evolution so a volume started from it can take later versions
-RUN node --no-warnings=ExperimentalWarning docker/deploy-schema.mjs
+# The SQLite seed, deployed with schema evolution so a volume started from it can take later versions.
+# Its binding comes from the same script as at runtime; the image holds no other database configuration.
+RUN CDS_CONFIG="$(ODATANO_DB_PATH=/app/db.sqlite node docker/cds-config.mjs --db-only)" \
+    node --no-warnings=ExperimentalWarning docker/deploy-schema.mjs
 
 # The DB adapters are devDependencies but this image serves from one, so both become dependencies of the
-# image's manifest, at the versions in package-lock.json. The lockfile entries of @sap/cds-dk go first:
-# the PostgreSQL adapter names it as an optional peer, and npm keeps an optional peer the lockfile holds.
+# image's manifest, at the versions in package-lock.json. npm keeps an optional peer the lockfile holds, so
+# the entries of @sap/cds-dk (peer of postgres) and better-sqlite3 (peer of sqlite; node:sqlite serves) go first.
 RUN ADAPTERS="$(node -p 'const p = require("./package-lock.json").packages; ["@cap-js/sqlite", "@cap-js/postgres"].map(n => n + "@" + p["node_modules/" + n].version).join(" ")')" \
  && npm prune --omit=dev \
  && npm pkg delete devDependencies \
- && node -e 'const fs = require("fs"); const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8")); for (const k of Object.keys(lock.packages)) if (/^node_modules\/@sap\/cds-dk(\/|$)/.test(k)) delete lock.packages[k]; fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2));' \
+ && node -e 'const fs = require("fs"); const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8")); for (const k of Object.keys(lock.packages)) if (/^node_modules\/(@sap\/cds-dk|better-sqlite3)(\/|$)/.test(k)) delete lock.packages[k]; fs.writeFileSync("package-lock.json", JSON.stringify(lock, null, 2));' \
  && npm install --ignore-scripts --save-exact $ADAPTERS \
  && npm ls --all > /dev/null
 
@@ -49,6 +51,9 @@ LABEL org.opencontainers.image.version="${VERSION}" \
 
 # Set version as environment variable (accessible at runtime)
 ENV APP_VERSION=${VERSION}
+
+# The service runs in CAP's production profile. Set here, after the build, which needs the dev tools.
+ENV NODE_ENV=production
 
 # The build steps above ran as root; the runtime user is `node`. SQLite needs
 # write access to the DB file AND the directory (WAL/journal files), otherwise

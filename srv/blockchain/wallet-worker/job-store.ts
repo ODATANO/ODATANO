@@ -5,6 +5,8 @@ import { CardanoWalletJobs, CardanoWorkerWallets } from '#cds-models/odatano/car
 import { parseJson, stringifyJson } from '../../utils/deep-json';
 import { BackendError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
+import { optionalNum, requiredNum, timestamp } from '../../utils/row-values';
+import { tryAcquireLease, renewLease, releaseLease, type LeaseRow } from '../../utils/lease';
 
 const { SELECT, INSERT, UPDATE } = cds.ql;
 const logger = cds.log('CardanoWalletWorker');
@@ -23,10 +25,18 @@ export const JOB_ERROR_CODES = {
   CANCELLED: 'CANCELLED',
   /** Reconciliation proved the tx is not on-chain and the node rejects it for good. */
   SUBMIT_REJECTED: 'SUBMIT_REJECTED',
+  /** The tx is on chain with failing scripts: only its collateral was spent, the payment did not happen. */
+  SCRIPT_FAILED: 'SCRIPT_FAILED',
+  /** The tx can no longer land and nothing shows whether it did; an operator resolves the job. */
+  OUTCOME_UNRESOLVED: 'OUTCOME_UNRESOLVED',
+  /** An operator resolved an unresolved job as failed after reading the chain. */
+  RESOLVED_FAILED: 'RESOLVED_FAILED',
+  /** A confirmed self-transfer spent an input of the job's transaction, which had no expiry; it can never land. */
+  INVALIDATED: 'INVALIDATED',
 } as const;
 
 export type WalletJobStatusValue =
-  'pending' | 'building' | 'submitting' | 'submitted' | 'confirmed' | 'failed' | 'cancelled';
+  'pending' | 'building' | 'submitting' | 'submitted' | 'confirmed' | 'failed' | 'cancelled' | 'unresolved';
 export type WalletJobKindValue = 'simpleAda' | 'metadata' | 'multiAsset' | 'mint' | 'plutusSpend' | 'payout' | 'submitSigned';
 export type WorkerSignerTypeValue = 'hsm' | 'software';
 
@@ -58,6 +68,11 @@ export interface WalletJobRow {
   createdAt: string | null;
   createdBy: string | null;
   finishedAt: string | null;
+  resolution: string | null;
+  invalidationTxHash: string | null;
+  invalidationTxCbor: string | null;
+  invalidationSentAt: string | null;
+  spendsNoWalletUtxo: boolean;
 }
 
 /** Normalized view of a worker-wallet row. */
@@ -73,22 +88,6 @@ export interface WorkerWalletRow {
   lastJobAt: string | null;
   jobsConfirmed: number;
   jobsFailed: number;
-}
-
-function optionalNum(v: unknown): number | null {
-  if (v === null || v === undefined || v === '') return null;
-  const n = Number(v);
-  return Number.isNaN(n) ? null : n;
-}
-
-function requiredNum(v: unknown, fallback = 0): number {
-  return optionalNum(v) ?? fallback;
-}
-
-function timestamp(v: unknown): string | null {
-  if (v === null || v === undefined || v === '') return null;
-  if (v instanceof Date) return v.toISOString();
-  return String(v);
 }
 
 function toJobRow(row: Record<string, unknown>): WalletJobRow {
@@ -116,6 +115,11 @@ function toJobRow(row: Record<string, unknown>): WalletJobRow {
     createdAt: timestamp(row.createdAt),
     createdBy: (row.createdBy as string) ?? null,
     finishedAt: timestamp(row.finishedAt),
+    resolution: (row.resolution as string) ?? null,
+    invalidationTxHash: (row.invalidationTxHash as string) ?? null,
+    invalidationTxCbor: (row.invalidationTxCbor as string) ?? null,
+    invalidationSentAt: timestamp(row.invalidationSentAt),
+    spendsNoWalletUtxo: row.spendsNoWalletUtxo === true,
   };
 }
 
@@ -192,9 +196,11 @@ function canonicalRequest(json: string | null): string {
   }
 }
 
-/** The holder of the key answers a retry of the same request. Another request under the key is a 409. */
+/** The holder of the key answers a retry of the same request. Another request, wallet or kind under the key is a 409. */
 function answerFromHolder(holder: WalletJobRow, args: InsertJobArgs): InsertJobResult {
-  if (canonicalRequest(holder.request) !== canonicalRequest(args.request)) {
+  const same = holder.walletId === args.walletId && holder.kind === args.kind
+    && canonicalRequest(holder.request) === canonicalRequest(args.request);
+  if (!same) {
     throw new BackendError(
       `idempotencyKey "${args.idempotencyKey}" belongs to job ${holder.ID} with a different request`,
       409, ERROR_CODES.IDEMPOTENCY_KEY_CONFLICT, undefined, undefined, 'idempotencyKey',
@@ -203,13 +209,8 @@ function answerFromHolder(holder: WalletJobRow, args: InsertJobArgs): InsertJobR
   return { jobId: holder.ID, status: holder.status, deduplicated: true };
 }
 
-async function readDedupHolder(
-  db: CapTransaction,
-  walletId: string,
-  kind: WalletJobKindValue,
-  dedupKey: string,
-): Promise<WalletJobRow | null> {
-  const row = await db.run(SELECT.one.from(CardanoWalletJobs).where({ walletId, kind, dedupKey }));
+async function readDedupHolder(db: CapTransaction, dedupKey: string): Promise<WalletJobRow | null> {
+  const row = await db.run(SELECT.one.from(CardanoWalletJobs).where({ dedupKey }));
   return row ? toJobRow(row as Record<string, unknown>) : null;
 }
 
@@ -221,7 +222,7 @@ export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promis
 
   if (claim) {
     // A failed holder kept its key because its transaction may have been sent.
-    const holder = await readDedupHolder(db, args.walletId, args.kind, claim);
+    const holder = await readDedupHolder(db, claim);
     if (holder) {
       if (holder.status !== 'cancelled') return answerFromHolder(holder, args);
       // Defensive: a cancelled job frees its key, so this row would block retries forever.
@@ -253,7 +254,7 @@ export async function insertJob(db: CapTransaction, args: InsertJobArgs): Promis
   } catch (err) {
     // Lost the race to another transaction with the same key. Return its job.
     if (!claim || !isUniqueViolation(err)) throw err;
-    const winner = await readDedupHolder(db, args.walletId, args.kind, claim);
+    const winner = await readDedupHolder(db, claim);
     if (!winner) throw err; // constraint fired for another reason, do not mask it
     logger.info(`Concurrent submission for idempotency key "${idempotencyKey}", returning job ${winner.ID}`);
     return answerFromHolder(winner, args);
@@ -289,10 +290,15 @@ export async function findNextDueJob(db: CapTransaction, walletId: string, now =
   return { ID: String(row.ID), walletId: String(row.walletId), priority: requiredNum(row.priority, 100), createdAt: timestamp(row.createdAt) };
 }
 
-/** Number of pending jobs, due or not. */
-export async function countPendingJobs(db: CapTransaction): Promise<number> {
-  const row = await db.run(SELECT.one.from(CardanoWalletJobs).columns('count(*) as n').where({ status: 'pending' })) as { n?: number | string } | undefined;
+/** Number of jobs in a status. */
+export async function countJobs(db: CapTransaction, status: WalletJobStatusValue): Promise<number> {
+  const row = await db.run(SELECT.one.from(CardanoWalletJobs).columns('count(*) as n').where({ status })) as { n?: number | string } | undefined;
   return Number(row?.n ?? 0);
+}
+
+/** Number of pending jobs, due or not. */
+export function countPendingJobs(db: CapTransaction): Promise<number> {
+  return countJobs(db, 'pending');
 }
 
 /** All jobs awaiting confirmation (used by the tracker on start/recovery). */
@@ -303,12 +309,31 @@ export async function findSubmittedJobs(db: CapTransaction): Promise<WalletJobRo
   return (rows ?? []).map(toJobRow);
 }
 
-/** Whether the wallet has a job currently in flight (building, submitting or submitted). */
+/** Jobs of a wallet whose transaction an invalidating self-transfer is spending around. */
+export async function findInvalidatingJobs(db: CapTransaction, walletId: string): Promise<WalletJobRow[]> {
+  const rows = await db.run(
+    SELECT.from(CardanoWalletJobs)
+      .where({ walletId, status: { in: ['submitting', 'submitted'] }, invalidationTxHash: { '!=': null } }),
+  ) as Record<string, unknown>[];
+  return (rows ?? []).map(toJobRow);
+}
+
+// Whether the wallet has a job in flight (building, submitting or submitted). A job whose transaction
+// spends no UTxO the wallet holds cannot take the wallet funds, so it does not hold the queue.
 export async function walletHasActiveJob(db: CapTransaction, walletId: string): Promise<boolean> {
-  const row = await db.run(
-    SELECT.one.from(CardanoWalletJobs).where({ walletId, status: { in: ['building', 'submitting', 'submitted'] } }),
+  // a wallet has at most a few jobs in flight, so they are filtered here
+  const rows = await db.run(
+    SELECT.from(CardanoWalletJobs).columns('ID', 'spendsNoWalletUtxo').where({ walletId, status: { in: ['building', 'submitting', 'submitted'] } }),
+  ) as Array<{ spendsNoWalletUtxo?: boolean | null }> | undefined;
+  return (rows ?? []).some((r) => r.spendsNoWalletUtxo !== true);
+}
+
+/** Marks a job whose transaction spends no UTxO the wallet holds, so it no longer holds the wallet queue. */
+export async function markSpendsNoWalletUtxo(db: CapTransaction, jobId: string): Promise<boolean> {
+  const affected = await db.run(
+    UPDATE.entity(CardanoWalletJobs).set({ spendsNoWalletUtxo: true }).where({ ID: jobId, status: { in: ['submitting', 'submitted'] } }),
   );
-  return !!row;
+  return Number(affected) > 0;
 }
 
 /** Oldest submitting row of a wallet without a live lease. Its submit outcome is unknown and needs a chain check. */
@@ -449,6 +474,48 @@ export async function markFailedAfterSend(db: CapTransaction, jobId: string, cod
   });
 }
 
+// Past the last moment its transaction could land, with nothing showing whether it did. The key
+// stays, polling stops and the wallet queue goes on; an operator resolves the job.
+export async function markUnresolved(db: CapTransaction, jobId: string, err: unknown): Promise<boolean> {
+  const message = err instanceof Error ? err.message : String(err);
+  return guardedTransition(db, jobId, ['submitting', 'submitted'], {
+    status: 'unresolved',
+    errorCode: JOB_ERROR_CODES.OUTCOME_UNRESOLVED,
+    errorMessage: message.slice(0, 500),
+    finishedAt: new Date().toISOString(),
+  });
+}
+
+// Stores the signed self-transfer before it is sent, so its bytes survive a crash. A later one
+// replaces an earlier one that can no longer land. `previous` is the hash the caller read: when
+// another instance stored one meanwhile, nothing is written.
+export async function recordInvalidation(
+  db: CapTransaction, jobId: string, invalidation: { txHash: string; signedTxCbor: string }, previous: string | null = null,
+): Promise<boolean> {
+  const affected = await db.run(
+    UPDATE.entity(CardanoWalletJobs)
+      .set({ invalidationTxHash: invalidation.txHash, invalidationTxCbor: invalidation.signedTxCbor, invalidationSentAt: new Date().toISOString() })
+      .where({ ID: jobId, status: { in: ['submitting', 'submitted'] }, invalidationTxHash: previous }),
+  );
+  return Number(affected) > 0;
+}
+
+// A job an earlier version failed on time or a refusal alone, whose transaction is on chain: back to
+// submitted, so the tracker confirms it by depth. The key it kept stays with it.
+export async function reopenFailedJob(db: CapTransaction, jobId: string, resolution: string): Promise<boolean> {
+  return guardedTransition(db, jobId, ['failed'], {
+    status: 'submitted', errorCode: null, errorMessage: null, finishedAt: null, resolution: resolution.slice(0, 500),
+  });
+}
+
+/** unresolved → confirmed or failed, as an operator read it on the chain. The key stays either way. */
+export async function resolveUnresolvedJob(db: CapTransaction, jobId: string, outcome: 'confirmed' | 'failed', resolution: string): Promise<boolean> {
+  const now = new Date().toISOString();
+  return guardedTransition(db, jobId, ['unresolved'], outcome === 'confirmed'
+    ? { status: 'confirmed', confirmedAt: now, finishedAt: now, errorCode: null, errorMessage: null, resolution: resolution.slice(0, 500) }
+    : { status: 'failed', finishedAt: now, errorCode: JOB_ERROR_CODES.RESOLVED_FAILED, resolution: resolution.slice(0, 500) });
+}
+
 /** pending → cancelled. Only pending jobs are cancellable (the tx may otherwise reach the chain). */
 export async function markCancelled(db: CapTransaction, jobId: string): Promise<boolean> {
   return guardedTransition(db, jobId, ['pending'], {
@@ -576,12 +643,7 @@ export async function listWallets(db: CapTransaction): Promise<WorkerWalletRow[]
   return (rows ?? []).map(toWalletRow);
 }
 
-function leaseDeadlineReached(wallet: WorkerWalletRow | null, owner: string, expectedMs: number): boolean {
-  if (!wallet || wallet.leaseOwner !== owner || !wallet.leaseUntil) return false;
-  const actualMs = Date.parse(wallet.leaseUntil);
-  // One second tolerance for adapter timestamp normalization.
-  return Number.isFinite(actualMs) && actualMs >= expectedMs - 1_000;
-}
+const walletLease = (walletId: string): LeaseRow => ({ entity: CardanoWorkerWallets, key: { walletId } });
 
 /** Takes a free wallet lease by compare-and-swap with read-back. One instance runs a wallet's jobs at a time. */
 export async function tryAcquireWalletLease(
@@ -591,23 +653,7 @@ export async function tryAcquireWalletLease(
   now = new Date(),
   ttlMs = WORKER_LEASE_TTL_MS,
 ): Promise<boolean> {
-  const raw = await db.run(SELECT.one.from(CardanoWorkerWallets).where({ walletId })) as Record<string, unknown> | undefined;
-  if (!raw) return false;
-  const current = toWalletRow(raw);
-  if (!current.enabled) return false;
-
-  const deadline = current.leaseUntil ? Date.parse(current.leaseUntil) : Number.NEGATIVE_INFINITY;
-  if (current.leaseOwner && current.leaseOwner !== owner && deadline > now.getTime()) return false;
-
-  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
-  // CAS on the observed owner only: timestamp equality is adapter-fragile and could
-  // make an expired lease permanently untakeable.
-  await db.run(UPDATE.entity(CardanoWorkerWallets).set({ leaseOwner: owner, leaseUntil }).where({
-    walletId,
-    leaseOwner: raw.leaseOwner ?? null,
-  }));
-  const verified = await readWallet(db, walletId);
-  return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
+  return tryAcquireLease(db, walletLease(walletId), owner, { now, ttlMs }, (row) => toWalletRow(row).enabled);
 }
 
 /** Renew/fence the caller's lease. Call before every job-advancing write. */
@@ -618,21 +664,12 @@ export async function renewWalletLease(
   now = new Date(),
   ttlMs = WORKER_LEASE_TTL_MS,
 ): Promise<boolean> {
-  const leaseUntil = new Date(now.getTime() + ttlMs).toISOString();
-  await db.run(UPDATE.entity(CardanoWorkerWallets).set({ leaseUntil }).where({
-    walletId,
-    leaseOwner: owner,
-  }));
-  const verified = await readWallet(db, walletId);
-  return leaseDeadlineReached(verified, owner, now.getTime() + ttlMs);
+  return renewLease(db, walletLease(walletId), owner, { now, ttlMs });
 }
 
 /** Release only the caller's lease; a stale process can never clear a successor. */
 export async function releaseWalletLease(db: CapTransaction, walletId: string, owner: string): Promise<void> {
-  await db.run(UPDATE.entity(CardanoWorkerWallets).set({ leaseOwner: null, leaseUntil: null }).where({
-    walletId,
-    leaseOwner: owner,
-  }));
+  await releaseLease(db, walletLease(walletId), owner);
 }
 
 /** Bump rolling per-wallet stats on a terminal job state. */

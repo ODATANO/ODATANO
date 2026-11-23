@@ -82,6 +82,19 @@ export function creditedAmount(now: string | null, before: bigint | undefined, w
   return credited < 0n ? null : credited.toString();
 }
 
+// True when every stored block in (fromSlot, toSlot] carries its withdrawals. A block crawled
+// without them, for example over Blockfrost, would make a credited amount too small.
+async function withdrawalsComplete(fromSlot: number, toSlot: number): Promise<boolean> {
+  return cds.tx(async (tx) => {
+    for (const marker of [false, null]) {
+      const gap = await tx.run(SELECT.one.from(Blocks).columns('hash')
+        .where({ slot: { between: fromSlot + 1, and: toSlot }, withdrawalsReported: marker }));
+      if (gap) return false;
+    }
+    return true;
+  });
+}
+
 async function storePage(
   tx: cds.Transaction,
   reported: RewardAccountState[],
@@ -90,7 +103,7 @@ async function storePage(
 ): Promise<void> {
   const before = new Map<string, bigint>();
   const withdrawn = new Map<string, bigint>();
-  if (previousSlot != null && opts.withdrawals) {
+  if (previousSlot != null) {
     for (const part of chunk(reported.map(a => a.stakeAddress), IN_CHUNK)) {
       const balances = await tx.run(
         SELECT.from(AccountEpochSnapshots).columns('stakeAddress', 'withdrawableAmount').where({ epoch: opts.epoch - 1, stakeAddress: { in: part } })
@@ -129,7 +142,11 @@ export async function snapshotAccounts(opts: AccountSnapshotOptions): Promise<Ac
 
   // rows of an attempt that did not finish were read at another block
   await cds.tx((tx) => tx.run(DELETE.from(AccountEpochSnapshots).where({ epoch })));
-  const previousSlot = await accountSnapshotSlot(epoch - 1);
+  const previousSnapshotSlot = await accountSnapshotSlot(epoch - 1);
+  // Without the withdrawals of the whole interval no credited amount is derived.
+  const previousSlot = previousSnapshotSlot != null && opts.withdrawals && await withdrawalsComplete(previousSnapshotSlot, at.slot)
+    ? previousSnapshotSlot
+    : null;
 
   let asked = 0;
   await backend.rewardAccountsAt({ slot: at.slot, hash: at.hash }, async (ask) => {
@@ -150,6 +167,8 @@ export async function snapshotAccounts(opts: AccountSnapshotOptions): Promise<Ac
     }
   });
 
+  // A stopped attempt never writes the marker: its rows may be read at another block than the next one's.
+  if (opts.shouldStop?.()) throw new Error(`account snapshot of epoch ${epoch} stopped`);
   const accounts = await cds.tx(async (tx) => {
     const block = await tx.run(SELECT.one.from(Blocks).columns('hash').where({ hash: at.hash }));
     if (!block) {

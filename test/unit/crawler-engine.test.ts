@@ -22,11 +22,24 @@ vi.mock('@sap/cds', () => {
   tx: (fn: (db: typeof fakeDb) => unknown) => fn(fakeDb),
   ql: {
     SELECT: {
-      one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
+      one: {
+        from: (entity: string) => ({
+          where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }),
+          columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }),
+        }),
+      },
       from: (entity: string) => ({
-        columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }) }),
+        columns: () => ({
+          where: (where: unknown) => {
+            const q = { _op: 'SELECT.many', entity, where };
+            return { ...q, limit: (limit: number) => ({ ...q, limit }) };
+          },
+        }),
         where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
       }),
+      distinct: {
+        from: (entity: string) => ({ columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.distinct', entity, where }) }) }),
+      },
     },
     DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
@@ -78,6 +91,7 @@ const stubIndexer = () => ({
   indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(),
   configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), snapshotEpoch: vi.fn(),
   setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn(),
+  reconcileRolledBackAssets: vi.fn(async () => undefined), forgetCrawlEpochs: vi.fn(),
 });
 
 const makeCrawler = (config: CrawlerConfig = CONFIG, client: unknown = {}) =>
@@ -149,6 +163,23 @@ describe('CardanoCrawler.handleReorg', () => {
     });
   });
 
+  it('rechecks the catalogue for the units of the rolled-back outputs and forgets the cached epochs', async () => {
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.many' && q.entity.endsWith('Blocks')) return [{ hash: 'b1' }];
+      if (q._op === 'SELECT.many' && q.entity.endsWith('Transactions')) return [{ hash: 't1', txSeq: '11' }];
+      if (q._op === 'SELECT.distinct' && q.entity.endsWith('TransactionOutputAssets')) return [{ unit: 'u1' }, { unit: 'u2' }];
+      return undefined;
+    });
+    const indexer = stubIndexer();
+    const crawler = new CardanoCrawler({} as never, indexer as never, 'preview', CONFIG);
+
+    await (crawler as unknown as { handleReorg: (p: unknown) => Promise<void> }).handleReorg({ slot: 500, hash: 'forkhash', height: 5 });
+
+    expect(opsFor('SELECT.distinct')[0].where).toEqual({ output_txSeq: { in: ['11'] } });
+    expect(indexer.reconcileRolledBackAssets).toHaveBeenCalledWith(fakeDb, ['u1', 'u2'], 500);
+    expect(indexer.forgetCrawlEpochs).toHaveBeenCalledTimes(1);
+  });
+
   it('deletes nothing but still resets the cursor and logs when no blocks are after the fork', async () => {
     dbRun.mockImplementation(async (q) => {
       if (q._op === 'SELECT.many' && q.entity.endsWith('Blocks')) return [];
@@ -183,6 +214,138 @@ describe('CardanoCrawler.handleReorg', () => {
     expect(blockDelete!.where).toEqual({ hash: { in: ['b9'] } });
     const reorg = opsFor('INSERT').find(q => q.entity.endsWith('CardanoReorgLog'));
     expect((reorg!.entries as Record<string, unknown>).forkHeight).toBeNull();
+  });
+});
+
+describe('CardanoCrawler rollBackward: a node behind the cursor deletes nothing', () => {
+  beforeEach(() => { dbRun.mockReset(); });
+
+  type Callbacks = { rollBackward: (p: unknown, tip?: unknown) => Promise<void> };
+  const CURSOR = { ID: 'SINGLETON', network: 'preview', lastSlot: 50_000, lastBlockHash: 'c'.repeat(64), lastHeight: 2_000, desiredRunning: true };
+
+  // A crawler with an open stream; returns the stream's callbacks and its handle.
+  async function openStream(blocksAfterPoint: number, pointStored = true, pointHeight: number | null = null) {
+    dbRun.mockImplementation(async (q) => {
+      if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR };
+      if (q._op === 'SELECT.one' && q.entity.endsWith('Blocks')) return pointStored ? { hash: 'f'.repeat(64), height: pointHeight } : undefined;
+      if (q._op === 'SELECT.many' && q.entity.endsWith('Blocks')) {
+        const rows = Array.from({ length: blocksAfterPoint }, (_, i) => ({ hash: `b${i}`, height: 2_000 - i, slot: 50_000 - i }));
+        return typeof (q as { limit?: number }).limit === 'number' ? rows.slice(0, (q as { limit?: number }).limit) : rows;
+      }
+      if ((q._op === 'SELECT.many' || q._op === 'SELECT.distinct') && q.entity.endsWith('Transactions')) return [];
+      return undefined;
+    });
+    let callbacks: Callbacks | null = null;
+    const handle = { close: vi.fn(async () => undefined) };
+    const backend = { openChainSync: vi.fn(async (_points: unknown, cb: Callbacks) => { callbacks = cb; return handle; }) };
+    const crawler = makeCrawler();
+    (crawler as unknown as { running: boolean }).running = true;
+    await (crawler as unknown as { runChainSync: (b: unknown) => Promise<void> }).runChainSync(backend);
+    return { crawler, callbacks: callbacks!, handle };
+  }
+  const deletes = () => opsFor('DELETE');
+  const nodeBehindWrite = () => opsFor('UPDATE').find(q => (q.set as Record<string, unknown>)?.nodeBehindSince !== undefined);
+  const errorWrite = () => opsFor('UPDATE').find(q => (q.set as Record<string, unknown>)?.syncStatus === 'error');
+  const refused = (crawler: unknown) => (crawler as { streamRefused: boolean }).streamRefused;
+
+  it('refuses a rollback when the node tip is below the cursor', async () => {
+    const { crawler, callbacks, handle } = await openStream(3);
+    await callbacks.rollBackward({ slot: 49_000, hash: 'f'.repeat(64) }, { slot: 49_500, hash: 'e'.repeat(64), height: 1_990 });
+
+    expect(deletes()).toHaveLength(0);
+    expect(nodeBehindWrite()).toBeDefined();
+    expect(String((nodeBehindWrite()!.set as Record<string, unknown>).lastError)).toContain('behind the cursor');
+    expect(handle.close).toHaveBeenCalled();
+    expect(refused(crawler)).toBe(true);
+    // waiting for a node is no error
+    expect(errorWrite()).toBeUndefined();
+  });
+
+  it('refuses a rollback deeper than k blocks (preview k = 432) as an error, not as a node behind', async () => {
+    const { crawler, callbacks } = await openStream(500);
+    await callbacks.rollBackward({ slot: 40_000, hash: 'f'.repeat(64) }, { slot: 51_000, hash: 'e'.repeat(64), height: 2_010 });
+
+    expect(deletes()).toHaveLength(0);
+    expect(nodeBehindWrite()).toBeUndefined();
+    expect(String((errorWrite()!.set as Record<string, unknown>).lastError)).toContain('more than k=432');
+    expect(refused(crawler)).toBe(true);
+  });
+
+  it('counts the depth from the cursor height, so a fork exactly k deep still rolls back', async () => {
+    // 500 stored blocks after the point include lazily stored tip blocks; the crawled depth is 432
+    const { callbacks } = await openStream(500, true, 2_000 - 432);
+    await callbacks.rollBackward({ slot: 40_000, hash: 'f'.repeat(64) }, { slot: 51_000, hash: 'e'.repeat(64), height: 2_010 });
+
+    expect(deletes().filter(q => q.entity.endsWith('Blocks'))).toHaveLength(1);
+    expect(errorWrite()).toBeUndefined();
+  });
+
+  it('refuses a rollback to a point that is not a stored block, and one to genesis, as errors', async () => {
+    const first = await openStream(2, false);
+    await first.callbacks.rollBackward({ slot: 49_990, hash: 'f'.repeat(64) }, undefined);
+    expect(deletes()).toHaveLength(0);
+    expect(String((errorWrite()!.set as Record<string, unknown>).lastError)).toContain('not a stored block');
+
+    const second = await openStream(2);
+    await second.callbacks.rollBackward('origin', undefined);
+    expect(deletes()).toHaveLength(0);
+  });
+
+  it('halts with an error after repeated contradicting rollbacks', async () => {
+    const { crawler, callbacks } = await openStream(2, false);
+    for (let i = 0; i < 5; i++) {
+      (crawler as unknown as { running: boolean }).running = true;
+      await callbacks.rollBackward({ slot: 49_990, hash: 'f'.repeat(64) }, undefined);
+    }
+    expect(deletes()).toHaveLength(0);
+    expect((crawler as unknown as { running: boolean }).running).toBe(false);
+    expect((crawler as unknown as { latchOnHalt: boolean }).latchOnHalt).toBe(true);
+  });
+
+  it('still rolls back a real fork of 3 blocks', async () => {
+    const { crawler, callbacks } = await openStream(3);
+    await callbacks.rollBackward({ slot: 49_997, hash: 'f'.repeat(64) }, { slot: 50_010, hash: 'e'.repeat(64), height: 2_001 });
+
+    expect(deletes().filter(q => q.entity.endsWith('Blocks'))).toHaveLength(1);
+    expect(nodeBehindWrite()).toBeUndefined();
+    expect(refused(crawler)).toBe(false);
+  });
+});
+
+describe('CardanoCrawler.persistBlock: the node-behind mark', () => {
+  beforeEach(() => { dbRun.mockReset(); dbRun.mockResolvedValue(1); });
+  const blk = { hash: 'h'.repeat(64), height: 10, slot: 100, time: 1, epoch: 0, txCount: 0 };
+  const cursorWrite = () => opsFor('UPDATE').find(q => q.entity.endsWith('CardanoSyncState') && (q.set as Record<string, unknown>)?.lastBlockHash === blk.hash);
+
+  it('is cleared by a block from chain-sync and kept by a block from pagination', async () => {
+    const crawler = makeCrawler();
+    (crawler as unknown as { running: boolean }).running = true;
+    const persist = (crawler as unknown as { persistBlock: (b: unknown, t: unknown[], tip: unknown, fromChainSync?: boolean) => Promise<boolean> }).persistBlock.bind(crawler);
+
+    await persist(blk, [], { slot: 100, hash: 'h'.repeat(64), height: 10 }, false);
+    expect(cursorWrite()!.set).not.toHaveProperty('nodeBehindSince');
+
+    dbRun.mockClear();
+    await persist(blk, [], { slot: 100, hash: 'h'.repeat(64), height: 10 }, true);
+    expect(cursorWrite()!.set).toMatchObject({ nodeBehindSince: null });
+  });
+});
+
+describe('CardanoCrawler parent check across a Byron epoch boundary', () => {
+  const follows = (network: string, slot: number, parentSlot: number) =>
+    (new CardanoCrawler({} as never, stubIndexer() as never, network, CONFIG) as unknown as { followsByronBoundary: (b: unknown, p: number) => boolean })
+      .followsByronBoundary({ slot, hash: 'x' }, parentSlot);
+
+  it('lets the first block of a Byron epoch name the unstored boundary block as its parent', () => {
+    // mainnet Byron epochs are 21600 slots long
+    expect(follows('mainnet', 21_600, 21_599)).toBe(true);
+    expect(follows('mainnet', 21_610, 21_590)).toBe(true);
+  });
+
+  it('checks every other parent, inside a Byron epoch and from Shelley on', () => {
+    expect(follows('mainnet', 21_620, 21_610)).toBe(false);
+    expect(follows('mainnet', 4_492_800 + 432_000, 4_492_799 + 432_000)).toBe(false);
+    expect(follows('preview', 86_400, 86_399)).toBe(false);
   });
 });
 
@@ -247,7 +410,8 @@ describe('CardanoCrawler intersection points (reorg across a restart)', () => {
     // EXACTLY, then doubling for reach.
     expect(heights.slice(0, 10)).toEqual([999, 998, 997, 996, 995, 994, 993, 992, 991, 990]);
     expect(heights.slice(10, 13)).toEqual([984, 968, 936]);          // -16,-32,-64
-    expect(heights.length).toBeLessThanOrEqual(25);                  // ~16k blocks of reach
+    // never deeper than k (preview: 432), so a point below that is never a rollback target
+    expect(Math.min(...heights)).toBe(1_000 - 432);
     expect(Math.min(...heights)).toBeGreaterThan(0);                 // never below genesis
     expect(new Set(heights).size).toBe(heights.length);              // no duplicates
   });

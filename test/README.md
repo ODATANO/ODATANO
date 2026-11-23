@@ -1,607 +1,265 @@
 # ODATANO Test Suite
 
-This repository contains comprehensive **integration tests** and **unit tests** for the ODATANO project. The tests ensure that all validators, error handling, blockchain backend integrations, transaction builders, signing workflows, and OData service endpoints work correctly.
-
----
-
-## Test Statistics
-
-- **Unit Tests**: 97 files (`npm run test:unit`) — hermetic, no network.
-- **Integration Tests**: 20 files; how many cases actually execute depends on backend reachability (the Ogmios-dependent suites self-skip).
-- **Total Test Suites**: 117 test files (97 unit + 20 integration)
-- Per-file counts further down predate the v2.0 additions and are indicative, not authoritative.
-- **Coverage gate**: 75% branches / functions / lines (`vitest.config.ts`, provider v8)
-- **Branch Coverage**: 88.31%
-- **Function Coverage**: 97.68%
-- **Line Coverage**: 97.26%
-- **Networks**: Cardano Preview testnet
-- **Backends**: Blockfrost, Koios, Ogmios
-- **TX Builder**: Buildooor (sole builder; CSL was removed in v1.8.0)
-- **Milestones Covered**: M1 (Read), M2 (Transaction Build), M3 (External Signing + Plutus Smart Contracts), v2.0 (chain crawler / pre-sync, wallet worker)
-
----
-
-## Test Structure
-
-```
-test/
-├── integration/                           # Integration tests (live backend testing)
-│   ├── core-test-suite.ts                 # Shared test suite for all backends (76 tests)
-│   ├── core.blockfrost.test.ts            # Blockfrost backend test entry
-│   ├── core.koios.test.ts                 # Koios backend test entry
-│   ├── core-ogmios.test.ts                # Ogmios backend tests (27 tests)
-│   ├── blockfrost-custom-backend.test.ts  # Custom Blockfrost endpoint configuration
-│   ├── defer-submit.test.ts               # Deferred submit path
-│   ├── nested-tx-guard.test.ts            # detachedTx deadlock guard
-│   ├── provider-read-outside-tx.test.ts   # No database connection held during a backend call
-│   ├── error-handling-service.test.ts     # Service-level error validation (96 tests)
-│   ├── error-handling.backend.ts          # Backend-level error handling (11 tests)
-│   ├── odata_features.test.ts             # OData query feature tests (41 tests)
-│   ├── tx-test-suite.ts                   # Transaction builder shared tests (117 tests)
-│   ├── tx.buildooor.test.ts               # Buildooor builder integration tests
-│   ├── tx-submission-mock.test.ts         # Transaction submission tests (7 tests)
-│   ├── tx-error-handling.builder.ts       # TX builder error scenarios (20 tests)
-│   ├── tx-handler-validation.test.ts      # Handler input validation (24 tests)
-│   ├── signing-services.test.ts           # External signing integration tests (33 tests)
-│   ├── wallet-worker.test.ts              # Wallet worker: deployed UNIQUE constraint, real
-│   │                                      #   transactions, OData layer (no network, no funds)
-│   ├── crawler.test.ts                    # Chain crawler over a real Ogmios: ingest, fork
-│   │                                      #   recovery, getStatus (self-skips without Ogmios)
-│   ├── test-fixtures.ts                   # Test constants, mock data, CBOR samples
-│   └── mock-helpers.ts                    # Nock-based HTTP mocking for Koios
-├── unit/                                  # Unit tests (isolated component testing)
-│   ├── validators.test.ts                 # Validator type guards and helpers (96 tests)
-│   ├── errors.test.ts                     # Error classes and utilities (74 tests)
-│   ├── cardano-client.test.ts             # CardanoClient configuration (32 tests)
-│   ├── cardano-tx-builder.test.ts         # CardanoTransactionBuilder tests (22 tests)
-│   ├── blockfrost-backend.test.ts         # Blockfrost backend initialization (11 tests)
-│   ├── koios-backend.test.ts              # Koios backend unit tests (7 tests)
-│   ├── ogmios-backend.test.ts             # Ogmios backend tests
-│   ├── buildooor-tx-builder.test.ts       # Buildooor transaction builder tests
-│   ├── buildooor-transfer-datum.test.ts   # Transfers with an inline datum given as CBOR
-│   ├── tx-build-helper.test.ts            # Transaction helper utilities
-│   ├── plutus-placeholders.test.ts        # __INPUT_IDX__ placeholder substitution tests
-│   ├── cbor-parse.test.ts                 # ParseTransactionCbor decoder tests
-│   ├── derive-script-address.test.ts      # DeriveScriptAddress action tests
-│   ├── extract-payment-key-hash.test.ts   # ExtractPaymentKeyHash action tests
-│   ├── cardano-service-readonly.test.ts   # @readonly projection enforcement tests
-│   ├── signing.test.ts                    # External signing unit tests
-│   ├── hsm-signer.test.ts                 # HSM signer unit tests
-│   ├── server.test.ts                     # App context, start and shutdown
-│   ├── config.test.ts                     # Configuration loaders (CDS section, environment, defaults)
-│   ├── plugin.test.ts                     # CAP plugin bootstrap tests
-│   ├── mappers.test.ts                    # Data mappers & address utilities
-│   ├── cip14-fingerprint.test.ts          # CIP-14 asset fingerprint tests (11 tests)
-│   ├── circuit-breaker.test.ts            # Circuit breaker logic tests (15 tests)
-│   ├── concurrency.test.ts                # Concurrency & race condition tests (5 tests)
-│   ├── request-coalescer.test.ts          # Request coalescing tests (3 tests)
-│   ├── cardano-indexer.test.ts            # Cardano indexer unit tests (19 tests)
-│   ├── error-paths.test.ts                # Error path coverage tests (8 tests)
-│   ├── cose-verifier.test.ts              # CIP-8/COSE data-signature verification
-│   ├── tx-request-parsers.test.ts         # Shared Build*-payload parsers
-│   ├── indexer-block-full.test.ts         # Bulk block indexing (indexBlockFull)
-│   ├── keep-relevant.test.ts              # Coin-selection helper
-│   │
-│   │                                      # --- v2.0 chain crawler ---
-│   ├── crawler-engine.test.ts             # Reorg handling, intersection ladder, source semantics
-│   ├── crawler-lifecycle.test.ts          # Start/stop, cursor resume, chain-sync wiring
-│   ├── crawler-epoch-snapshot.test.ts     # Pool/DRep and account snapshots at epoch boundaries
-│   ├── account-snapshots.test.ts          # Account snapshot walk on an in-memory SQLite: pages, credited amount, marker, reorg
-│   ├── input-asset-copies.test.ts         # Prune and restore of input asset copies, statements on SQLite
-│   ├── asset-registry-files.test.ts       # Token registry import from entry files, on an in-memory SQLite
-│   ├── migrate-schema.test.ts             # Schema migration steps on SQLite files
-│   ├── result-numbers.test.ts             # Int64 and Decimal as text in read and operation results
-│   ├── crawler-sync-state.test.ts         # Cursor, DB lease, latch semantics
-│   ├── crawler-backend-pagination.test.ts # Pagination source + parent-hash reorg detection
-│   ├── ogmios-chain-sync.test.ts          # Ogmios chain-sync mapping + intersection points
-│   ├── cardano-indexer-service.test.ts    # getStatus / pauseCrawler / resumeCrawler handlers
-│   │
-│   │                                      # --- v2.0 wallet worker ---
-│   ├── wallet-worker-engine.test.ts       # Dispatch, submitting state, reconciliation, fencing
-│   ├── wallet-worker-job-store.test.ts    # State machine, idempotency, recovery, leases
-│   ├── wallet-worker-lifecycle.test.ts    # Module singleton start/stop
-│   ├── wallet-worker-confirmation.test.ts # Confirmation depth, rollback re-submit, TX_DROPPED
-│   ├── wallet-worker-signers.test.ts      # Software/HSM signers, witness merge, key handling
-│   ├── wallet-worker-lease-heartbeat.test.ts # Lease renewal + strict pre-submit fence
-│   ├── wallet-worker-build-request.test.ts   # Job payload -> TxBuildRequest per kind
-│   ├── cardano-worker-service.test.ts     # Worker control surface + HSM role gate
-│   └── service-events.test.ts             # CAP event emission (never throws/blocks)
-└── README.md                              # This file
-```
-
----
-
-## Integration Tests
-
-Integration tests run against **real Cardano blockchain backends** on the **preview network**. Tests are executed against Blockfrost, Koios, and Ogmios backends.
-
-### Test Execution Model
-
-The integration test suite uses a **shared test suite pattern**:
-- The same test suite (`core-test-suite.ts`) runs against **multiple backends**
-- Transaction tests (`tx-test-suite.ts`) run against the **Buildooor builder**
-- Each backend/builder has its own test entry file
-- Tests cover **GET (collection/key reads)**, **POST (action/function)**, and **transaction building** scenarios
-- All tests validate **cold indexing** (blockchain fetch + DB persistence) and **warm reads** (cached DB retrieval)
-
-### Supported Backends
-
-- **Blockfrost** (`core.blockfrost.test.ts`): Requires `BLOCKFROST_KEY` environment variable
-- **Koios** (`core.koios.test.ts`): No API key required, uses `https://preview.koios.rest/api/v1`
-- **Ogmios** (`core-ogmios.test.ts`): Requires running Ogmios instance at `OGMIOS_URL`
-
----
-
-### core-test-suite.ts (76 tests)
-
-Comprehensive shared test suite covering all OData entities with GET and POST operations:
-
-#### M1 — Tested Entities
-- **NetworkInformation** (6 tests) — GET collection, POST action, cold/warm indexing
-- **Blocks** (6 tests) — GET collection, POST GetBlockByHash, cold/warm indexing
-- **Epochs** (6 tests) — GET collection, POST GetEpochByNumber, cold/warm indexing
-- **Transactions** (8 tests) — GET collection/key, POST GetTransactionByHash, metadata handling
-- **TransactionMetadata** (7 tests) — GET collection/key, POST GetMetadataByTxHash, composite keys
-- **Addresses** (18 tests) — GET collection, POST GetAddressByBech32, UTxO and Asset indexing
-- **Accounts** (6 tests) — GET collection/key, POST GetAccountByStakeAddress, cold/warm indexing
-- **Pools** (6 tests) — GET collection/key, POST GetPoolById, pool metadata
-- **Dreps** (6 tests) — GET collection/key, POST GetDrepById, governance data
-
-#### M2/M3 — Related Entities
-- TransactionInputs, TransactionOutputs, AddressAssets, AddressUTxOs, UTxOAssets
-- TransactionBuilds, SigningRequests
-
-### error-handling-service.test.ts (96 tests)
-
-Service-level input validation and OData error handling across M1, M2, and M3:
-
-- **Transaction errors** (13 tests) — Invalid hashes, format, length, characters
-- **Block errors** (5 tests) — Invalid block hashes
-- **Epoch errors** (4 tests) — Invalid epoch numbers
-- **Address errors** (9 tests) — Invalid/missing addresses, format validation
-- **GetLatestTransactionsByAddress** (3 tests) — Address query validation
-- **Account errors** (3 tests) — Invalid stake addresses
-- **Pool errors** (5 tests) — Invalid pool IDs
-- **DRep errors** (3 tests) — Invalid DRep IDs
-- **Service availability** (3 tests) — 503 scenarios
-- **M2 transaction building errors** — BuildSimpleAdaTransaction, BuildMultiAssetTransaction, BuildMintTransaction, SubmitTransaction, CheckSubmissionStatus
-- **M3 signing errors** — CreateSigningRequest, VerifySignature, SubmitVerifiedTransaction
-
-### odata_features.test.ts (41 tests)
-
-OData query feature compliance tests for M1 and M2 entities:
-
-- **$filter** — Comparison operators (gt, lt, eq, and, or)
-- **$select** — Field selection and projection
-- **$top / $skip** — Pagination with offset
-- **$count** — Result counting
-- **$orderby** — Sorting (asc/desc)
-- **$expand** — Navigation property expansion
-- **Combined queries** — Complex query combinations
-- **OData query capabilities** — Standard compliance checks
-- **M2 entity queries** — TransactionBuilds, SigningRequests query features
-
----
-
-## Transaction Builder Tests (M2)
-
-M2 milestone adds comprehensive transaction building and submission tests.
-
-### tx-test-suite.ts (117 tests)
-
-Shared test suite for the transaction builder, instantiated by `tx.buildooor.test.ts`:
-
-#### Entity READ Operations (5 tests)
-- TransactionBuilds collection reads and key access
-
-#### BuildSimpleAdaTransaction (7 tests)
-- Simple ADA transfers, assetsJson multi-asset outputs
-
-#### BuildTransactionWithMetadata (1 test)
-- Metadata transaction building
-
-#### BuildMultiAssetTransaction (10 tests)
-- Multi-asset transfers, outputDatumJson support
-
-#### BuildMintTransaction (16 tests)
-- Token minting with Plutus scripts
-- requiredSignersJson — Ed25519 key hash signers
-- scriptParamsJson — Parameterized validator support
-- inlineDatumJson — Inline datum on recipient output
-- mintRedeemerJson — Custom minting redeemer
-
-#### BuildPlutusSpendTransaction (16 tests)
-- Plutus spend with validator script + redeemer + script UTxO
-- requiredSignersJson, scriptParamsJson, inlineDatumJson support
-- lockOnScript — Lock output at enterprise script address
-
-#### SetCollateral (4 tests)
-- Collateral selection for Plutus transactions
-
-#### GetBuildDetails / CheckSubmissionStatus (2 tests)
-- Build record lookup and submission status checks
-
-#### M3 Signing Operations (4 tests)
-- AddressTransactionBuilds reads, GetTransactionBuildsByAddress action
-
-### tx.buildooor.test.ts
-
-Builder integration tests:
-- **Buildooor** builder — via Koios backend (the sole transaction builder since v1.8.0)
-- Tested with the full case set from `tx-test-suite.ts` + `tx-error-handling.builder.ts`
-
-### tx-error-handling.builder.ts (20 tests)
-
-Transaction-specific error scenarios shared across builders:
-
-- BuildSimpleAdaTransaction — insufficient funds
-- BuildTransactionWithMetadata — metadata edge cases
-- BuildMultiAssetTransaction — invalid assets, insufficient funds
-- BuildMintTransaction — invalid scripts, missing parameters, Plutus failures
-
-### tx-handler-validation.test.ts (24 tests)
-
-Handler-level input validation for M2 and M3 actions:
-
-- **BuildSimpleAdaTransaction validations** — Invalid JSON, missing fields
-- **BuildMultiAssetTransaction validations** — Non-array assetsJson
-- **BuildMintTransaction validations** — Invalid requiredSignersJson, scriptParams + lockOnScript + fingerprint
-- **BuildPlutusSpendTransaction validations** — Invalid scriptParamsJson, lockOnScript
-- **CheckSubmissionStatus validations** — Status queries
-- **VerifySignature validations** — Input validation
-- **SubmitVerifiedTransaction validations** — Missing build_id, full signed tx
-- **SetCollateral validations** — No UTxOs at address
-- **SubmitTransaction validations** — Submission failure
-
-### tx-submission-mock.test.ts (7 tests)
-
-Transaction submission flow tests with mocked Koios backend:
-
-- Successful submission with and without prior build records
-- CBOR handling and transaction hash verification
-
----
-
-## External Signing Tests (M3)
-
-M3 milestone adds comprehensive external signing and HSM signing workflow tests.
-
-### signing-services.test.ts (33 tests)
-
-External signing service integration tests:
-
-- **CreateSigningRequest** — Create signing request from build record
-- **GetSigningRequest** — Retrieve signing request status
-- **VerifySignature** — Cryptographic signature verification
-- **SubmitVerifiedTransaction** — Verify and submit combined workflow
-- **GetSigningRequestsByAddress** — Address-based request lookup
-- **GetTransactionBuildsByAddress** — Address-based build lookup
-- **HSM Signing Flow** — Hardware Security Module signing integration
-- TTL expiration handling (auto-mark as expired)
-- CIP-30 witness set combination
-
-### signing.test.ts (62 tests)
-
-External signing module unit tests:
-
-- **SignatureVerifier** — Signature verification, witness extraction, VKey validation
-- **ExternalSignerModule** — Signing request creation, status updates, state management
-- **combineTransactionWithWitnesses()** — CIP-30 witness set merging (VKeys + scripts)
-- **isWitnessSetCbor()** — Witness set vs full transaction CBOR detection
-- **Utility Functions** — CBOR helpers, hex validation
-- Signing status state transitions (pending → verified → submitted)
-- Expired request handling, invalid signature detection
-
-### hsm-signer.test.ts (33 tests)
-
-Hardware Security Module signer unit tests:
-
-- **Constructor** — Initialization and configuration
-- **init()** — HSM backend connection, key loading, error scenarios (7 tests)
-- **sign()** — Raw payload signing (3 tests)
-- **signTransaction()** — Full transaction signing with witness generation (5 tests)
-- **getStatus()** — HSM connection status reporting (2 tests)
-- **shutdown()** — Graceful HSM disconnection (2 tests)
-- **Error codes** — HSM-specific error handling (2 tests)
-- **HSM Signer Singleton** — Singleton pattern for HSM module (1 test)
-
----
-
-## Unit Tests
-
-Unit tests verify individual components in isolation without external dependencies.
-
-### validators.test.ts (96 tests)
-
-Tests for validation type guards and helper functions:
-
-- **isTxHash** — Transaction hash validation (64-char hex)
-- **isAssetUnit** — Asset unit validation (policy ID + asset name)
-- **isBlockHash** — Block hash validation
-- **isValidPoolId** — Pool ID bech32 validation with HRP checking
-- **isValidDrepId** — DRep ID bech32 validation (29-byte payload)
-- **isValidBech32Address** — Cardano address validation (mainnet/testnet)
-- **isValidBech32StakeAddress** — Stake address validation
-- **isEpochNumber** — Epoch number range and type validation
-- **isValidCbor** — CBOR format validation (even-length hex)
-- **validateTransactionInputs** — Composite transaction input validation
-- **validateJsonWithLimits** — JSON DoS prevention
-- **safeTrimString** — Safe string trimming
-
-### errors.test.ts (74 tests)
-
-Comprehensive error handling tests:
-
-- **BackendError** — Base error class with status codes and error codes
-- **NotFoundError** — 404 errors for missing resources
-- **ProviderUnavailableError** — 503 errors for backend unavailability
-- **RateLimitError** — 429 errors for rate limiting
-- **AllBackendsFailedError** — Multi-backend failure scenarios
-- **ConfigError** — Configuration validation errors
-- **BackendInitError** — Backend initialization failures
-- **AllBackendsInitFailedError** — Complete initialization failure
-- **InsufficientFundsError** — Insufficient funds for transaction (M2)
-- **TransactionValidationError** — Invalid signature/CBOR (M2)
-- **TransactionAlreadySubmittedError** — Duplicate transaction (M2)
-- **Error utilities** — `getErrorStatus`, `getErrorMessage`, `normalizeBackendError`, `rejectInvalid`, `rejectMissing`
-
-### cardano-client.test.ts (32 tests)
-
-CardanoClient configuration and orchestration tests:
-
-- Constructor validation (empty backends, null/undefined handling)
-- Backend initialization sequencing
-- Fallback mechanism when primary backend fails
-- Multiple backend configuration
-- Error propagation and handling
-- **evaluateTransaction** — Transaction evaluation via EvaluatingBackend (Ogmios)
-- **isEvaluatingBackend** — Type guard for EvaluatingBackend interface
-
-### cardano-tx-builder.test.ts (22 tests)
-
-CardanoTransactionBuilder unit tests:
-
-- **init()** — Builder initialization (constructs `BuildooorTxBuilder` directly), idempotent init, error propagation
-- **ensureInitialized()** — Lazy initialization pattern, auto-init on first use
-- **reset() / setBuilder()** — Builder state management, custom builder injection
-- **buildSimpleAdaTransaction()** — ADA transfer building, UTxO fetching
-- **buildTransactionWithMetadata()** — Metadata transaction building
-- **buildMultiAssetTransaction()** — Multi-asset transaction building
-- **buildMintTransaction()** — Token minting with/without Ogmios evaluator
-- **resetTransactionBuilder()** — Factory function for builder reset
-- Error handling — UTxO fetch errors, builder errors propagation
-
-### buildooor-tx-builder.test.ts
-
-Buildooor transaction builder unit tests:
-
-- Transaction body construction, CBOR serialization, and coin selection
-- Fee calculation and change output creation
-- Minting transactions and Plutus spend transactions
-- Plutus script handling (V3; V1/V2 rejected at build time)
-- Edge cases and error handling
-
-### tx-build-helper.test.ts
-
-Transaction helper utility tests:
-
-- TX hash extraction from CBOR
-- PlutusData JSON conversion to Buildooor format
-- `normalizeConstructorKey()` — `"constructor"` ↔ `"constr"` recursive conversion
-- Address validation and amount conversion utilities
-- Script parameter application helpers
-
-### mappers.test.ts (13 tests)
-
-Data mapper and utility tests:
-
-- **mapTransactionInputAssets** (3 tests) — Input asset mapping from blockchain data
-- **mapTransactionOutputAssets** (2 tests) — Output asset mapping with fingerprints
-- **normalizeCostModels** (5 tests) — Plutus cost model array normalization (V1/V2/V3)
-- **scriptHashToEnterpriseAddress** (6 tests) — Script hash → enterprise address derivation (preview/mainnet)
-
-### cip14-fingerprint.test.ts (11 tests)
-
-CIP-14 asset fingerprint computation tests:
-
-- **Official CIP-14 test vectors** (8 tests) — Verified against reference implementation
-- **Output format validation** (2 tests) — Bech32 prefix `asset`, length checks
-- **Determinism** (2 tests) — Same input always produces same fingerprint
-
-### ogmios-backend.test.ts (39 tests)
-
-Ogmios WebSocket backend unit tests:
-
-- **Constructor** — Connection configuration, URL handling
-- **convertOgmiosValue** — Ogmios value format → standard format conversion
-- Protocol parameter fetching and normalization
-- Transaction submission via WebSocket
-- UTxO retrieval and conversion
-- Error scenarios and timeout handling
-
-### blockfrost-backend.test.ts (11 tests)
-
-Blockfrost backend unit tests:
-
-- Constructor and initialization with API key
-- Transaction submission (mocked)
-- Pool query handling
-- Address UTxO retrieval
-- Protocol parameter fetching
-
-### koios-backend.test.ts (7 tests)
-
-Koios backend unit tests:
-
-- Initialization and configuration
-- Basic API operation handling
-- Error scenarios
-
-### config.test.ts (37 tests)
-
-Configuration loaders in `srv/config.ts`:
-
-- `loadConfigFromEnv()`: the CDS section wins over the environment, which wins over the default
-- Crawler, wallet worker, HSM and pool metadata settings, with the values each one refuses
-
-### server.test.ts (15 tests)
-
-App context and lifecycle tests:
-
-- AppContext creation and lifecycle
-- `initializeFromConfig()` — Backend and builder initialization sequencing
-- Shutdown procedures and cleanup
-- Guard logic (`if (appContext) return;`)
-
-### circuit-breaker.test.ts (15 tests)
-
-Circuit breaker pattern tests:
-
-- State transitions: closed → open → half-open → closed
-- Failure threshold counting
-- Timeout-based recovery
-- Backend fault tolerance
-
-### concurrency.test.ts (5 tests)
-
-Concurrency and race condition tests:
-
-- Concurrent backend requests
-- Parallel execution safety
-- Race condition guards
-
-### request-coalescer.test.ts (3 tests)
-
-Request coalescing pattern tests:
-
-- Concurrent request deduplication for same key
-- Failed request cleanup and retry
-- Independent key isolation
-
-### cardano-indexer.test.ts (19 tests)
-
-CardanoIndexer edge case and branch coverage tests:
-
-- Entity mapping and UPSERT logic
-- Cache TTL validation and refresh
-- Error handling for backend failures
-- Transaction metadata indexing edge cases
-
-### error-paths.test.ts (8 tests)
-
-Error path coverage tests for edge cases not covered by other test files.
-
----
-
-## Test Infrastructure
-
-### test-fixtures.ts
-
-Shared test constants and mock data:
-- Valid addresses (6 variants), transaction hashes, block hashes
-- Test CBOR data (unsigned/signed transactions, witness sets)
-- Script fixtures (PlutusV1/V2/V3)
-- Mock UTxO arrays (ADA-only, multi-asset, burn scenarios)
-- Mock protocol parameters (Koios format)
-- `configureBackendForTest()` helper function
-
-### mock-helpers.ts
-
-Nock-based HTTP mocking utilities for Koios backend:
-- `setupKoiosMocks()` / `teardownKoiosMocks()` / `resetKoiosMocks()`
-- `setupTxResponseMock()`, `setupUtxoMock()`, `setupTxInfoMock()`
-- Re-exports `nock` for direct test use
-
----
+136 test files run on vitest: 116 unit files with 2682 tests, and 20 integration files.
+
+- **Unit tests** need no network. Some run on an in-memory or temporary SQLite database.
+- **Integration tests** start the CAP server on SQLite. Some mock the backend over HTTP, some call the
+  live Preview backends.
 
 ## Running Tests
 
-### All Tests
 ```bash
-npm test
-```
+npm test                              # everything
+npm run test:unit                     # unit tests only
+npm run test:integration              # integration tests only
+npm run test:coverage                 # everything, with a coverage report
 
-### With Coverage Report
-```bash
-npm run test:coverage
-```
-
-### Integration Tests Only
-```bash
-npm run test:integration
-```
-
-### Unit Tests Only
-```bash
-npm run test:unit
-```
-
-### Backend-Specific Tests
-```bash
-# Blockfrost integration tests (requires BLOCKFROST_KEY)
-npm run test:integration:blockfrost
-
-# Koios integration tests
+npm run test:integration:blockfrost   # needs BLOCKFROST_API_KEY
 npm run test:integration:koios
+npm run test:integration:ogmios       # needs Ogmios at OGMIOS_URL
 
-# Ogmios integration tests (requires running Ogmios)
-npm run test:integration:ogmios
+npm test -- test/unit/validators.test.ts   # one file
 ```
 
-### Specific Test Files
-```bash
-# Run OData feature tests
-npm test -- test/integration/odata_features.test.ts
+Before the tests, `npm test` removes compiled files, generates the model types and creates `db.sqlite`
+new. Stop a running `cds watch` first: it holds the file.
 
-# Run validators unit tests
-npm test -- test/unit/validators.test.ts
+## What the Tests Need
 
-# Run transaction builder tests
-npm test -- test/integration/tx.buildooor.test.ts
-```
+- Node.js 22.5 or later.
+- `BLOCKFROST_API_KEY` for the Blockfrost suite. Without it the file defines no tests.
+- Nothing for Koios. The suite calls `https://preview.koios.rest/api/v1`; `KOIOS_API_URL` overrides it.
+- A synced Ogmios at `OGMIOS_URL` (default `ws://localhost:1337`) for `core-ogmios`, `crawler` and
+  `reward-accounts`. The last two skip their tests when Ogmios or the Blockfrost key is missing.
 
----
+## Setup
 
-## Prerequisites
+| File | Does |
+|---|---|
+| `vitest.config.ts` | Two projects, `unit` and `integration`. One process per test file. Integration files run one after another, because parallel starts hit the rate limits of the providers. Coverage gate: 75 % of branches, functions and lines |
+| `test/vitest.globalSetup.ts` | Deletes compiled `.js` files next to the sources. CAP would load them in place of the TypeScript sources |
+| `test/vitest.setup.ts` | Sets `NODE_ENV=test`, clears `SKIP_AUTO_INIT`, makes a request without credentials privileged, silences the console unless `LOG_LEVEL=debug` |
 
-- **Node.js** >= 22.5 (engines floor; `node:sqlite` via @cap-js/sqlite v3)
-- **SQLite** (automatically used by CAP/vitest)
-- **For Blockfrost tests**: `BLOCKFROST_KEY` environment variable
-- **For Koios tests**: No additional variables needed (URL auto-configured)
-- **For Ogmios tests**: Running Ogmios instance at `OGMIOS_URL`
+An integration test loads `srv/server` with `require`, not `import`. It then shares the module instances
+of the server that `cds.test()` starts. A test that brings its own backends sets `SKIP_AUTO_INIT=true` and
+calls `resetAppContext(await createTestContext([...]))`.
 
----
+## Integration Tests (`test/integration/`)
 
-## Test Fixtures (Preview Network)
+| File | Covers | Backend |
+|---|---|---|
+| `core.koios.test.ts` | The shared read suite and backend error suite on Koios alone | Koios, live |
+| `core.blockfrost.test.ts` | The same two suites on Blockfrost alone | Blockfrost, live |
+| `core-ogmios.test.ts` | The read service on Ogmios alone | Ogmios, live |
+| `error-handling-service.test.ts` | 400 answers of the services for invalid and missing input | Koios, live |
+| `odata_features.test.ts` | `$filter`, `$select`, `$top`, `$skip`, `$count`, `$orderby`, `$expand` | Koios, live |
+| `reward-accounts.test.ts` | Reward account registration per backend, and a build with a withdrawal | Preview backends, live |
+| `crawler.test.ts` | Chain-sync ingest, recovery from a fork, the tables the crawler fills besides blocks | Ogmios and Blockfrost, live |
+| `tx.buildooor.test.ts` | The shared transaction suite and transaction error suite | Koios, mocked |
+| `tx-handler-validation.test.ts` | Input checks and error paths of the transaction actions | Koios, mocked |
+| `tx-submission-mock.test.ts` | Submit with and without a build record | Koios, mocked |
+| `signing-services.test.ts` | The signing workflow, HSM actions with a mock signer | Koios, mocked |
+| `defer-submit.test.ts` | `deferSubmit`: the submit runs after the caller's commit | Koios, mocked |
+| `nested-tx-guard.test.ts` | A submit called from a transaction that holds the connection fails with 503 | Koios, mocked |
+| `provider-read-outside-tx.test.ts` | A read that misses holds no database connection while the backend answers | Koios, mocked |
+| `keyed-read-expand.test.ts` | A keyed read honours `$expand` and `$select` | Koios, mocked |
+| `address-first-read.test.ts` | The first read of an address returns what the same request indexed | Koios, mocked |
+| `blockfrost-custom-backend.test.ts` | A custom Blockfrost URL is the one that is called | Blockfrost, mocked |
+| `wallet-worker.test.ts` | Job uniqueness in the database, real transactions, row-level access | Not used |
+| `agent-grants.test.ts` | Tokens, administration, allow list, budget, closed worker service | Not used |
+| `transport-auth-contract.test.ts` | Basic login of the operator and the token header | Not used |
+
+Shared files, not test files themselves:
+
+| File | Content |
+|---|---|
+| `core-test-suite.ts` | Read suite: entity reads and read actions, first read and repeated read |
+| `error-handling.backend.ts` | Backend error suite |
+| `tx-test-suite.ts` | Transaction suite: the build actions, collateral, build details, submission status |
+| `tx-error-handling.builder.ts` | Transaction error suite: insufficient funds, invalid assets, invalid scripts |
+| `test-fixtures.ts` | Constants and mock data. Loads no HTTP mock |
+| `mock-helpers.ts` | HTTP mocks for Koios, built on nock: `setupKoiosMocks()`, `setupUtxoMock()`, `setupTxInfoMock()`, `setupTxResponseMock()`, `resetKoiosMocks()`, `teardownKoiosMocks()` |
+
+## Unit Tests (`test/unit/`)
+
+Each file is `<name>.test.ts`.
+
+### Validation, errors, configuration, database helpers
+
+| File | Covers |
+|---|---|
+| `validators` | Type guards for hashes, addresses, pool and DRep ids, CBOR; JSON limits |
+| `errors` | Error classes, `normalizeBackendError`, `rejectInvalid`, `rejectMissing` |
+| `error-paths` | Failover on 503, 429 and timeouts |
+| `api-contract` | Page sizes, ranges and enum parameters that the service models enforce |
+| `result-numbers` | `Int64` and `Decimal` as text in read and operation results |
+| `service-auth-annotations` | Which operations answer without a login |
+| `cardano-service-readonly` | Every entity of the read service refuses writes |
+| `config` | Configuration loaders: CDS section, environment, default |
+| `docker-cds-config` | Database and login settings the Docker image builds from its environment |
+| `epoch-slots` | Slot, time and epoch conversion |
+| `paging` | Page defaults and stable order |
+| `mappers` | Provider data to entity rows, `txSeq`, cost models, script address |
+| `cip14-fingerprint` | CIP-14 asset fingerprints against the official test vectors |
+| `cip68` | CIP-68 label arithmetic and decimals from a reference datum |
+| `deep-json` | JSON with exact big integers at any nesting depth |
+| `metadata-label-id` | Metadata labels up to 64 bits as the key of `TransactionMetadata` |
+| `readiness` | The readiness answer |
+| `read-outside` | A database read before a backend call does not take the connection |
+| `detached-tx` | The timeout of a detached transaction covers getting the connection only |
+| `db-indexes` | The secondary indexes created at start |
+| `db-sanitize` | No NUL character reaches PostgreSQL |
+| `pg-inline-json` | Bulk rows on PostgreSQL |
+| `pg-order-nulls` | `ORDER BY` on PostgreSQL |
+| `schema-asset-sums` | Asset sums per address fit their columns |
+| `migrate-schema` | The steps of `scripts/migrate-schema.mjs` on SQLite files |
+| `migrate-slot-leader` | `scripts/migrate-slot-leader.mjs` |
+| `migrate-schema-upgrade` | `scripts/deploy-schema.mjs` from real 1.9.0 databases, the dry run, the empty-statement guard |
+| `network-context` | The configured network before the app context exists |
+| `lease` | Database leases on a real SQLite, including a renewal racing a takeover |
+| `detached-run` | The runner of the maintenance actions: failure, cancel |
+| `window-plan` | Slot-window walks and the PostgreSQL planner settings |
+| `key-pages` | Key-ordered page walks, and that they let the event loop run |
+| `gen-srv-package` | The BTP module's `package.json`: pinned versions, overrides, compiled output only |
+| `check-login-package` | The `@odatano/cap-auth` range, lockfile and installed copy read `trustProxy` |
+
+### Client and backends
+
+| File | Covers |
+|---|---|
+| `cardano-client` | Backend setup, routing, fallback, evaluation |
+| `circuit-breaker` | States and transitions per backend |
+| `concurrency` | Parallel requests and the start race |
+| `request-coalescer` | One backend call for concurrent equal requests |
+| `backend-lazy-load` | A provider SDK loads only when its backend is configured |
+| `blockfrost-backend` | Blockfrost backend with the SDK mocked |
+| `koios-backend` | Koios backend |
+| `ogmios-backend` | Ogmios backend: URL checks, value conversion, account, shutdown |
+| `ogmios-chain-sync` | Chain-sync messages to blocks and transactions |
+| `ogmios-frame-guard` | Chain-sync frames nested deeper than the JSON parser allows |
+| `odatano-backend` | Another ODATANO as backend |
+| `cardano-backend-service` | Handlers of `CardanoBackendService` |
+| `stored-chain` | Stored blocks and transactions in provider shape |
+| `transaction-presence` | Whether a transaction is on chain |
+| `pool-metadata` | Pool metadata files: limits, hash check, public hosts only |
+
+### Indexer
+
+| File | Covers |
+|---|---|
+| `cardano-indexer` | Edge cases of the indexer |
+| `indexer-block-full` | Bulk write of a block, inputs resolved from stored outputs |
+| `indexer-local-coverage` | Values answered from crawled data |
+| `ledger-state` | The crawler-fed UTxO set: apply, undo, recount |
+| `pending-spends` | Own submitted transactions in the view of an address |
+| `asset-decimals` | Decimals of CIP-68 tokens from the crawled chain, and their backfill |
+| `read-navigation` | Navigation and `$expand` reads on the real model: parents indexed first, account pages |
+
+### Transaction building and CBOR
+
+| File | Covers |
+|---|---|
+| `cardano-tx-builder` | The builder coordinator with the builder mocked |
+| `buildooor-tx-builder` | Transfers, mints and Plutus spends on the real builder |
+| `buildooor-multi-script` | `BuildPlutusTransaction`: several script inputs, inline and reference scripts |
+| `buildooor-transfer-datum` | Transfers with an inline datum given as CBOR |
+| `tx-build-helper` | Hash extraction, PlutusData JSON, script parameters |
+| `tx-request-parsers` | Parsers of the build payloads |
+| `build-request` | The build request parser shared by the service and the worker |
+| `build-row-change` | A real build stores its change address and change outputs |
+| `plutus-placeholders` | `__INPUT_IDX__` placeholders |
+| `plutus-data-json` | `DecodePlutusData` |
+| `cbor-parse` | `ParseTransactionCbor` |
+| `derive-script-address` | `DeriveScriptAddress` |
+| `extract-payment-key-hash` | `ExtractPaymentKeyHash` |
+| `keep-relevant` | Coin selection |
+| `reference-script` | Reference script type, hash and size |
+| `reference-script-fee` | Reference-script fee as the ledger charges it |
+
+### Signing and submitting
+
+| File | Covers |
+|---|---|
+| `signing` | `ExternalSignerModule`, `SignatureVerifier`, witness set helpers, on real transactions |
+| `hsm-signer` | HSM signer with PKCS#11 mocked |
+| `cose-verifier` | CIP-30 data signatures |
+| `submit-and-finalize` | What a failed submit proves, and the reconciler |
+| `submit-recorded` | The submission row and its outcome |
+| `check-submission-status` | `CheckSubmissionStatus` confirms at three blocks depth |
+| `landing-proof` | When a sent transaction is on chain, can never land or stays open; final refusals by code and text |
+| `landing-rules` | The same rules end to end with the real job store and real CBOR |
+| `cardano-sign-service` | The HSM change check, the role and HSM answers, the verify prelude |
+
+### App context, plugin, agent grants
+
+| File | Covers |
+|---|---|
+| `server` | App context, start and shutdown |
+| `plugin` | Plugin start, and that a failure does not stop the host |
+| `agent-grants` | Enforcement, budget counter, token resolution, issuing a grant |
+| `agent-token-auth` | The `x-agent-token` transport lane |
+| `agent-token-client-key` | The token throttle keys on the client before the reverse proxies |
+| `agent-service-off` | `CardanoAgentService` answers 400 while grants are off |
+| `service-events` | CAP events never throw into their caller |
+
+### Crawler
+
+| File | Covers |
+|---|---|
+| `crawler-engine` | Reorg handling, sources, intersection points |
+| `crawler-lifecycle` | Start, chain-sync wiring, pagination loop, retries, poison block |
+| `crawler-sync-state` | Cursor, lease, switch-off |
+| `crawler-backend-pagination` | Pagination source and reorg detection by parent hash |
+| `crawler-epoch-snapshot` | Pool and DRep snapshots per epoch, timeouts that abort |
+| `crawl-epoch-final` | Crawled epochs turn final once the crawl has passed them |
+| `crawler-chain-links` | Stored parent hashes, the rollback catalogue check, the node-behind status |
+| `account-snapshots` | Account snapshots on an in-memory SQLite |
+| `input-asset-copies` | Prune and restore of input asset copies, statements on SQLite |
+| `input-asset-columns` | The restore names the columns the model has |
+| `utxo-set-import` | Import of a UTxO set snapshot |
+| `certificate-backfill` | `backfillCertificates` |
+| `transaction-backfill` | `backfillTransactions` |
+| `credential-backfill` | `backfillPaymentCredentials` |
+| `output-datum-backfill` | `backfillOutputDatums` |
+| `metadata-position-backfill` | `backfillMetadataPositions` |
+| `asset-slice-backfill` | `backfillAssetSlices` on a real SQLite |
+| `asset-registry-backfill` | `backfillAssetRegistry` from Koios |
+| `asset-registry-files` | `backfillAssetRegistry` from entry files, on an in-memory SQLite |
+| `cardano-indexer-service` | `getStatus`, pause, resume, the two probes |
+
+### Wallet worker
+
+| File | Covers |
+|---|---|
+| `wallet-worker-engine` | Dispatch, retries, the `submitting` state, reconciliation |
+| `wallet-worker-job-store` | Job state machine, idempotency, recovery, leases |
+| `wallet-worker-lifecycle` | Start and stop of the worker |
+| `wallet-worker-confirmation` | Confirmation depth, resubmit after a rollback, dropped transactions |
+| `wallet-worker-signers` | Software and HSM signer, witness merge, key handling |
+| `wallet-worker-lease-heartbeat` | Lease renewal, check before submit |
+| `wallet-worker-build-request` | Job payload to build request, per job kind |
+| `cardano-worker-service` | Role gate of `SubmitWalletJob`, job access, worker control |
+
+## Fixtures
+
+`test/integration/test-fixtures.ts` holds the Preview data the tests use, in `TEST_FIXTURES`:
 
 ```typescript
-const FIXTURE = {
-  // Valid transaction hash
-  validTxHash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83',
-  // Transaction with metadata
-  txWithMetadata: '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1',
-  // Valid preview address
-  validAddress: 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8',
-  // Valid block hash
-  validBlockHash: 'cb082e3e77a7d8cf56baaba5cbe8843d63b53fa41074557ed29e0dbfe7daab39',
-  // Valid DRep ID
-  validDrepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',
-  // Valid stake address
-  validStakeAddress: 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p',
-  // Valid pool ID
-  validPoolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
-  // Metadata label
-  transactionMetadataLabel: '1990',
-};
+validTxHash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83',
+txWithMetadata: '95edd3f70ac85d6445fd5d719a66955edf3eda78c0c365004f8c28b3e9e48bb1',
+validBlockHash: '890af88d47433ecc9eccf16369aef16df40fc7f41b9d38a8d758c8ca1968a886',
+validBech32Address: 'addr_test1vqm5vyp8xztmxyl6mcr2xr5schajvsq8fjs8gn8g2zu0pgg8gckcp',
+validStakeAddress: 'stake_test1urqntq4wexjylnrdnp97qq79qkxxvrsa9lcnwr7ckjd6w0cr04y4p',
+validPoolId: 'pool1knap9hldvhww0fjqew26sxkfjpj3c8tp8uuj7j3729lzqn9x70r',
+validDrepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',
+transactionMetadataLabel: '1990',
 ```
 
----
+The file also has unsigned and signed transactions, witness sets, mock UTxO sets and mock protocol
+parameters.
 
-## CI/CD Integration
+## CI
 
-Tests run automatically on:
-- Push to `main` branch
-- Pull requests
-- Node.js 22.x and 24.x matrix
-
-See [.github/workflows/test.yaml](../.github/workflows/test.yaml) for configuration.
+`.github/workflows/test.yaml` runs on a push to `main` and on pull requests, on Node.js 22 and 24. It runs
+typecheck, lint and the tests with coverage. The Ogmios suite runs only when the workflow has a synced
+node.

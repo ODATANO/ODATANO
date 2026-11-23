@@ -37,10 +37,11 @@ fi
 # Brings the database to the schema of the image and exits: the migration steps, then the
 # additive deploy. For preparing a database without starting the service.
 if [ "$MODE" = "deploy-schema" ]; then
+    shift
     CDS_CONFIG="$(node /app/docker/cds-config.mjs --db-only)" || exit 1
     export CDS_CONFIG
     [ -n "$DB_URL" ] && wait_for_postgres
-    exec node --no-warnings=ExperimentalWarning /app/docker/deploy-schema.mjs
+    exec node --no-warnings=ExperimentalWarning /app/scripts/deploy-schema.mjs "$@"
 fi
 
 # Copies a SQLite file into PostgreSQL. Run as a one-off container before the first
@@ -55,8 +56,9 @@ if [ "$MODE" = "migrate" ]; then
     export CDS_CONFIG
     wait_for_postgres
     echo "Deploying schema to PostgreSQL, then migrating: $*"
-    node /app/docker/deploy-schema.mjs
-    exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-sqlite-to-postgres.mjs --to "$DB_URL" "$@"
+    node --no-warnings=ExperimentalWarning /app/scripts/deploy-schema.mjs
+    # the target comes from ODATANO_DB_URL, so the password never shows in the process list
+    exec node --no-warnings=ExperimentalWarning /app/scripts/migrate-sqlite-to-postgres.mjs "$@"
 fi
 
 [ "$MODE" = "serve" ] && [ $# -gt 0 ] && shift
@@ -69,7 +71,7 @@ fi
 # The schema is brought up to date on every boot: the migration steps, then CAP's additive deploy.
 # SQLite is seeded on first boot from the schema the image build deployed.
 if [ -n "$DB_URL" ]; then
-    DB_LABEL="postgres ($(printf '%s' "$DB_URL" | sed -E 's#://([^:/@]*)(:[^@]*)?@#://\1:***@#'))"
+    DB_LABEL="$(node /app/docker/cds-config.mjs --db-label)" || exit 2
     wait_for_postgres
 else
     DB_LABEL="sqlite ($DB_PATH)"
@@ -81,8 +83,11 @@ else
 fi
 if [ "${ODATANO_DB_DEPLOY:-auto}" != "never" ]; then
     echo "Deploying schema to $DB_LABEL (migration steps, then additive evolution; ODATANO_DB_DEPLOY=never skips this)"
-    node --no-warnings=ExperimentalWarning /app/docker/deploy-schema.mjs
+    node --no-warnings=ExperimentalWarning /app/scripts/deploy-schema.mjs
 fi
 
+if [ "${ODATANO_AUTH:-basic}" = "dummy" ]; then
+    echo "ERROR: ODATANO_AUTH=dummy: no login and no role check. Anyone who reaches the port is Admin." >&2
+fi
 echo "Starting ODATANO (network=${NETWORK:-preview}, auth=${ODATANO_AUTH:-basic}, db=$DB_LABEL)"
-exec node /app/node_modules/@sap/cds/bin/serve.js srv "$@"
+exec node --no-warnings=ExperimentalWarning /app/node_modules/@sap/cds/bin/serve.js srv "$@"

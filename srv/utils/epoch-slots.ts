@@ -21,6 +21,13 @@ export function slotToPosixMs(network: EpochNetwork, slot: number): number {
   return genesis.systemStartPosixMs + (slot - genesis.startSlotNo) * genesis.slotLengthMs;
 }
 
+// Slots after which a block can no longer be rolled back: 3k/f, the stability window of the
+// ledger. k blocks have followed by then with overwhelming probability.
+export function rollbackHorizonSlots(network: EpochNetwork): number {
+  const cfg = EPOCH_CONFIG_BY_NETWORK[network];
+  return Math.ceil((3 * cfg.securityParam) / cfg.activeSlotsCoeff);
+}
+
 /** Absolute POSIX seconds for a slot, rounded down. */
 export function slotToPosixSeconds(network: EpochNetwork, slot: number): number {
   return Math.floor(slotToPosixMs(network, slot) / 1000);

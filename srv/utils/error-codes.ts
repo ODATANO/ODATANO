@@ -30,6 +30,12 @@ export const ERROR_CODES = {
   /** 409: the idempotency key belongs to a job with another request. */
   IDEMPOTENCY_KEY_CONFLICT: 'ODATANO_IDEMPOTENCY_KEY_CONFLICT',
 
+  /** 409: an outcome cannot be set to failed while the transaction can still land. */
+  OUTCOME_STILL_OPEN: 'ODATANO_OUTCOME_STILL_OPEN',
+
+  /** 409: another call resolved the record first. */
+  RESOLVED_CONCURRENTLY: 'ODATANO_RESOLVED_CONCURRENTLY',
+
   /** 429: provider rate limit hit. */
   PROVIDER_RATE_LIMITED: 'ODATANO_PROVIDER_RATE_LIMITED',
 

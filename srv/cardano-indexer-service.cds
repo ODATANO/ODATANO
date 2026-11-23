@@ -34,6 +34,8 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         lastIndexedAt     : Timestamp; // when the last block was committed
         // true: the crawler holds its lease but committed no block for 10 minutes
         stalled           : Boolean;
+        // since when chain-sync waits for a node that is behind the cursor; null when it is not
+        nodeBehindSince   : Timestamp;
         // crawler-fed ledger state (crawler.utxoSet): snapshot anchor + validity
         utxoSet           : UtxoSetStatus;
         // one-off certificate/withdrawal backfill over already crawled blocks (this process)
@@ -50,8 +52,12 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         datumBackfill : DatumBackfillStatus;
         // one-off chain-position fill of metadata rows (this process)
         metadataBackfill : MetadataBackfillStatus;
+        // one-off fill of the derived columns of stored asset rows (this process)
+        sliceBackfill : AssetSliceBackfillStatus;
         // rebuild of epoch rows from the crawled blocks (this process)
         epochBackfill : EpochBackfillStatus;
+        // re-check of failed submissions and signing requests against the chain (this process)
+        failedRecheck : FailedRecheckStatus;
         // walk that moves inputs from asset copies to their output (this process)
         copyPrune : InputCopyPruneStatus;
         // walk that moves inputs back to asset copies (this process)
@@ -76,11 +82,12 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Certificate Backfill Status'
     @description: 'Progress of the certificate/withdrawal backfill started with backfillCertificates; process-local, none after a restart'
     type CertificateBackfillStatus {
-        status       : String;    // none | running | done | failed
+        status       : String;    // none | running | done | failed | cancelled
         fromSlot     : String;
         toSlot       : String;
         atSlot       : String;    // last slot handled
         blocks       : Integer64;
+        transactions : Integer64;
         certificates : Integer64;
         withdrawals  : Integer64;
         removed      : Integer64; // stored rows removed for transactions whose script phase failed
@@ -92,7 +99,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Transaction Backfill Status'
     @description: 'Progress of the backfill started with backfillTransactions; process-local, none after a restart'
     type TransactionBackfillStatus {
-        status       : String;    // none | running | done | failed
+        status       : String;    // none | running | done | failed | cancelled
         fromSlot     : String;
         toSlot       : String;
         atSlot       : String;    // last slot handled
@@ -112,7 +119,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Credential Backfill Status'
     @description: 'Progress of the payment-credential fill started with backfillPaymentCredentials; process-local, none after a restart'
     type CredentialBackfillStatus {
-        status      : String;    // none | running | done | failed
+        status      : String;    // none | running | done | failed | cancelled
         table       : String;    // table being walked: TransactionOutputs | TransactionInputs | LedgerUTxOs; null when finished
         outputs     : Integer64; // rows that received a credential
         inputs      : Integer64;
@@ -125,7 +132,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Decimals Backfill Status'
     @description: 'Progress of the CIP-68 decimals fill started with backfillAssetDecimals; process-local, none after a restart'
     type DecimalsBackfillStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         scanned    : Integer64; // catalogue rows read
         candidates : Integer64; // units with label 333 or 444
         filled     : Integer64; // units that received a decimals value
@@ -137,7 +144,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Registry Backfill Status'
     @description: 'Progress of the CIP-26 registry fill started with backfillAssetRegistry; process-local, none after a restart'
     type RegistryBackfillStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         units      : Integer64; // units with a registry entry
         processed  : Integer64; // units handled so far
         filled     : Integer64; // units whose rows received the registry values
@@ -152,7 +159,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Datum Backfill Status'
     @description: 'Progress of the output datum repair started with backfillOutputDatums; process-local, none after a restart'
     type DatumBackfillStatus {
-        status       : String;    // none | running | done | failed
+        status       : String;    // none | running | done | failed | cancelled
         scanned      : Integer64; // stored outputs read
         candidates   : Integer64; // outputs with a datum hash and no inline datum
         transactions : Integer64; // transactions read again from the backend
@@ -168,7 +175,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Epoch Backfill Status'
     @description: 'Progress of the walk started with backfillEpochs; process-local, none after a restart'
     type EpochBackfillStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         atEpoch    : Integer;   // epoch the walk has reached
         toEpoch    : Integer;   // epoch of the crawler cursor
         updated    : Integer;   // rows whose totals were written
@@ -178,10 +185,23 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
         error      : String;
     }
 
+    @title      : 'Failed Re-check Status'
+    @description: 'Progress of the run started with recheckFailedSubmits; process-local, none after a restart'
+    type FailedRecheckStatus {
+        status      : String;    // none | running | done | failed | cancelled
+        submissions : Integer;   // failed submissions read
+        requests    : Integer;   // failed signing requests read
+        jobs        : Integer;   // wallet jobs failed as TX_DROPPED or SUBMIT_REJECTED read
+        restored    : Integer;   // rows found on chain with passing scripts and moved back to submitted
+        startedAt   : Timestamp;
+        finishedAt  : Timestamp;
+        error       : String;
+    }
+
     @title      : 'Input Copy Prune Status'
     @description: 'Progress of the walk started with pruneInputAssetCopies; process-local, none after a restart'
     type InputCopyPruneStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         atSlot     : String;    // slot the walk has reached
         toSlot     : String;    // last slot of the walk
         referenced : Integer64; // inputs that read from their output now
@@ -195,7 +215,7 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Input Copy Restore Status'
     @description: 'Progress of the walk started with restoreInputAssetCopies; process-local, none after a restart'
     type InputCopyRestoreStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         atSlot     : String;    // slot the walk has reached
         toSlot     : String;    // last slot of the walk
         restored   : Integer64; // inputs that read from a copy again
@@ -208,13 +228,29 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @title      : 'Metadata Backfill Status'
     @description: 'Progress of the chain-position fill started with backfillMetadataPositions; process-local, none after a restart'
     type MetadataBackfillStatus {
-        status     : String;    // none | running | done | failed
+        status     : String;    // none | running | done | failed | cancelled
         atSlot     : String;    // slot the walk has reached
         toSlot     : String;    // last slot that holds a stored transaction
         rows       : Integer64; // metadata rows that received their position
         startedAt  : Timestamp;
         finishedAt : Timestamp;
         error      : String;
+    }
+
+    @title      : 'Asset Slice Backfill Status'
+    @description: 'Progress of the fill started with backfillAssetSlices; process-local, none after a restart'
+    type AssetSliceBackfillStatus {
+        status          : String;    // none | running | done | failed | cancelled
+        table           : String;    // table being walked; null when finished
+        outputs         : Integer64; // TransactionOutputAssets rows written
+        inputs          : Integer64; // TransactionInputAssetCopies rows written
+        ledgerUtxos     : Integer64; // LedgerUTxOAssets rows written
+        ledgerAddresses : Integer64; // LedgerAddressAssets rows written
+        utxoSlices      : Integer64; // UTxOAssets rows written, every cached slice
+        addressSlices   : Integer64; // AddressAssets rows written, every cached slice
+        startedAt       : Timestamp;
+        finishedAt      : Timestamp;
+        error           : String;
     }
 
     @title      : 'Backfill Result'
@@ -350,10 +386,22 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     action   backfillOutputDatums() returns BackfillResult;
 
     @title      : 'Backfill Metadata Positions'
-    @description: 'Write the chain position (txSeq) of its transaction to every TransactionMetadata row that lacks it, so GetMetadataByLabel returns rows stored before the column existed. Walks the stored transactions by slot window. No backend call; the crawler may keep running; a repeat changes nothing. Runs in the background; progress via getStatus().metadataBackfill.'
+    @description: 'Write the chain position (txSeq) of its transaction to every TransactionMetadata row whose position is empty or differs from it, so GetMetadataByLabel returns rows stored before the column existed. Walks the stored transactions by slot window, between fromSlot and toSlot when given. No backend call; the crawler may keep running; a repeat changes nothing. Runs in the background; progress via getStatus().metadataBackfill.'
     @requires   : 'Admin'
     @odatano.agent: 'operator'
-    action   backfillMetadataPositions() returns BackfillResult;
+    action   backfillMetadataPositions(@assert.range: [0, _] fromSlot: Integer64, @assert.range: [0, _] toSlot: Integer64) returns BackfillResult;
+
+    @title      : 'Backfill Asset Slices'
+    @description: 'Write policy id, asset name in hex and decoded, and CIP-14 fingerprint of every stored asset row (TransactionOutputAssets, TransactionInputAssetCopies, LedgerUTxOAssets, LedgerAddressAssets, and every slice of UTxOAssets and AddressAssets) as derived from its unit. Rows that already agree are left alone; a repeat changes nothing. No backend call; the crawler may keep running. Runs in the background; progress via getStatus().sliceBackfill.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action   backfillAssetSlices() returns BackfillResult;
+
+    @title      : 'Re-check Failed Submits'
+    @description: 'Read every submission, signing request and wallet job (failed as TX_DROPPED or SUBMIT_REJECTED) with status failed again against the chain. One whose transaction is on chain with passing scripts (crawled chain inside its coverage, or a backend lookup that reports the script validity) goes back to submitted, with a resolution note; a signing request without a submission record gets one, a job goes on to confirm by depth and its submission follows. A lookup without an answer, or without the script validity, leaves the row failed. Runs detached; poll getStatus().failedRecheck. May be repeated.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action   recheckFailedSubmits() returns BackfillResult;
 
     @title      : 'Backfill Epochs'
     @description: 'Write block count, transaction count, fees and the first and last block time of every epoch the crawl covers in full, from the stored blocks. An epoch that has no row gets one; output and active stake of an existing row stay. No backend. Runs detached; poll getStatus().epochBackfill. May be repeated.'
@@ -372,6 +420,19 @@ service CardanoIndexerService @(impl: './cardano-indexer-service') {
     @requires   : 'Admin'
     @odatano.agent: 'operator'
     action   restoreInputAssetCopies(@assert.range: [0, _] fromSlot: Integer64 not null, @assert.range: [0, _] toSlot: Integer64 not null, @assert.range: [1, 1000000] slotWindow: Integer) returns BackfillResult;
+
+    @title      : 'Maintenance Run'
+    @description: 'A backfill or walk cancelMaintenance can stop, named as in getStatus()'
+    type MaintenanceRun : String enum {
+        certificateBackfill; transactionBackfill; credentialBackfill; decimalsBackfill; registryBackfill;
+        datumBackfill; metadataBackfill; epochBackfill; failedRecheck; sliceBackfill; copyPrune; copyRestore;
+    }
+
+    @title      : 'Cancel Maintenance'
+    @description: 'Ask a backfill or walk running in this process to stop at its next window, page or batch. What it wrote so far stays; the status turns cancelled. accepted is false when the run is not running in this process. A new start begins again at its first slot or key.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action   cancelMaintenance(@assert.range run: MaintenanceRun not null) returns BackfillResult;
 
     @title      : 'Backfill Asset Decimals'
     @description: 'Fill Assets.decimals from the CIP-68 reference datum for every catalogue unit with label 333 or 444: the reference NFT is followed from its mint through the crawled transactions to the output that holds it now, and the decimals of that datum are written to every slice of the unit. No backend call; the crawler may keep running; a repeat refreshes the values. Runs in the background; progress via getStatus().decimalsBackfill.'

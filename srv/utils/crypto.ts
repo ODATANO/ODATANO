@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import os from 'node:os';
 import cds from '@sap/cds';
+import { encryptionSecret, isProduction } from '../config';
 
 const logger = cds.log('CardanoWalletWorker');
 
@@ -13,11 +14,11 @@ const AUTH_TAG_LENGTH = 16;  // 128 bits
 
 /** 32-byte key from ENCRYPTION_KEY; development falls back to a process-scoped key. */
 export function getEncryptionKey(): Buffer {
-  const envKey = process.env.ENCRYPTION_KEY;
-  if (envKey) {
-    return crypto.createHash('sha256').update(envKey).digest();
+  const secret = encryptionSecret();
+  if (secret) {
+    return crypto.createHash('sha256').update(secret).digest();
   }
-  if (process.env.NODE_ENV === 'production') {
+  if (isProduction()) {
     throw new Error('ENCRYPTION_KEY must be set in production. Refusing to start with a fallback key.');
   }
   logger.warn('ENCRYPTION_KEY not set, using dev fallback key. Set ENCRYPTION_KEY for production.');

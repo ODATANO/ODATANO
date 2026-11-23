@@ -16,6 +16,8 @@ test/
 coverage/
 
 # Development files
+# .cdsrc.json names users without a password for development and test
+.cdsrc.json
 .git/
 .gitignore
 .github/
@@ -33,6 +35,9 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+# Frontend apps: CAP would serve the folder without a login
+app/
 
 # Documentation
 docs/

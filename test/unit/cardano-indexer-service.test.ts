@@ -6,7 +6,7 @@
 
 // vi.mock factories are hoisted above all statements — every mock object they
 // capture must be created inside vi.hoisted.
-const { fakeDb, crawlerMock, readCursorMock, serverMock, readinessMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock, registryBackfillMock, registryFilesMock, registryEntryFilesMock, datumBackfillMock, metadataBackfillMock, copyPruneMock, copyRestoreMock } = vi.hoisted(() => ({
+const { fakeDb, crawlerMock, readCursorMock, serverMock, readinessMock, backfillMock, txBackfillMock, credentialBackfillMock, decimalsBackfillMock, registryBackfillMock, registryFilesMock, registryEntryFilesMock, datumBackfillMock, metadataBackfillMock, sliceBackfillMock, copyPruneMock, copyRestoreMock } = vi.hoisted(() => ({
   fakeDb: { run: vi.fn() },
   readinessMock: vi.fn(),
   backfillMock: vi.fn(),
@@ -18,6 +18,7 @@ const { fakeDb, crawlerMock, readCursorMock, serverMock, readinessMock, backfill
   registryEntryFilesMock: vi.fn(),
   datumBackfillMock: vi.fn(),
   metadataBackfillMock: vi.fn(),
+  sliceBackfillMock: vi.fn(),
   copyPruneMock: vi.fn(),
   copyRestoreMock: vi.fn(),
   crawlerMock: {
@@ -76,6 +77,7 @@ vi.mock('../../srv/blockchain/crawler/asset-registry-backfill', () => ({
 }));
 vi.mock('../../srv/blockchain/crawler/output-datum-backfill', () => ({ backfillOutputDatums: datumBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/metadata-position-backfill', () => ({ backfillMetadataPositions: metadataBackfillMock }));
+vi.mock('../../srv/blockchain/crawler/asset-slice-backfill', () => ({ backfillAssetSlices: sliceBackfillMock }));
 vi.mock('../../srv/blockchain/crawler/input-asset-copies', () => ({ pruneInputAssetCopies: copyPruneMock, restoreInputAssetCopies: copyRestoreMock }));
 
 // The impl exports `module.exports = (srv) => {...}`; a dynamic import applies the
@@ -122,10 +124,11 @@ describe('CardanoIndexerService.getStatus', () => {
       consecutiveErrors: 2,
       lastIndexedAt: null,
       stalled: false,
+      nodeBehindSince: null,
       // crawler-fed UTxO set: not configured, nothing imported
       utxoSet: { enabled: false, status: 'none', anchorSlot: null, anchorHash: null, importedAt: null, error: null },
       certificateBackfill: {
-        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, certificates: 0, withdrawals: 0, removed: 0,
+        status: 'none', fromSlot: '0', toSlot: '0', atSlot: '0', blocks: 0, transactions: 0, certificates: 0, withdrawals: 0, removed: 0,
         startedAt: null, finishedAt: null, error: null,
       },
       transactionBackfill: {
@@ -140,7 +143,9 @@ describe('CardanoIndexerService.getStatus', () => {
         startedAt: null, finishedAt: null, error: null,
       },
       metadataBackfill: { status: 'none', atSlot: '0', toSlot: '0', rows: 0, startedAt: null, finishedAt: null, error: null },
+      sliceBackfill: { status: 'none', table: null, outputs: 0, inputs: 0, ledgerUtxos: 0, ledgerAddresses: 0, utxoSlices: 0, addressSlices: 0, startedAt: null, finishedAt: null, error: null },
       epochBackfill: { status: 'none', atEpoch: 0, toEpoch: 0, updated: 0, created: 0, startedAt: null, finishedAt: null, error: null },
+      failedRecheck: { status: 'none', submissions: 0, requests: 0, jobs: 0, restored: 0, startedAt: null, finishedAt: null, error: null },
       copyPrune: { status: 'none', atSlot: '0', toSlot: '0', referenced: 0, kept: 0, deleted: 0, startedAt: null, finishedAt: null, error: null },
       copyRestore: { status: 'none', atSlot: '0', toSlot: '0', restored: 0, rows: 0, startedAt: null, finishedAt: null, error: null },
       epochSnapshots: { enabled: false, source: null, lastEpoch: null, lastSource: null, lastSlot: null, accounts: false, lastAccountEpoch: null, lastAccountCount: null },
@@ -495,7 +500,7 @@ describe('CardanoIndexerService.backfillMetadataPositions', () => {
     expect(await handlers.backfillMetadataPositions({ data: {} })).toMatchObject({ accepted: true });
     await expect(handlers.backfillMetadataPositions({ data: {} })).rejects.toThrow(/already running/);
     expect(await handlers.getStatus({})).toMatchObject({ metadataBackfill: { status: 'running', atSlot: '40000', toSlot: '90000', rows: 12 } });
-    expect(metadataBackfillMock).toHaveBeenCalledWith({ onProgress: expect.any(Function) });
+    expect(metadataBackfillMock).toHaveBeenCalledWith({ fromSlot: null, toSlot: null, onProgress: expect.any(Function), shouldStop: expect.any(Function) });
 
     finishRun({ atSlot: 90_000, toSlot: 90_000, rows: 30 });
     await new Promise((r) => setImmediate(r));
@@ -535,7 +540,7 @@ describe('CardanoIndexerService input asset copies', () => {
     expect(await handlers.pruneInputAssetCopies({ data: { fromSlot: 100, toSlot: '500' } })).toMatchObject({ accepted: true });
     await expect(handlers.pruneInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/already running/);
     await expect(handlers.restoreInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/already running/);
-    expect(copyPruneMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 500, onProgress: expect.any(Function) });
+    expect(copyPruneMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 500, onProgress: expect.any(Function), shouldStop: expect.any(Function) });
     expect(await handlers.getStatus({})).toMatchObject({ copyPrune: { status: 'running', atSlot: '119', toSlot: '500', referenced: 40, kept: 3, deleted: 95 } });
 
     finishRun({ atSlot: 500, toSlot: 500, referenced: 90, kept: 7, deleted: 210 });
@@ -560,7 +565,7 @@ describe('CardanoIndexerService input asset copies', () => {
     const handlers = boot();
 
     expect(await handlers.restoreInputAssetCopies({ data: { fromSlot: 100, toSlot: 200, slotWindow: 5000 } })).toMatchObject({ accepted: true });
-    expect(copyRestoreMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 200, slotWindow: 5000, onProgress: expect.any(Function) });
+    expect(copyRestoreMock).toHaveBeenCalledWith({ fromSlot: 100, toSlot: 200, slotWindow: 5000, onProgress: expect.any(Function), shouldStop: expect.any(Function) });
     await new Promise((r) => setImmediate(r));
     expect(await handlers.getStatus({})).toMatchObject({ copyRestore: { status: 'done', restored: 12, rows: 30 } });
 
@@ -618,7 +623,7 @@ describe('CardanoIndexerService.backfillAssetRegistry', () => {
     await new Promise((r) => setImmediate(r));
 
     expect(registryEntryFilesMock).toHaveBeenCalledWith('/data/registry/mappings');
-    expect(registryFilesMock).toHaveBeenCalledWith({ directory: '/data/registry/mappings', onProgress: expect.any(Function) });
+    expect(registryFilesMock).toHaveBeenCalledWith({ directory: '/data/registry/mappings', onProgress: expect.any(Function), shouldStop: expect.any(Function) });
     expect(registryBackfillMock).not.toHaveBeenCalled();
     expect(await handlers.getStatus({})).toMatchObject({
       registryBackfill: { status: 'done', units: 9000, filled: 8700, failed: 1, absent: 250, skipped: 49 },
@@ -634,5 +639,113 @@ describe('CardanoIndexerService.backfillAssetRegistry', () => {
     registryEntryFilesMock.mockRejectedValue(new Error('path holds no entry files (*.json).'));
     await expect(handlers.backfillAssetRegistry({ data: { source: 'file', path: '/empty' } })).rejects.toThrow(/holds no entry files/);
     expect(registryFilesMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('CardanoIndexerService maintenance runs: cancel, exclusion, start races', () => {
+  const cursor = { lastSlot: 900, startSlot: 100, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0 };
+
+  it('cancels a running walk at its next check and reports it as cancelled', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    let stop!: () => boolean;
+    let finishRun!: (r: unknown) => void;
+    metadataBackfillMock.mockImplementation((opts: { shouldStop: () => boolean }) => new Promise((r) => { stop = opts.shouldStop; finishRun = r; }));
+    const handlers = boot();
+
+    // the restore of the copy tests above has ended
+    expect(await handlers.cancelMaintenance({ data: { run: 'copyRestore' } })).toMatchObject({ accepted: false });
+    await handlers.backfillMetadataPositions({ data: { fromSlot: 10, toSlot: 20 } });
+    expect(stop()).toBe(false);
+    expect(await handlers.cancelMaintenance({ data: { run: 'metadataBackfill' } })).toMatchObject({ accepted: true });
+    expect(stop()).toBe(true);
+    finishRun({ atSlot: 14, toSlot: 20, rows: 3 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ metadataBackfill: { status: 'cancelled', atSlot: '14', toSlot: '20', rows: 3 } });
+    expect(metadataBackfillMock).toHaveBeenCalledWith(expect.objectContaining({ fromSlot: 10, toSlot: 20 }));
+
+    // a new start runs again and is not stopped by the earlier request
+    metadataBackfillMock.mockImplementation(async (opts: { shouldStop: () => boolean }) => ({ atSlot: 20, toSlot: 20, rows: opts.shouldStop() ? -1 : 4 }));
+    await handlers.backfillMetadataPositions({ data: {} });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ metadataBackfill: { status: 'done', rows: 4 } });
+    await expect(handlers.backfillMetadataPositions({ data: { fromSlot: 30, toSlot: 20 } })).rejects.toThrow(/must not be after/);
+  });
+
+  it('refuses an unknown run name', async () => {
+    const handlers = boot();
+    await expect(handlers.cancelMaintenance({ data: { run: 'everything' } })).rejects.toThrow(/run must be one of/);
+  });
+
+  it('never runs a transaction backfill and a copy walk at the same time', async () => {
+    readCursorMock.mockResolvedValue(cursor);
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getChainSyncBackend: () => ({}) } as never);
+    let finishPrune!: (r: unknown) => void;
+    copyPruneMock.mockImplementation(() => new Promise((r) => { finishPrune = r; }));
+    const handlers = boot();
+
+    await handlers.pruneInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } });
+    await expect(handlers.backfillTransactions({ data: {} })).rejects.toThrow(/prune or restore/);
+    finishPrune({ atSlot: 2, toSlot: 2, referenced: 0, kept: 0, deleted: 0 });
+    await new Promise((r) => setImmediate(r));
+
+    let finishTx!: (r: unknown) => void;
+    txBackfillMock.mockImplementation(() => new Promise((r) => { finishTx = r; }));
+    await handlers.backfillTransactions({ data: {} });
+    await expect(handlers.pruneInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/transaction backfill is running/);
+    await expect(handlers.restoreInputAssetCopies({ data: { fromSlot: 1, toSlot: 2 } })).rejects.toThrow(/transaction backfill is running/);
+    finishTx({ atSlot: 900, blocks: 0, transactions: 0, inputs: 0, outputs: 0, redeemers: 0, datums: 0, rewritten: 0, skipped: 0 });
+    await new Promise((r) => setImmediate(r));
+  });
+
+  it('starts one registry run when two requests arrive while the folder is still being read', async () => {
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getTokenRegistryBackend: () => null } as never);
+    let release!: () => void;
+    registryEntryFilesMock.mockImplementation(() => new Promise<string[]>((r) => { release = () => r(['a.json']); }));
+    registryFilesMock.mockImplementation(() => new Promise(() => undefined));
+    const handlers = boot();
+
+    const first = handlers.backfillAssetRegistry({ data: { source: 'file', path: '/data/registry' } });
+    await expect(handlers.backfillAssetRegistry({ data: { source: 'file', path: '/data/registry' } })).rejects.toThrow(/already running/);
+    release();
+    expect(await first).toMatchObject({ accepted: true });
+    expect(registryFilesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('a refused check leaves the earlier run state in place', async () => {
+    serverMock.getCardanoClient.mockReturnValue({ network: 'preview', getChainSyncBackend: () => ({}) } as never);
+    readCursorMock.mockResolvedValue(cursor);
+    backfillMock.mockResolvedValueOnce({ atSlot: 900, blocks: 5, transactions: 9, certificates: 2, withdrawals: 1, removed: 0 });
+    const handlers = boot();
+    await handlers.backfillCertificates({ data: {} });
+    await new Promise((r) => setImmediate(r));
+
+    await expect(handlers.backfillCertificates({ data: { toSlot: '901' } })).rejects.toThrow(/past the crawler cursor/);
+    expect(await handlers.getStatus({})).toMatchObject({ certificateBackfill: { status: 'done', blocks: 5, transactions: 9, atSlot: '900' } });
+  });
+});
+
+describe('CardanoIndexerService.backfillAssetSlices', () => {
+  it('runs detached, refuses a second start, reports progress and can be cancelled', async () => {
+    readCursorMock.mockResolvedValue({ lastSlot: 1, lastHeight: 1, tipHeight: 1, syncStatus: 'synced', consecutiveErrors: 0, nodeBehindSince: '2026-11-22T10:00:00.000Z' });
+    let finishRun!: (r: unknown) => void;
+    let stop!: () => boolean;
+    sliceBackfillMock.mockImplementation((opts: { onProgress: (p: unknown) => void; shouldStop: () => boolean }) => new Promise((r) => {
+      opts.onProgress({ table: 'TransactionOutputAssets', outputs: 40, inputs: 0, ledgerUtxos: 0, ledgerAddresses: 0 });
+      stop = opts.shouldStop;
+      finishRun = r;
+    }));
+    const handlers = boot();
+
+    expect(await handlers.backfillAssetSlices({ data: {} })).toMatchObject({ accepted: true });
+    await expect(handlers.backfillAssetSlices({ data: {} })).rejects.toThrow(/already running/);
+    expect(await handlers.getStatus({})).toMatchObject({
+      nodeBehindSince: '2026-11-22T10:00:00.000Z',
+      sliceBackfill: { status: 'running', table: 'TransactionOutputAssets', outputs: 40 },
+    });
+    expect(await handlers.cancelMaintenance({ data: { run: 'sliceBackfill' } })).toMatchObject({ accepted: true });
+    expect(stop()).toBe(true);
+    finishRun({ table: 'TransactionOutputAssets', outputs: 55, inputs: 0, ledgerUtxos: 0, ledgerAddresses: 0 });
+    await new Promise((r) => setImmediate(r));
+    expect(await handlers.getStatus({})).toMatchObject({ sliceBackfill: { status: 'cancelled', outputs: 55 } });
   });
 });

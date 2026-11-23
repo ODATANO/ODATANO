@@ -44,7 +44,7 @@ describe('detachedTx deadlock guard', () => {
       INSERT.into('CardanoSignService.TransactionBuilds').entries({
         id: testBuildId,
         network: TEST_FIXTURES.network,
-        senderAddress: TEST_FIXTURES.addressWithFunds,
+        senderAddress: TEST_FIXTURES.signerAddress,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',

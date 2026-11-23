@@ -47,6 +47,13 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_addressutxos_address', table: 'odatano_cardano_AddressUTxOs', columns: 'address_address' },
   { name: 'odatano_cardano_addressassets_address', table: 'odatano_cardano_AddressAssets', columns: 'address_address' },
   { name: 'odatano_cardano_utxoassets_address', table: 'odatano_cardano_UTxOAssets', columns: 'utxo_address_address' },
+  // rollback `hash in` / `utxo_hash in`: the keys start with validFrom and the address
+  { name: 'odatano_cardano_addressutxos_hash', table: 'odatano_cardano_AddressUTxOs', columns: 'hash' },
+  { name: 'odatano_cardano_utxoassets_hash', table: 'odatano_cardano_UTxOAssets', columns: 'utxo_hash' },
+  // rollback `snapshotSlot >`: the keys start with the epoch
+  { name: 'odatano_cardano_poolepochsnapshots_slot', table: 'odatano_cardano_PoolEpochSnapshots', columns: 'snapshotSlot' },
+  { name: 'odatano_cardano_drepepochsnapshots_slot', table: 'odatano_cardano_DrepEpochSnapshots', columns: 'snapshotSlot' },
+  { name: 'odatano_cardano_epochledgersnapshots_slot', table: 'odatano_cardano_EpochLedgerSnapshots', columns: 'snapshotSlot' },
   { name: 'odatano_cardano_addresstransactions_tx', table: 'odatano_cardano_AddressTransactions', columns: 'tx_hash' },
   { name: 'odatano_cardano_accounts_stake', table: 'odatano_cardano_Accounts', columns: 'stakeAddress' },
   { name: 'odatano_cardano_pools_poolid', table: 'odatano_cardano_Pools', columns: 'poolId' },
@@ -90,12 +97,42 @@ export const DROPPED_DB_INDEXES: readonly string[] = Object.freeze([
 
 /** The statement for one entry; exported so tests pin the shape. */
 export function indexStatement(spec: IndexSpec, kind: string = 'sqlite'): string {
-  const columns = kind === 'postgres' && spec.postgres ? spec.postgres : spec.columns;
-  return `CREATE INDEX IF NOT EXISTS ${spec.name} ON ${spec.table} (${columns})`;
+  if (kind !== 'postgres') return `CREATE INDEX IF NOT EXISTS ${spec.name} ON ${spec.table} (${spec.columns})`;
+  // CONCURRENTLY keeps the table writable while a large index builds
+  return `CREATE INDEX CONCURRENTLY IF NOT EXISTS ${spec.name} ON ${spec.table} (${spec.postgres ?? spec.columns})`;
 }
 
 /** Anything that runs a plain SQL string: the primary db service. */
-export type SqlRunner = { run: (sql: string) => Promise<unknown>; kind?: string };
+export type SqlRunner = { run: (sql: string, params?: unknown[]) => Promise<unknown>; kind?: string };
+
+/** A pg client as the PostgreSQL service's connection factory creates it. */
+interface PgClient { query: (sql: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> }
+interface PgFactory { create: () => Promise<PgClient>; destroy: (dbc: PgClient) => Promise<void> | void }
+
+// PostgreSQL builds an index CONCURRENTLY only outside a transaction, and every statement of the
+// service runs inside one. A connection from the service's own factory runs it outside.
+async function withOwnConnection<T>(db: SqlRunner, fn: (run: SqlRunner['run']) => Promise<T>): Promise<T> {
+  const factory = (db as { factory?: PgFactory }).factory;
+  if (!factory) throw new Error('the PostgreSQL service has no connection factory');
+  const dbc = await factory.create();
+  try {
+    const schema = (db as { options?: { credentials?: { schema?: string } } }).options?.credentials?.schema;
+    if (schema) await dbc.query(`SET search_path TO "${schema.replace(/"/g, '""')}", public`);
+    return await fn(async (sql, params) => (await dbc.query(sql, params)).rows);
+  } finally {
+    await factory.destroy(dbc);
+  }
+}
+
+/** Names of our indexes in this schema that are invalid; only a failed concurrent build leaves one. */
+export const INVALID_INDEXES_STATEMENT =
+  'SELECT c.relname AS name FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+  'WHERE NOT i.indisvalid AND n.nspname = current_schema() AND c.relname = ANY($1)';
+
+// One instance at a time builds the indexes. An index another instance is still building is
+// invalid too, so without this lock a second start would drop it and kill that build.
+export const INDEX_LOCK_STATEMENT = "SELECT pg_try_advisory_lock(hashtext('odatano_db_indexes.' || current_schema())) AS locked";
+export const INDEX_UNLOCK_STATEMENT = "SELECT pg_advisory_unlock(hashtext('odatano_db_indexes.' || current_schema()))";
 
 /** Creates every missing index; a failing statement is logged and skipped, the others still run. */
 export async function ensureDbIndexes(runner: SqlRunner | undefined = cds.db as unknown as SqlRunner | undefined): Promise<{ ensured: string[]; failed: string[] }> {
@@ -110,18 +147,47 @@ export async function ensureDbIndexes(runner: SqlRunner | undefined = cds.db as 
     logger.info('HANA: secondary indexes not created (column store, no IF NOT EXISTS)');
     return { ensured, failed };
   }
-  for (const name of DROPPED_DB_INDEXES) {
-    await runner.run(`DROP INDEX IF EXISTS ${name}`)
-      .catch((err: unknown) => logger.warn(`index ${name} not dropped: ${String((err as Error)?.message ?? err)}`));
-  }
-  for (const spec of DB_INDEXES) {
-    try {
-      await runner.run(indexStatement(spec, kind));
-      ensured.push(spec.name);
-    } catch (err) {
-      failed.push(spec.name);
-      logger.warn(`index ${spec.name} on ${spec.table} not ensured: ${String((err as Error)?.message ?? err)}`);
+  const ensure = async (run: SqlRunner['run']) => {
+    const concurrently = kind === 'postgres' ? 'CONCURRENTLY ' : '';
+    if (kind === 'postgres') {
+      const invalid = await run(INVALID_INDEXES_STATEMENT, [DB_INDEXES.map(s => s.name)]) as Array<{ name: string }>;
+      for (const { name } of invalid ?? []) {
+        logger.warn(`index ${name} is invalid after an interrupted build; rebuilding it`);
+        await run(`DROP INDEX CONCURRENTLY IF EXISTS ${name}`)
+          .catch((err: unknown) => logger.warn(`invalid index ${name} not dropped: ${String((err as Error)?.message ?? err)}`));
+      }
     }
+    for (const name of DROPPED_DB_INDEXES) {
+      await run(`DROP INDEX ${concurrently}IF EXISTS ${name}`)
+        .catch((err: unknown) => logger.warn(`index ${name} not dropped: ${String((err as Error)?.message ?? err)}`));
+    }
+    for (const spec of DB_INDEXES) {
+      try {
+        await run(indexStatement(spec, kind));
+        ensured.push(spec.name);
+      } catch (err) {
+        failed.push(spec.name);
+        logger.warn(`index ${spec.name} on ${spec.table} not ensured: ${String((err as Error)?.message ?? err)}`);
+      }
+    }
+  };
+  if (kind === 'postgres') {
+    const skipped = await withOwnConnection(runner, async (run) => {
+      const [lock] = await run(INDEX_LOCK_STATEMENT) as Array<{ locked: boolean }>;
+      if (!lock?.locked) return true;
+      try {
+        await ensure(run);
+      } finally {
+        await run(INDEX_UNLOCK_STATEMENT).catch(() => undefined);
+      }
+      return false;
+    });
+    if (skipped) {
+      logger.info('another instance is building the indexes; skipped here');
+      return { ensured, failed };
+    }
+  } else {
+    await ensure((sql, params) => runner.run(sql, params));
   }
   if (failed.length === 0) logger.info(`${ensured.length} indexes ensured`);
   return { ensured, failed };

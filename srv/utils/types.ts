@@ -1,5 +1,6 @@
 import { LedgerProtocolParameter } from "#cds-models/odatano/cardano";
 import type { ReferenceScriptType } from "./reference-script";
+import type { SigningStatus } from '../../@cds-models';
 
 export type { ReferenceScriptType };
 
@@ -196,24 +197,27 @@ export interface BlockData {
   size: number;
   txCount: number;
   fees?: string | null;
+  /** Hash of the block before this one; undefined when the source does not report it. */
+  previousHash?: string | null;
   /** Header fields only (ledger tip): size, txCount, fees and slotLeader are placeholders, not block data. */
   headerOnly?: boolean;
 }
 
 /** Network supply */
+/** Network supply in lovelace; null = the backend does not report the figure. */
 export interface Supply {
   max: string;
-  total: string;
-  circulating: string;
-  locked: string;
-  treasury: string;
-  reserves: string;
+  total: string | null;
+  circulating: string | null;
+  locked: string | null;
+  treasury: string | null;
+  reserves: string | null;
 }
 
-/** Network stake */
+/** Network stake in lovelace; null = the backend does not report the figure. */
 export interface Stake {
-  live: string;
-  active: string;
+  live: string | null;
+  active: string | null;
 }
 
 /** Network supply and stake */
@@ -227,12 +231,13 @@ export interface EpochData {
   epoch: number;
   start_time: number;
   end_time: number;
-  first_block_time: number;
+  // null = the backend does not report the figure (the node's ledger state has no block statistics)
+  first_block_time: number | null;
   last_block_time: number;
-  block_count: number;
-  tx_count: number;
-  output: string;
-  fees: string;
+  block_count: number | null;
+  tx_count: number | null;
+  output: string | null;
+  fees: string | null;
   active_stake: string | null;
 }
 
@@ -247,34 +252,37 @@ export interface MetadataLabelTx {
 export interface AccountData {
   stakeaddress: string;
   active: boolean;
-  activeEpoch: number;
-  controlledAmount: string;
+  activeEpoch: number | null; // null = the backend does not report it for this account
+  controlledAmount: string | null; // null = the backend does not report it for this account
   rewardsSum: string | null; // null = the backend does not report it for this account
-  withdrawalsSum: string;
-  reservesSum: string;
-  treasurySum: string;
+  withdrawalsSum: string | null; // null = the backend does not report it for this account
+  reservesSum: string | null; // null = the backend does not report it for this account
+  treasurySum: string | null; // null = the backend does not report it for this account
   withdrawableAmount: string | null; // null = the backend does not report it for this account
   poolId: string | null;
   drepId: string | null;
-  addresses: Address[];
+  /** Bech32 addresses under the stake key, as the backend lists them; their UTxOs are read separately. */
+  addresses: string[];
 }
 
 /** Pool information */
 export interface PoolData {
   poolId: string;
   vrfKeyHash: string;
-  blocksMinted: number;
+  /** Null when the source does not count blocks (Ogmios ledger state). */
+  blocksMinted: number | null;
   /** Blocks minted in the current epoch; null when the backend has no such figure (Koios). */
   blocksEpoch: number | null;
   liveStake: string;
   /** Share of the total live stake; null when the backend has no such figure (Koios). */
   liveSize: number | null;
-  /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. */
-  liveSaturation: number;
+  /** Fraction of the ideal (saturated) pool size, NOT percent: 0.7542 = 75.42 %. Null when unknown. */
+  liveSaturation: number | null;
   /** Null when the source cannot count delegators (Ogmios ledger state). */
   liveDelegators: number | null;
-  activeStake: string;
-  activeSize: number;
+  /** Null when the source has no active stake (the node's live pool view). */
+  activeStake: string | null;
+  activeSize: number | null;
   pledge: string;
   margin: number;
   fixedCost: string;
@@ -591,7 +599,8 @@ export type TxBuildResult = {
   inputs: Array<{ txHash: string; index: number; lovelace: string }>;
   outputs: Array<{ address: string; lovelace: string }>;
   metaDataCborHex?: string;
-  changeOutput?: { address: string; lovelace: string };
+  /** Address the builder sent the change to: the request's changeAddress, else the sender. */
+  changeAddress?: string;
   warnings: string[];
   /** Blake2b-224 hash of the script (= policy ID for minting), if a script was provided */
   scriptHash?: string;
@@ -621,21 +630,8 @@ export enum ExternalSignerType {
   HSM = 'hsm',
 }
 
-/** Signing request status */
-export enum SigningStatus {
-  /** Request created, awaiting signing */
-  PENDING = 'pending',
-  /** Transaction has been signed */
-  SIGNED = 'signed',
-  /** Signature verified, ready for submission */
-  VERIFIED = 'verified',
-  /** Transaction submitted to network */
-  SUBMITTED = 'submitted',
-  /** Signing or verification failed */
-  FAILED = 'failed',
-  /** Request expired (not signed within TTL) */
-  EXPIRED = 'expired',
-}
+/** Signing request status: the generated enum type of the model. */
+export type { SigningStatus } from '../../@cds-models';
 
 /** Instructions for external signers */
 export interface SigningInstructions {

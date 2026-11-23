@@ -136,6 +136,7 @@ type SubmissionStatus : String(20) enum {
     submitted = 'submitted';
     confirmed = 'confirmed';
     failed = 'failed';
+    unresolved = 'unresolved'; // past the last moment it could land, nothing shows whether it did
 }
 
 @title      : 'Signing Request Status'
@@ -148,6 +149,7 @@ type SigningStatus    : String(20) enum {
     submitted = 'submitted';
     expired = 'expired';
     failed = 'failed';
+    unresolved = 'unresolved'; // past the last moment it could land, nothing shows whether it did
 }
 
 @title      : 'Crawl Sync Status'
@@ -178,6 +180,14 @@ type WalletJobStatus  : String(12) enum {
     confirmed = 'confirmed'; // on-chain at the configured confirmation depth
     failed = 'failed'; // terminal failure (see errorCode/errorMessage)
     cancelled = 'cancelled'; // cancelled by the caller while still pending
+    unresolved = 'unresolved'; // past the last moment it could land, nothing shows whether it did; an operator resolves it
+}
+
+@title      : 'Resolved Outcome'
+@description: 'What an operator read on the chain for an unresolved outcome'
+type ResolvedOutcome  : String(10) enum {
+    confirmed = 'confirmed'; // the transaction is on chain with passing scripts
+    failed = 'failed'; // the transaction is not on chain and can no longer land
 }
 
 @title      : 'Wallet Job Kind'

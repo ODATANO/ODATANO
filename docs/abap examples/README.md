@@ -1,10 +1,11 @@
-# ODATANO Milestone 3 – ABAP Integration Examples
+# ODATANO ABAP Integration Examples
 
-ABAP Cloud examples demonstrating real SAP business process integration with the Cardano blockchain through the ODATANO OData V4 API. All examples target **SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
+ABAP Cloud examples that call the ODATANO OData V4 API from SAP business processes. They target the
+**SAP BTP ABAP Environment** and follow the ABAP RESTful Application Programming Model (RAP).
 
 ## Architecture
 
-![alt text](<../assets/architecture & flow diagramms/abapbtp-ad.png>)
+![ABAP on BTP architecture](<../assets/architecture & flow diagramms/abapbtp-ad.png>)
 
 ## Objects Overview
 
@@ -12,7 +13,7 @@ ABAP Cloud examples demonstrating real SAP business process integration with the
 
 | Object | Description |
 |--------|-------------|
-| `ZODATANO_BC_LOG` | Blockchain audit log – stores document hashes, transaction references, and status |
+| `ZODATANO_BC_LOG` | Blockchain audit log: document hashes, transaction references and status |
 
 ### CDS View
 
@@ -24,36 +25,40 @@ ABAP Cloud examples demonstrating real SAP business process integration with the
 
 | Class | Description |
 |-------|-------------|
-| `ZCL_ODATANO_CLIENT` | Generic HTTP client wrapper for the ODATANO OData V4 API (read & transaction endpoints) |
-| `ZCL_GR_BLOCKCHAIN` | Supply Chain scenario – records goods receipts on Cardano with SHA-256 hash as metadata |
-| `ZCL_CARDANO_MONITOR` | Operations scenario – monitors Cardano network health status with response time tracking |
-| `ZCL_CARDANO_ADDR_CHECK` | Procurement scenario – verifies Cardano wallet addresses and balances before payment release |
-| `ZCL_ODATANO_TEST` | Console application (`if_oo_adt_classrun`) to test all integration scenarios |
+| `ZCL_ODATANO_CLIENT` | HTTP client for the ODATANO OData V4 API (read and transaction endpoints) |
+| `ZCL_GR_BLOCKCHAIN` | Supply chain scenario: records goods receipts on Cardano with a SHA-256 hash as metadata |
+| `ZCL_CARDANO_MONITOR` | Operations scenario: reads the Cardano network status and tracks the response time |
+| `ZCL_CARDANO_ADDR_CHECK` | Procurement scenario: checks a Cardano address and its balance before a payment is released |
+| `ZCL_ODATANO_TEST` | Console application (`if_oo_adt_classrun`) that runs all scenarios |
 
 ## Integration Scenarios
 
 ### 1. Supply Chain – Goods Receipt Blockchain Anchoring
 
-When goods are received at a plant, the system computes a SHA-256 hash of the receipt data and writes it to the Cardano blockchain as transaction metadata via ODATANO. This creates a tamper-proof audit trail that auditors or trading partners can independently verify.
+When goods arrive at a plant, the system computes a SHA-256 hash of the receipt data. It writes the hash
+to Cardano as transaction metadata through ODATANO. Auditors and trading partners can check the receipt
+against the hash on their own.
 
 **Flow:**
 ```
-SAP Goods Receipt → SHA-256 Hash → ODATANO BuildTxWithMetadata → External Signing → Submit → Audit Log
+SAP Goods Receipt → SHA-256 Hash → ODATANO BuildTransactionWithMetadata → External Signing → Submit → Audit Log
 ```
 
 **ODATANO API:** `POST /odata/v4/cardano-transaction/BuildTransactionWithMetadata`
 
 ### 2. Network Health Monitoring
 
-An operations dashboard class queries the Cardano network status through ODATANO and tracks response times. Useful for monitoring blockchain availability before executing supply chain transactions.
+A class reads the Cardano network status through ODATANO and tracks the response time. Use it to check
+that the chain is reachable before a supply chain transaction runs.
 
-**ODATANO API:** `GET /odata/v4/cardano/GetNetworkInformation`
+**ODATANO API:** `POST /odata/v4/cardano/GetNetworkInformation`
 
 ### 3. Address Verification for Procurement
 
-Before releasing a payment, the system verifies that the recipient's Cardano wallet address exists on-chain and optionally checks for a minimum balance. Can be integrated into payment approval workflows.
+Before a payment is released, the system checks that the recipient's Cardano address exists on chain. A
+minimum balance can be checked as well. The check fits into a payment approval workflow.
 
-**ODATANO API:** `GET /odata/v4/cardano/GetAddressByBech32`
+**ODATANO API:** `POST /odata/v4/cardano/GetAddressByBech32`
 
 ## Prerequisites
 
@@ -79,11 +84,11 @@ Before releasing a payment, the system verifies that the recipient's Cardano wal
 
 ### Example Package Structure after creation:
 
-![alt text](../assets/abap_examples/abap_packages_example.png)
+![Package structure](../assets/abap_examples/abap_packages_example.png)
 
 ### 2. Get XSUAA Credentials (OAuth2 Token)
 
-The deployed ODATANO service is protected by XSUAA. To call it from ABAP, you need OAuth2 Client Credentials:
+XSUAA protects the deployed ODATANO service. An ABAP caller needs OAuth2 client credentials:
 
 ```bash
 # Create a service key for the XSUAA instance (one-time)
@@ -112,7 +117,8 @@ Use these values when instantiating `ZCL_ODATANO_CLIENT`:
 | `iv_client_id` | `clientid` from the service key |
 | `iv_client_secret` | `clientsecret` from the service key |
 
-The client automatically fetches and caches Bearer tokens via the OAuth2 Client Credentials flow.
+The client fetches a Bearer token with the OAuth2 client credentials flow and caches it. `xs-security.json`
+gives such a token the scopes `Read`, `Transact` and `Sign`. The scenarios use `Read` and `Transact`.
 
 ## Running the Tests
 
@@ -120,13 +126,13 @@ The test console app (`ZCL_ODATANO_TEST`) includes four tests:
 
 | Test | Requires ODATANO | Description |
 |------|-------------------|-------------|
-| 1 – Document Hashing | No | Computes SHA-256 hash of a sample goods receipt |
-| 2 – Network Health | Yes | Queries Cardano network status via ODATANO |
-| 3 – Goods Receipt Recording | Yes | Full flow: hash → build metadata TX → audit log |
+| 1 – Document Hashing | No | Computes the SHA-256 hash of a sample goods receipt |
+| 2 – Network Health | Yes | Reads the Cardano network status through ODATANO |
+| 3 – Goods Receipt Recording | Yes | Full flow: hash → build metadata transaction → audit log |
 | 4 – Address Verification | Yes | Verifies a Cardano testnet address |
 
-Tests 2–4 gracefully handle connection errors when ODATANO is not reachable.
+Tests 2 to 4 report a connection error and go on when ODATANO is not reachable.
 
 ## Example Output
 
-![alt text](../assets/abap_examples/abap_console_tests.png)
+![Console output of the tests](../assets/abap_examples/abap_console_tests.png)

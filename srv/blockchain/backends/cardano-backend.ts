@@ -90,6 +90,9 @@ export interface CardanoBackend {
 
   /** UTxOs of every address with this payment credential (56 hex chars), each with its address. */
   getCredentialUtxos?(credHash: string): Promise<UTxO[]>;
+
+  /** Whether a stake address is registered, as the backend itself decides; null = it cannot tell. */
+  isRewardAccountRegistered?(stakeAddress: string): Promise<boolean | null>;
 }
 
 /** Backend that can evaluate script execution units (Ogmios). */
@@ -118,8 +121,8 @@ export interface ChainPoint {
 export interface ChainSyncCallbacks {
   /** A new block with all its transactions extends the chain. `tip` is the node's tip when known. */
   rollForward(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<void>;
-  /** The chain rolled back to `point` (or to genesis). All blocks after it are abandoned. */
-  rollBackward(point: ChainPoint | 'origin'): Promise<void>;
+  /** The chain rolled back to `point` (or to genesis). All blocks after it are abandoned. `tip` is the node's tip when known. */
+  rollBackward(point: ChainPoint | 'origin', tip?: ChainPoint): Promise<void>;
   /** A handler error stalled the stream. The consumer should record it and restart the stream. */
   onError?(err: unknown): Promise<void>;
 }
@@ -164,7 +167,8 @@ export interface PaginatingBackend extends CardanoBackend {
   /** Up to `count` blocks after `afterHash` in chain order. `afterHeight` saves a height lookup. */
   getNextBlocks(afterHash: string, count: number, afterHeight?: number): Promise<BlockData[]>;
   /** Fetch the full transaction list of a block, in block order. */
-  getBlockTransactions(blockHash: string): Promise<Transaction[]>;
+  /** `txCount` from the block header, when known: 0 answers without a request. */
+  getBlockTransactions(blockHash: string, txCount?: number): Promise<Transaction[]>;
 }
 
 /** Type guard: can this backend be walked forward by pagination? */

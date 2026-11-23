@@ -1,4 +1,4 @@
-using { CardanoNetwork } from '../db/types';
+using { CardanoNetwork, ResolvedOutcome } from '../db/types';
 using {odatano.cardano as db} from '../db/schema';
 using {
     Bech32,
@@ -53,6 +53,17 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
             @odatano.agent: 'grant'
             action CheckSubmissionStatus() returns TransactionSubmissions;
         };
+
+    @title      : 'Resolve Submission'
+    @description: 'Settle an unresolved submission after reading the chain: confirmed when its transaction is on chain with passing scripts (it is then submitted, and CheckSubmissionStatus counts its depth), failed when it is not and can no longer land; failed is refused with 409 while the transaction is not expired and an input of it is unspent. txHash, when given, must be the submission transaction.'
+    @requires   : 'Admin'
+    @odatano.agent: 'operator'
+    action ResolveSubmission(
+        @title: 'Submission ID' submissionId : UUID not null,
+        @title: 'Outcome' @assert.range outcome : ResolvedOutcome not null,
+        @title: 'Transaction Hash' txHash : String(64),
+        @title: 'Note' note : String(300)
+    ) returns TransactionSubmissions;
 
     // Status flow: pending, then submitted by SubmitTransaction, then confirmed by CheckSubmissionStatus at 3 blocks deep.
     // A blockchain error moves pending or submitted to failed.
@@ -229,7 +240,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @description: 'Optional JSON array of {txHash, outputIndex} UTxOs of the sender that must never be spent: left out of coin selection and collateral.'
                                 protectInputsJson: String,
                                 @title: 'Reference Inputs JSON'
-                                @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
+                                @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs.'
                                 referenceInputsJson: String,
                                 @title: 'Extra Outputs JSON'
                                 @description: 'Optional JSON array of additional outputs [{address, lovelaceAmount, assets?, inlineDatumJson?, referenceScriptHex?}] appended after the primary recipient output. When present, the extra outputs carry the minted assets (declare each minted unit in an entry''s assets) and the primary output stays ADA-only. This places each minted token on its own output with its own inline datum (e.g. datum-bound predicate tokens). Each entry is independently min-ADA checked.'
@@ -340,7 +351,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        @description: 'Optional PlutusData JSON for the minting policy redeemer. Defaults to integer 0 if not specified. Supports __INPUT_IDX:txHash#n__ placeholders (Buildooor only).'
                                        mintRedeemerJson: String,
                                        @title: 'Reference Inputs JSON'
-                                       @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs. Buildooor builder only.'
+                                       @description: 'Optional JSON array of {txHash, outputIndex} UTxOs to include as CIP-31 reference inputs (read-only, not consumed). Use for oracle feeds, shared config UTxOs, or script reference UTxOs.'
                                        referenceInputsJson: String,
                                        @title: 'Reference Script Hex'
                                        @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Combines with the spend in one atomic tx. Significantly increases the output min-ADA; lovelaceAmount must cover the inflated requirement.'
@@ -397,7 +408,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
-    @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has at least 2 UTxOs with >= 5 ADA each. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
+    @description: 'Ensure a dedicated ADA-only collateral UTxO exists for Plutus transactions. Checks if the address has an ADA-only UTxO of at least 5 ADA without a reference script, and a second UTxO. If not, builds a self-send transaction to create a 5 ADA collateral UTxO.'
     @odatano.agent: 'grant'
     action SetCollateral(
                          @title: 'Address'

@@ -164,12 +164,12 @@ describe('ODATANO Milestone 2 - Specific Ogmios Backend Tests', () => {
     });
 
     // Circulation and stake totals are not in the ledger state
-    it('POST /GetNetworkInformation - circulating and stake totals stay 0 on Ogmios', async () => {
+    it('POST /GetNetworkInformation - circulating and stake totals are null on Ogmios, which does not report them', async () => {
       const { status, data } = await test.post('/odata/v4/cardano/GetNetworkInformation', {});
       expect(status).to.equal(200);
-      expect(String(data.circulatingSupply)).to.equal('0');
-      expect(String(data.liveStake)).to.equal('0');
-      expect(String(data.activeStake)).to.equal('0');
+      expect(data.circulatingSupply).to.equal(null);
+      expect(data.liveStake).to.equal(null);
+      expect(data.activeStake).to.equal(null);
     });
 
     it('POST /GetEpochByNumber - current epoch should succeed', async () => {

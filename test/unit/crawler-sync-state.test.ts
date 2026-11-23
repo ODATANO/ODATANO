@@ -27,6 +27,7 @@ import {
   ensureSyncStateSingleton,
   readCursor,
   advanceCursor,
+  recordRollbackRefusal,
   resetCursorTo,
   setSyncStatus,
   recordError,
@@ -96,7 +97,13 @@ describe('sync-state: cluster lease', () => {
     db.run.mockImplementation(async (query: { _op: string; set?: Record<string, unknown>; where?: Record<string, unknown> }) => {
       if (query._op === 'SELECT.one') return { ...state };
       if (query._op === 'UPDATE') {
-        const matches = Object.entries(query.where ?? {}).every(([key, value]) => (state[key] ?? null) === value);
+        const matches = Object.entries(query.where ?? {}).every(([key, value]) => {
+          // the takeover compares the stored deadline with now
+          if (value && typeof value === 'object' && '<' in value) {
+            return state[key] != null && Date.parse(String(state[key])) < Date.parse(String((value as { '<': string })['<']));
+          }
+          return (state[key] ?? null) === value;
+        });
         if (!matches) return { affectedRows: 0 };
         const set = { ...(query.set ?? {}) };
         if (typeof set.leaseUntil === 'string') {
@@ -175,6 +182,20 @@ describe('sync-state: cluster lease', () => {
     state.desiredRunning = false; // pauseCrawler
     await expect(advanceCursor(db as never, { slot: 11, hash: 'h2', height: 5 }, undefined, 'syncing', undefined, 'owner-a', later, 15_000))
       .resolves.toBe(false);
+  });
+
+  it('advanceCursor keeps the node-behind mark unless the caller clears it', async () => {
+    const { db, state } = stateDb({ ...base, nodeBehindSince: '2026-01-01T00:00:00.000Z' });
+    await advanceCursor(db as never, { slot: 10, hash: 'h', height: 4 });
+    expect(state.nodeBehindSince).toBe('2026-01-01T00:00:00.000Z');
+    await advanceCursor(db as never, { slot: 11, hash: 'h2', height: 5 }, undefined, 'syncing', { nodeBehindSince: null });
+    expect(state.nodeBehindSince).toBeNull();
+  });
+
+  it('recordRollbackRefusal sets status error and counts the streak', async () => {
+    const { db, state } = stateDb({ ...base, consecutiveErrors: 1 });
+    await expect(recordRollbackRefusal(db as never, 'not a stored block')).resolves.toBe(2);
+    expect(state).toMatchObject({ syncStatus: 'error', lastError: 'not a stored block', consecutiveErrors: 2 });
   });
 
   it('an errored release keeps the cluster runnable — a restart must resume', async () => {

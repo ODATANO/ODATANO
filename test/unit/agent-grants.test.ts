@@ -36,11 +36,12 @@ import {
   toGrantStatus,
   updateAgentGrant,
   validateGrantInput,
+  grantedActions,
   type AgentGrantRow,
   type Runner,
 } from '../../srv/utils/agent-grants';
 import { loadGrantAdminRateLimit, loadGrantUsageRetentionDays } from '../../srv/config';
-import { agentAccessOf, agentGrantableActions } from '../../srv/utils/agent-access';
+import { agentAccessOf, agentGrantableActions, qualifyGrantName, storedGrantNames } from '../../srv/utils/agent-access';
 
 /** The service most cases run the hook on. */
 const TX_SERVICE = 'CardanoTransactionService';
@@ -370,7 +371,7 @@ describe('token cache: a resolved grant is reused for a few seconds, dropped on 
     expect(upd.ok).toBe(true);
     const after = await resolveAgentToken(rotated!.token, store);
     expect(after.ok).toBe(true);
-    if (after.ok) expect(JSON.parse(after.grant.allowedActions)).toEqual(['VerifySignature']);
+    if (after.ok) expect(JSON.parse(after.grant.allowedActions)).toEqual(['CardanoSignService.VerifySignature']);
     expect(selects(store)).toBeGreaterThan(before); // re-read after the update
   });
 
@@ -480,7 +481,7 @@ describe('enforceAgentGrant', () => {
       const r = await rejection(enforceAgentGrant(makeReq('SubmitWalletJob', { kind: 'simpleAda' }, old) as never, new FakeStore(), undefined, 'CardanoTransactionService'));
       expect(r.status).toBe(403);
       expect(r.message).toContain("'SubmitWalletJob' is not allowed");
-      expect(toGrantStatus(old).allowedActions).toEqual(['BuildSimpleAdaTransaction']);
+      expect(toGrantStatus(old).allowedActions).toEqual(['CardanoTransactionService.BuildSimpleAdaTransaction']);
     });
   });
 
@@ -616,7 +617,7 @@ describe('validateGrantInput / issueAgentGrant / revokeAgentGrantById', () => {
     expect(() => validateGrantInput({ allowedActions: ['SubmitWalletJob'] })).toThrow(/non-grantable entries: SubmitWalletJob/);
     expect(() => validateGrantInput({ allowedActions: ['BuildSimpleAdaTransaction', 'CancelJob'] })).toThrow(/non-grantable entries: CancelJob/);
     const n = validateGrantInput({ allowedActions: ['SubmitTransaction', 'SubmitTransaction'] });
-    expect(n).toMatchObject({ allowedActions: ['SubmitTransaction'] });
+    expect(n).toMatchObject({ allowedActions: ['CardanoTransactionService.SubmitTransaction'] });
   });
 
   it('validates budget, expiry and label', () => {
@@ -651,7 +652,7 @@ describe('validateGrantInput / issueAgentGrant / revokeAgentGrantById', () => {
   it('reports the status honestly: a counter from an earlier day is zero budget used today', () => {
     const s = toGrantStatus(grant({ maxJobsPerDay: 5, jobsUsedToday: 4, budgetWindow: '2020-01-01' }));
     expect(s.jobsUsedToday).toBe(0);
-    expect(s.allowedActions).toContain('SubmitTransaction');
+    expect(s.allowedActions).toContain('CardanoTransactionService.SubmitTransaction');
     const t = toGrantStatus(grant({ maxJobsPerDay: 5, jobsUsedToday: 4, budgetWindow: today() }));
     expect(t.jobsUsedToday).toBe(4);
   });
@@ -918,7 +919,7 @@ describe('deferred usage counters (Postgres / HANA): buffered per key, flushed i
 
   it('writes nothing per call; the flush lands the summed deltas as one INSERT, later as one UPDATE', async () => {
     const store = new FakeStore();
-    store.seed(grant({ maxJobsPerDay: null }));
+    store.seed(grant({ maxJobsPerDay: null, allowedActions: JSON.stringify([ACTION, 'CardanoBackendService.SubmitTransaction']) }));
     const g = () => store.rows.get(GRANT_ID) as unknown as AgentGrantRow;
 
     await enforceAgentGrant(makeReq(ACTION, {}, g()) as never, store, undefined, SVC);
@@ -1224,9 +1225,9 @@ describe('agent access declared in the service models', () => {
     'CreateAgentGrant', 'RevokeAgentGrant', 'RotateAgentGrantToken', 'UpdateAgentGrant',
     'pauseCrawler', 'resumeCrawler', 'importUtxoSet', 'backfillCertificates', 'backfillTransactions', 'backfillPaymentCredentials',
     'backfillAssetDecimals', 'backfillAssetRegistry', 'backfillOutputDatums', 'backfillMetadataPositions',
-    'pruneInputAssetCopies', 'restoreInputAssetCopies', 'backfillEpochs',
+    'pruneInputAssetCopies', 'restoreInputAssetCopies', 'backfillEpochs', 'cancelMaintenance', 'backfillAssetSlices', 'recheckFailedSubmits',
     'SignWithHsm', 'SignAndSubmitWithHsm', 'PauseWorker', 'ResumeWorker',
-    'SubmitWalletJob', 'CancelJob', 'GetJobStatus', 'GetWorkerStatus',
+    'SubmitWalletJob', 'CancelJob', 'GetJobStatus', 'GetWorkerStatus', 'ResolveJob', 'ResolveSigningRequest', 'ResolveSubmission',
   ];
 
   /** Every action and function of the models as [service, name, declared access]. */
@@ -1249,10 +1250,34 @@ describe('agent access declared in the service models', () => {
     expect(all.filter(([, , access]) => !['read', 'grant', 'operator'].includes(access as string))).toEqual([]);
   });
 
-  it('a grant can allow exactly the listed operations', () => {
-    expect([...agentGrantableActions()].sort()).toEqual([...GRANTABLE].sort());
-    const declared = operations().filter(([, , access]) => access === 'grant').map(([, name]) => name);
-    expect([...new Set(declared)].sort()).toEqual([...GRANTABLE].sort());
+  it('a grant can allow exactly the listed operations, named with their service', () => {
+    const declared = operations().filter(([, , access]) => access === 'grant').map(([service, name]) => `${service}.${name}`);
+    expect([...agentGrantableActions()].sort()).toEqual([...declared].sort());
+    expect([...new Set(declared.map((key) => key.slice(key.indexOf('.') + 1)))].sort()).toEqual([...GRANTABLE].sort());
+  });
+
+  it('reads a name without its service as the operation of the transaction or the sign service', () => {
+    expect(qualifyGrantName('SubmitTransaction')).toBe('CardanoTransactionService.SubmitTransaction');
+    expect(qualifyGrantName('VerifySignature')).toBe('CardanoSignService.VerifySignature');
+    expect(qualifyGrantName('CardanoBackendService.SubmitTransaction')).toBe('CardanoBackendService.SubmitTransaction');
+    expect(qualifyGrantName('CardanoODataService.GetLatestBlock')).toBeNull();
+    expect(qualifyGrantName('SubmitWalletJob')).toBeNull();
+  });
+
+  it('a new grant for the build-linked submit does not open the raw submit of the backend service', async () => {
+    const { allowedActions } = validateGrantInput({ allowedActions: ['SubmitTransaction'] });
+    const fresh = grant({ allowedActions: JSON.stringify(allowedActions) });
+    const r = await rejection(enforceAgentGrant(makeReq('SubmitTransaction', {}, fresh) as never, new FakeStore(), undefined, 'CardanoBackendService'));
+    expect(r.status).toBe(403);
+    await expect(enforceAgentGrant(makeReq('SubmitTransaction', {}, fresh) as never, new FakeStore(), undefined, TX_SERVICE)).resolves.toBeUndefined();
+  });
+
+  it('a stored name without its service keeps the meaning it had: every service that declares it', async () => {
+    const stored = grant({ allowedActions: JSON.stringify(['SubmitTransaction', 'NoLongerGrantable']) });
+    expect(grantedActions(stored).sort()).toEqual(['CardanoBackendService.SubmitTransaction', 'CardanoTransactionService.SubmitTransaction']);
+    expect(storedGrantNames('VerifySignature')).toEqual(['CardanoSignService.VerifySignature']);
+    expect(storedGrantNames('CardanoBackendService.SubmitTransaction')).toEqual(['CardanoBackendService.SubmitTransaction']);
+    await expect(enforceAgentGrant(makeReq('SubmitTransaction', {}, stored) as never, new FakeStore(), undefined, 'CardanoBackendService')).resolves.toBeUndefined();
   });
 
   it('no token may call the listed operator operations, and only those', () => {

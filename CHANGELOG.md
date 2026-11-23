@@ -7,6 +7,214 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.51] - hardening: submit outcomes with proof, safe rollbacks, upgrade path, shipped artifacts
+
+Schema: additive columns `Blocks.previousHash`, `Blocks.withdrawalsReported`, `Epochs.final`,
+`Accounts.addressCount`, `Accounts.addressList`, `Assets.firstSeenSlot` and `CardanoSyncState.nodeBehindSince`
+(`withdrawalsReported`, `addressList` and `firstSeenSlot` are not in the read projections), `resolution` on
+`TransactionSubmissions`, `SigningRequests` and `CardanoWalletJobs`, and `invalidationTxHash`,
+`invalidationTxCbor`, `invalidationSentAt` and `spendsNoWalletUtxo` on `CardanoWalletJobs`. The status enums of those three tables
+gain `unresolved`. Two new migration steps: the unique constraint of `CardanoWalletJobs` moves from
+`(walletId, kind, dedupKey)` to `(dedupKey)`, where a job still in flight keeps a shared key and else the
+newest, and stored grant allow lists are rewritten to `Service.operation`. Five indexes are created at start:
+`AddressUTxOs(hash)`, `UTxOAssets(utxo_hash)` and `snapshotSlot` on the three epoch snapshot tables. Needs
+`@odatano/cap-auth` 0.2.0.
+
+### Security
+
+- The Docker image sets `NODE_ENV=production` and contains neither `.cdsrc.json` nor `app/`. The image of
+  2.0.0-rc.50 accepted the users `admin`, `alice`, `bob` and `carol` with any password unless it was started
+  with `NODE_ENV=production`, and served `app/` without a login. Replace an rc.50 image with this version; the
+  npm package was not affected.
+- The image keeps SQLite on one connection. With `NODE_ENV=production` the rc.50 image opened ten, and
+  concurrent writes failed with "database is locked".
+- `ODATANO_AUTH=dummy` starts only with `ODATANO_ALLOW_UNAUTHENTICATED=yes-anyone-who-reaches-the-port-is-admin`
+  and logs an error on every start.
+- `ODATANO_TRUST_PROXY` (0 to 10): the login throttle and the agent-token throttle key on the client before that
+  many reverse proxies. The image refuses the variable when its `@odatano/cap-auth` cannot read it.
+- A valid agent token is admitted while other clients from its address are locked out; only unknown tokens count.
+- The start log names a PostgreSQL database as user, host, port and database. A password containing `@` no
+  longer appears in part, and the `migrate` mode no longer puts the URL on the command line.
+- The HSM actions sign only a build whose change goes back to the HSM address (build row, stored change
+  outputs, unsigned body), and verify the signature against the build's required signers.
+- A wallet job always sends its change to the worker wallet; a `changeAddress` in `requestJson` is replaced.
+
+### Breaking
+
+- The npm package's `cds` section holds only `log.mask_headers`. It no longer brings a database, the
+  `[production]` profile (HANA, XSUAA, a pool of ten), build tasks or cds-typer settings into the host
+  project. `@cap-js/hana` and `@sap/xssec` are no longer runtime dependencies.
+- Every transaction ODATANO sends needs an expiry at most 24 hours ahead. A build without `validityEndMs`
+  expires one hour ahead; a later `validityEndMs` is a 400. `SubmitSignedTransaction` and `submitSigned`
+  worker jobs refuse a transaction without an expiry or with a later one.
+- `idempotencyKey` names one job per user across all wallets and kinds. The same key on another wallet or kind
+  is 409 `ODATANO_IDEMPOTENCY_KEY_CONFLICT`.
+- Grant allow lists name `Service.operation`. A name without a service means the transaction or sign service.
+  `allowedActions` and `GetGrantStatus()` answer qualified names. Grants stored before keep their meaning: a
+  stored `SubmitTransaction` becomes the transaction and the backend service.
+- `CardanoAgentService` answers 400 while `AGENT_GRANTS_ENABLED` is off.
+- `Accounts` rows hold no addresses; read them through `Accounts('…')/Address`. On an account with more than 10
+  addresses a page takes `$top` of at most 10, ordered by `address`, without `$filter`.
+- `ExtractPaymentKeyHash` refuses an address with a script payment credential.
+- A mint quantity of 0 and a mint `redeemer` that is not an integer are 400.
+- `ParseTransactionCbor` and `DecodePlutusData` take at most 65536 hex characters.
+- SignWithHsm and SignAndSubmitWithHsm without a connected HSM answer 503 `ODATANO_HSM_NOT_CONFIGURED`. The
+  HSM and worker role refusals are 403 `ODATANO_FORBIDDEN` with the `[CODE] Action:` prefix.
+- `scripts/deploy-schema.mjs` refuses unknown arguments.
+- `SubmitTransaction`, `SubmitSignedTransaction`, `SubmitVerifiedTransaction` and `SignAndSubmitWithHsm`
+  refuse with a 400 bytes marked `isValid` false, bytes without an expiry or with one more than 24 hours
+  ahead, and bytes whose expiry has passed. A transaction is valid only while the slot is below its TTL.
+- New status `unresolved` for wallet jobs, submissions and signing requests: the transaction can no longer
+  land and nothing shows whether it did. The server stops reading and sending it; an Admin decides it.
+
+### Fixed
+
+- A transaction that landed with failing scripts ends as failed: worker job `SCRIPT_FAILED`, signing request and
+  submission `failed`, with a submission record for the spent collateral.
+- `failed` needs the expiry passed by the rollback horizon (3k/f slots) with an input still unspent; an indexer
+  read adds 3600 slots. A refusal by Ogmios counts as final only by its JSON-RPC code, and 3116 no longer does.
+  An Ogmios submit error without a node verdict answers 503. The `odatano` backend keeps the remote node's
+  refusal code. Blockfrost reports a collateral output as not unspent.
+- A stored transaction row counts as on chain only inside the crawled chain with its block stored.
+- A transaction without an expiry, stored by an earlier version, is never ended by time: while every input is
+  unspent it can still land. The worker ends such a job by sending a self-transfer, with an expiry, that spends
+  one of those inputs the wallet holds, alone where it pays for itself; the stored self-transfer is sent again
+  with a growing wait until it lands, and once it is k blocks deep the job fails as `INVALIDATED`. A job whose
+  transaction spends no UTxO of the wallet stays open but no longer holds the wallet queue. When some inputs
+  are spent and others not, past the rollback horizon, the transaction never lands. Other records of that kind
+  are read once an hour and logged with their unspent inputs.
+- Expired bytes are never sent again, by the reconciler, the worker or the tracker.
+- With Ogmios alone, an inclusion holds only while an own output is unspent; a rollback with a conflicting spend
+  no longer keeps it.
+- The worker reconcile path emits `jobFailed` and `jobUnresolved`, and a job's submission record follows its
+  outcome.
+- Two instances settling one submission no longer overwrite each other: every write changes a row still pending.
+- Landing evidence also reads a transaction's last output, where the builder puts the change.
+- Submissions, signing requests and wallet jobs (`TX_DROPPED`, `SUBMIT_REJECTED`) that an earlier version
+  marked failed although they landed: run `recheckFailedSubmits` once.
+- Upgrading a PostgreSQL database from 1.x failed at the schema deploy (`prepared statement … already exists`),
+  and every later start failed the same way.
+- The 2.0 upgrade on a kept SQLite database: `scripts/deploy-schema.mjs` migrates and deploys with schema
+  evolution. The rc.50 notes named a plain `cds deploy`, which drops and recreates every SQLite table.
+- Two instances starting on one PostgreSQL database deploy the schema one after the other.
+- A chain-sync rollback that is deeper than k blocks, goes to genesis, goes to a block that is not stored, or
+  comes from a node whose tip is behind the cursor deletes nothing. A node behind the cursor is waited for
+  (`nodeBehindSince`, `syncStatus` `syncing`); the other cases set `syncStatus` `error` and halt the crawler
+  after five repeats.
+- With `source: auto`, a chain-sync stream that cannot be reopened falls back to pagination.
+- A rollback with more than 500 transactions took the UTxO-set sums back wrongly. The undo now subtracts what
+  the rolled-back blocks added, in one consistent pass.
+- A rollback no longer reads the whole `TransactionOutputAssets` table, and its deletes on `AddressUTxOs`,
+  `UTxOAssets` and the snapshot tables use indexes.
+- A transaction stored again at another chain position is removed at the old one.
+- Epoch rows turn final once the epoch has ended and no rollback can reach it; a crawled epoch once the crawl
+  has passed it. A row that is not final is read again.
+- `creditedAmount` is null for an interval that holds a block stored without its withdrawals.
+- A snapshot that times out closes its Ogmios ledger connection and writes no marker.
+- Pagination checks each block's parent hash, and blocks keep the parent hash their source reports.
+  `GetNextBlocks` serves the stored one.
+- A crawler lease is taken over only when it has expired at the moment of the update.
+- No backend call runs inside the block transaction.
+- `failed`, `SUBMIT_REJECTED` and `TX_DROPPED` are written only with proof that a transaction can never land: a
+  refusal that holds for its bytes in any ledger state, or an expiry passed with an input still unspent. Spent
+  inputs, a lagging index, fee, validity-interval and value refusals no longer fail a record. Ogmios refusals are
+  judged by their JSON-RPC code.
+- A proven never-lands outcome answers 400 with the reason, not 500.
+- With Ogmios alone, a worker job confirms only after one of its own outputs was seen unspent.
+- Every worker instance follows the submitted jobs of the wallets it signs for. An overdue job is sent again with
+  the same bytes after growing waits, and its chain read runs at most once a minute.
+- A wallet job is checked like the matching `Build*` action; a `requestJson` that is not a JSON object is a 400.
+  The worker verifies its own signature before it sends.
+- `CreateSigningRequest` never returns an expired request. A malformed witness fails verification.
+- A half-open circuit closes again when its probes answer with a verdict, and a verdict no longer resets the
+  failure count of a backend that also fails.
+- Blockfrost errors keep their HTTP status: a refused submit is a 400 with the node's reason, a 429 a rate
+  limit. A refused provider key (401, 402, 403) is a 503 and fails over.
+- `AllBackendsFailedError` is a 404 only when every backend answered 404.
+- `AddressTransactions` net amounts no longer count reference inputs, or the collateral of a valid transaction,
+  as spent.
+- Koios lists are paged past 1000 rows with a stable order: UTxOs of an address or a credential, pools,
+  DReps, registry entries. Koios address transactions are ordered by Koios.
+- Koios DRep `deregistered` means retired; deposit, expiry epoch and delegator count are mapped.
+- Blockfrost pool pledge is the certificate pledge.
+- Koios UTxOs carry the reference-script hash in `scriptRef` and the bytes in `scriptRefCbor`.
+- A block whose transaction list comes back shorter than its `txCount` is refused, and the crawler reads it
+  again.
+- A timed-out backend call stops its requests. The Blockfrost timeout applies, without SDK retries. Koios SQL
+  errors are retried in one layer.
+- `isRewardAccountRegistered` treats "cannot tell" from another ODATANO as an answer, not as a failure.
+- `GetNextBlocks` answers 503 for a cursor outside the stored range.
+- `getCredentialUtxos`, `getAssetHistory` and output lookups fail over and have a timeout.
+- `GET /odata/v4/cardano/NetworkInformation` and `LedgerProtocolParameters` apply `$select`, `$filter` and
+  `$count`. `LedgerProtocolParameters` refreshes by the same rule as `GetLedgerProtocolParameters` and returns
+  the stored rows while the backend is down.
+- Navigation reads and `$expand` index their parent first, also from an input or output to its address. With
+  Ogmios alone `Addresses('…')/utxos` answers. All backend reads run before the first write.
+- `Blocks('…')/epoch` answered 500.
+- A valid address is no longer a 400 before the app context exists. A metadata label above 2^64−1 is a 400.
+- `waitMs` below 5000 on `GetLatestTransactionsByAddress` waits as long as it says.
+- The first `Get…` call answers the stored row.
+- `GetMetadataByLabel` and the newest UTxO-set reads use their indexes on PostgreSQL.
+- `backfillMetadataPositions()`, `pruneInputAssetCopies()`, `restoreInputAssetCopies()` and
+  `backfillAssetSlices()` keep each window on index paths on a large PostgreSQL database.
+- The maintenance walks let other requests through between their steps on SQLite; `cancelMaintenance` is served
+  while they run.
+- `backfillOutputDatums` and `backfillAssetDecimals` skipped the rest of a key that filled a whole page.
+- Two starts of `backfillAssetRegistry` or `importUtxoSet` at the same moment could both run. A run that fails
+  at its start no longer stays `running`.
+- The BTP module shipped no JavaScript and could not start. It now runs the compiled service on CAP 10 with the
+  locked HANA adapter, the root `overrides` and `pkcs11js`, installed with `npm ci` from its own lockfile.
+- `docker-compose.yml` keeps the SQLite file in the volume `odatano-data`.
+- `deploy-schema --dry-run` in the image is a dry run, creates no SQLite file, and reports a failed connect as an
+  error.
+
+### Changed
+
+- Figures a backend does not report are null, not 0 (Ogmios account totals, lifetime rewards, saturation, active
+  stake, blocks minted, epoch block statistics; Koios testnet supply).
+- Every asset row carries policy id, hex name, decoded name and CIP-14 fingerprint in one form, and null for an
+  asset without a name.
+- A provider account read lists the account's addresses without their UTxOs. `GetAccount` answers them as
+  `{ address }` objects, the form earlier versions read.
+- On PostgreSQL the start builds missing indexes `CONCURRENTLY` in the background, on one instance at a time per
+  schema, and rebuilds an index an interrupted build left invalid.
+- The migration drops only the views of the CDS model, without CASCADE, and on SAP HANA refuses with the
+  steps for a new HDI container.
+- Prune and restore of input asset copies and `backfillTransactions` refuse to start while the other runs.
+- `backfillCertificates` marks the blocks whose withdrawals are complete, and removes the rows of transactions
+  whose script phase failed.
+- `release:check` also checks the CHANGELOG heading and an existing tag, the `@odatano/cap-auth` range, the BTP
+  module and, where docker runs, the image. `release.yml` pushes the image it tested and refuses a malformed tag.
+  `npm publish` requires a green Release run for the tagged commit.
+- The image no longer contains better-sqlite3.
+- README reduced to the quick start, the service table and the guide index. New
+  `docs/guides/CRAWLER_GUIDE.md`. All guides revised against the code.
+- `.env.example` leaves `INDEX_TTL_MS` at its default of one hour.
+
+### Added
+
+- `scripts/deploy-schema.mjs` (shipped): migration, then deploy with schema evolution, with `--dry-run`.
+- `cancelMaintenance(run)` on `CardanoIndexerService`, and the status value `cancelled`.
+- `backfillAssetSlices()` with `getStatus().sliceBackfill`.
+- `fromSlot` and `toSlot` on `backfillMetadataPositions`; `getStatus().nodeBehindSince`; `transactions` and
+  `removed` in the certificate backfill status.
+- `IsRewardAccountRegistered(stakeAddress)` and an optional `txCount` on `GetBlockTransactions` in
+  `CardanoBackendService`.
+- `BuildPlutusTransaction` returns `redeemers` (`tag`, `redeemerIndex`, `mem`, `steps`).
+- `ResolveJob`, `ResolveSigningRequest` and `ResolveSubmission` (Admin): settle an unresolved record as
+  `confirmed` or `failed`, with an optional `txHash` check and a note kept in `resolution`. `failed` is refused
+  with 409 `ODATANO_OUTCOME_STILL_OPEN` while the bytes have not expired and every input of them is unspent; a
+  second resolve is 409 `ODATANO_RESOLVED_CONCURRENTLY`. `ResolveJob` also sets the job's submission record.
+- Event `jobUnresolved` on `CardanoWorkerService`; `GetWorkerStatus().unresolvedJobs`; `invalidationTxHash` in
+  `GetJobStatus`. Job error codes
+  `SCRIPT_FAILED`, `OUTCOME_UNRESOLVED`, `RESOLVED_FAILED` and `INVALIDATED`.
+- `recheckFailedSubmits()` on `CardanoIndexerService` (Admin): reads every failed submission, signing request
+  and wallet job failed as `TX_DROPPED` or `SUBMIT_REJECTED` against the chain, and moves one on chain with
+  passing scripts back to `submitted`, with a `resolution` note; a job then confirms by depth. A transaction
+  whose script validity no source reports stays failed. Status in `getStatus().failedRecheck` (with `jobs`);
+  `cancelMaintenance` stops it.
+- The wallet app shows `submitting` and `unresolved` signing requests.
+
 ## [v2.0.0-rc.50] - enforced roles, schema migration at start, input assets by reference, account snapshots
 
 Schema: `CardanoAgentGrants` no longer has the columns `walletId` and `allowedJobKinds`;

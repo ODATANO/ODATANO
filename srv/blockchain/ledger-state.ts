@@ -10,7 +10,7 @@ import {
   type LedgerUTxOAsset,
 } from '#cds-models/odatano/cardano';
 import type { Amount, BlockData, Transaction as ProviderTransaction, TxOutputLine, ReferenceScriptType } from '../utils/types';
-import { decodeShelleyAddress } from '../utils/mappers';
+import { decodeShelleyAddress, assetSlice } from '../utils/mappers';
 import { chunk, IN_CHUNK } from '../utils/collections';
 
 const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
@@ -38,7 +38,7 @@ export type LedgerUtxoRow = Required<Omit<LedgerUTxO, 'assets' | 'lovelace' | 'u
   & { address: string; addressType: string; isScript: boolean; hasAssets: boolean; lovelace: string; utxo_referenceScriptType: ReferenceScriptType | null };
 
 /** A `LedgerUTxOAssets` row as the block path writes it. */
-export type LedgerUtxoAssetRow = Required<Omit<LedgerUTxOAsset, 'utxo' | 'asset_fingerprint' | 'asset_quantity'>> & { asset_quantity: string };
+export type LedgerUtxoAssetRow = Required<Omit<LedgerUTxOAsset, 'utxo' | 'asset_quantity'>> & { asset_quantity: string };
 
 /** Minimal output shape the row builder needs, shared by the block path and the import. */
 export interface LedgerOutputLike {
@@ -61,17 +61,6 @@ const nativeAssets = (amount: Amount[] | undefined): Amount[] =>
 const big = (v: unknown): bigint => (v == null || v === '' ? 0n : BigInt(String(v)));
 const num = (v: unknown): number => Number(v ?? 0);
 
-function decodeAssetName(hex: string): string | null {
-  if (!hex) return null;
-  try {
-    const text = Buffer.from(hex, 'hex').toString('utf8');
-    // printable only, a binary asset name has no useful decoded form
-    return /^[\x20-\x7e]*$/.test(text) ? text : null;
-  } catch {
-    return null;
-  }
-}
-
 /** Build the `LedgerUTxOs` row (+ asset rows) for one output. */
 export function buildLedgerUtxoRows(
   o: LedgerOutputLike,
@@ -82,10 +71,7 @@ export function buildLedgerUtxoRows(
     utxo_txHash: o.txHash,
     utxo_outputIndex: o.outputIndex,
     unit: a.unit,
-    asset_quantity: String(a.quantity),
-    asset_policyId: a.unit.length >= 56 ? a.unit.slice(0, 56) : null,
-    asset_assetNameHex: a.unit.length > 56 ? a.unit.slice(56) : '',
-    asset_assetName: a.unit.length > 56 ? decodeAssetName(a.unit.slice(56)) : null,
+    ...assetSlice(a.unit, a.quantity),
   }));
   return {
     row: {
@@ -315,10 +301,7 @@ export async function applyBlockToLedger(
           assetRows.push({
             address_address: address,
             unit,
-            asset_quantity: next.toString(),
-            asset_policyId: unit.length >= 56 ? unit.slice(0, 56) : null,
-            asset_assetNameHex: unit.length > 56 ? unit.slice(56) : '',
-            asset_assetName: unit.length > 56 ? decodeAssetName(unit.slice(56)) : null,
+            ...assetSlice(unit, next),
           });
         }
       }
@@ -359,24 +342,146 @@ export async function applyBlockToLedger(
   return { created: created.size, spent: spentInBlock.size + spentRows.length, missing, addresses: touched.length };
 }
 
-// Undo rolled-back transactions: drop what they created, reopen what they spent,
-// then recount every touched address. Returns the recounted addresses.
-export async function undoLedgerForTransactions(tx: CapTransaction, txHashes: string[]): Promise<string[]> {
+/** Asset rows of the given ledger rows, keyed `txHash#outputIndex`. Reads only rows that have assets. */
+async function assetsOfRows(tx: CapTransaction, rows: LedgerUtxoRow[]): Promise<Map<string, LedgerUtxoAssetRow[]>> {
+  const byKey = new Map<string, LedgerUtxoAssetRow[]>();
+  const wanted = new Set(rows.filter(r => Boolean(r.hasAssets)).map(r => outpoint(r.txHash, num(r.outputIndex))));
+  const hashes = [...new Set(rows.filter(r => Boolean(r.hasAssets)).map(r => r.txHash))];
+  for (const hashChunk of chunk(hashes, IN_CHUNK)) {
+    const assets = await tx.run(SELECT.from(LedgerUTxOAssets).where({ utxo_txHash: { in: hashChunk } })) as LedgerUtxoAssetRow[];
+    for (const a of assets ?? []) {
+      const k = outpoint(a.utxo_txHash, num(a.utxo_outputIndex));
+      if (!wanted.has(k)) continue;
+      byKey.set(k, [...(byKey.get(k) ?? []), a]);
+    }
+  }
+  return byKey;
+}
+
+/** Latest slot at or before `forkSlot` at which a row of `address` was created or spent. */
+async function lastActiveSlotUpTo(tx: CapTransaction, address: string, forkSlot: number): Promise<number | null> {
+  const [created, spent] = await Promise.all([
+    tx.run(SELECT.one.from(LedgerUTxOs).columns('max(createdSlot) as slot').where({ address, createdSlot: { '<=': forkSlot } })),
+    tx.run(SELECT.one.from(LedgerUTxOs).columns('max(spentSlot) as slot').where({ address, spentSlot: { '<=': forkSlot } })),
+  ]) as Array<{ slot?: unknown } | undefined>;
+  const slots = [created?.slot, spent?.slot].filter(s => s != null).map(num);
+  return slots.length ? Math.max(...slots) : null;
+}
+
+// Undo rolled-back transactions: drop what they created, reopen what they spent, and take the
+// same amounts off the address and account sums that the apply added. `forkSlot` is the slot the
+// chain rolled back to. Returns the touched addresses.
+export async function undoLedgerForTransactions(tx: CapTransaction, txHashes: string[], forkSlot: number): Promise<string[]> {
   if (!txHashes.length) return [];
-  const touched = new Set<string>();
-  for (const hashChunk of chunk(txHashes, IN_CHUNK)) {
-    const [createdRows, spentRows] = await Promise.all([
-      tx.run(SELECT.from(LedgerUTxOs).columns('address').where({ txHash: { in: hashChunk } })) as Promise<Array<{ address: string }>>,
-      tx.run(SELECT.from(LedgerUTxOs).columns('address').where({ spentTxHash: { in: hashChunk } })) as Promise<Array<{ address: string }>>,
+  const rolledBack = new Set(txHashes);
+  const deltas = new Map<string, AddressDelta>();
+  const hashChunks = chunk(txHashes, IN_CHUNK);
+  // Every chunk is read before the first write: a reopen in one chunk would otherwise change
+  // what a later chunk reads about the outputs its transactions created.
+  for (const hashChunk of hashChunks) {
+    const [created, spent] = await Promise.all([
+      tx.run(SELECT.from(LedgerUTxOs).where({ txHash: { in: hashChunk } })) as Promise<LedgerUtxoRow[]>,
+      tx.run(SELECT.from(LedgerUTxOs).where({ spentTxHash: { in: hashChunk } })) as Promise<LedgerUtxoRow[]>,
     ]);
-    for (const r of [...(createdRows ?? []), ...(spentRows ?? [])]) touched.add(r.address);
+    // A row a rolled-back transaction created and another one spent added nothing to the sums.
+    const openCreated = (created ?? []).filter(r => r.spentTxHash == null);
+    const reopened = (spent ?? []).filter(r => !rolledBack.has(r.txHash));
+    const assets = await assetsOfRows(tx, [...openCreated, ...reopened]);
+    for (const r of openCreated) applyDelta(deltaFor(deltas, r), r, assets.get(outpoint(r.txHash, num(r.outputIndex))), -1n);
+    for (const r of reopened) applyDelta(deltaFor(deltas, r), r, assets.get(outpoint(r.txHash, num(r.outputIndex))), 1n);
+  }
+  for (const hashChunk of hashChunks) {
     await tx.run(DELETE.from(LedgerUTxOAssets).where({ utxo_txHash: { in: hashChunk } }));
     await tx.run(DELETE.from(LedgerUTxOs).where({ txHash: { in: hashChunk } }));
+  }
+  for (const hashChunk of hashChunks) {
     await tx.run(UPDATE.entity(LedgerUTxOs).set({ spentTxHash: null, spentSlot: null }).where({ spentTxHash: { in: hashChunk } }));
   }
-  const addresses = [...touched];
-  await recountLedgerAddresses(tx, addresses);
-  return addresses;
+
+  const touched = [...deltas.keys()];
+  const stakeDeltas = new Map<string, { lovelace: bigint; utxos: number; removedAddresses: number }>();
+  for (const addrChunk of chunk(touched, IN_CHUNK)) {
+    const [existing, existingAssets] = await Promise.all([
+      tx.run(SELECT.from(LedgerAddresses).where({ address: { in: addrChunk } })) as Promise<Array<Record<string, unknown>>>,
+      tx.run(SELECT.from(LedgerAddressAssets).where({ address_address: { in: addrChunk } })) as Promise<Array<Record<string, unknown>>>,
+    ]);
+    const byAddress = new Map((existing ?? []).map(e => [String(e.address), e]));
+    const assetQty = new Map<string, bigint>();
+    for (const a of existingAssets ?? []) assetQty.set(`${a.address_address}|${a.unit}`, big(a.asset_quantity));
+
+    for (const address of addrChunk) {
+      const d = deltas.get(address)!;
+      const prev = byAddress.get(address);
+      if (!prev) continue;
+      const count = num(prev.utxoCount) + d.utxos;
+      const stake = (prev.stakeAddress as string | null) ?? d.stakeAddress;
+      // An address the rolled-back blocks brought in did not exist at the fork.
+      const firstSeen = prev.firstSeenSlot == null ? null : num(prev.firstSeenSlot);
+      const bornAfterFork = firstSeen != null && firstSeen > forkSlot && count <= 0;
+      if (bornAfterFork) {
+        await tx.run(DELETE.from(LedgerAddressAssets).where({ address_address: address }));
+        await tx.run(DELETE.from(LedgerAddresses).where({ address }));
+      } else {
+        const lastActive = prev.lastActiveSlot == null ? null : num(prev.lastActiveSlot);
+        await tx.run(UPSERT.into(LedgerAddresses).entries({
+          ...prev,
+          totalLovelace: (big(prev.totalLovelace) + d.lovelace).toString(),
+          utxoCount: count,
+          lastActiveSlot: lastActive != null && lastActive > forkSlot ? await lastActiveSlotUpTo(tx, address, forkSlot) : lastActive,
+        }));
+        for (const [unit, delta] of d.assets) {
+          if (delta === 0n) continue;
+          const k = `${address}|${unit}`;
+          const next = (assetQty.get(k) ?? 0n) + delta;
+          if (next === 0n) {
+            await tx.run(DELETE.from(LedgerAddressAssets).where({ address_address: address, unit }));
+          } else {
+            await tx.run(UPSERT.into(LedgerAddressAssets).entries({
+              address_address: address,
+              unit,
+              ...assetSlice(unit, next),
+            }));
+          }
+        }
+      }
+      if (stake) {
+        const s = stakeDeltas.get(stake) ?? { lovelace: 0n, utxos: 0, removedAddresses: 0 };
+        s.lovelace += d.lovelace;
+        s.utxos += d.utxos;
+        if (bornAfterFork) s.removedAddresses++;
+        stakeDeltas.set(stake, s);
+      }
+    }
+  }
+
+  for (const stakeChunk of chunk([...stakeDeltas.keys()], IN_CHUNK)) {
+    const existing = await tx.run(SELECT.from(LedgerAccounts).where({ stakeAddress: { in: stakeChunk } })) as Array<Record<string, unknown>>;
+    for (const prev of existing ?? []) {
+      const stakeAddress = String(prev.stakeAddress);
+      const d = stakeDeltas.get(stakeAddress)!;
+      const addressCount = num(prev.addressCount) - d.removedAddresses;
+      if (addressCount <= 0) {
+        await tx.run(DELETE.from(LedgerAccounts).where({ stakeAddress }));
+        continue;
+      }
+      const lastActive = prev.lastActiveSlot == null ? null : num(prev.lastActiveSlot);
+      let lastActiveSlot = lastActive;
+      if (lastActive != null && lastActive > forkSlot) {
+        const latest = await tx.run(
+          SELECT.one.from(LedgerAddresses).columns('max(lastActiveSlot) as slot').where({ stakeAddress, lastActiveSlot: { '<=': forkSlot } })
+        ) as { slot?: unknown } | undefined;
+        lastActiveSlot = latest?.slot == null ? null : num(latest.slot);
+      }
+      await tx.run(UPSERT.into(LedgerAccounts).entries({
+        stakeAddress,
+        controlledAmount: (big(prev.controlledAmount) + d.lovelace).toString(),
+        addressCount,
+        utxoCount: num(prev.utxoCount) + d.utxos,
+        lastActiveSlot,
+      }));
+    }
+  }
+  return touched;
 }
 
 // Recount the sums of these addresses and their stake keys from open rows. Also repairs a drifted sum.
@@ -419,10 +524,7 @@ export async function recountLedgerAddresses(tx: CapTransaction, addresses: stri
     const assetRows = [...assetSums].filter(([, q]) => q !== 0n).map(([unit, q]) => ({
       address_address: address,
       unit,
-      asset_quantity: q.toString(),
-      asset_policyId: unit.length >= 56 ? unit.slice(0, 56) : null,
-      asset_assetNameHex: unit.length > 56 ? unit.slice(56) : '',
-      asset_assetName: unit.length > 56 ? decodeAssetName(unit.slice(56)) : null,
+      ...assetSlice(unit, q),
     }));
     for (const rows of chunk(assetRows, IN_CHUNK)) await tx.run(UPSERT.into(LedgerAddressAssets).entries(rows));
     if (stakeAddress) stakes.add(stakeAddress);

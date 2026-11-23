@@ -25,10 +25,12 @@ const { fakeDb, stored, client, indexer } = vi.hoisted(() => ({
     getLatestBlock: vi.fn(),
     getUnspentOutputs: vi.fn(),
     submitTransaction: vi.fn(),
+    isRewardAccountRegistered: vi.fn(),
   },
   indexer: {
     refuseOutsideCrawl: vi.fn(async () => undefined),
     resolveAddress: vi.fn(),
+    resolveAccount: vi.fn(),
   },
 }));
 
@@ -62,6 +64,28 @@ const TX = 'a'.repeat(64);
 const BLK = 'b'.repeat(64);
 
 describe('CardanoBackendService', () => {
+  it('answers account addresses as { address } objects, the shape a consumer of an earlier version reads', async () => {
+    indexer.resolveAccount.mockResolvedValue({ stakeaddress: 'stake_test1x', addresses: ['addr_test1a', 'addr_test1b'] });
+    const answer = JSON.parse(String(await call('GetAccount', { stakeAddress: 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn' })));
+    expect(answer.addresses).toEqual([{ address: 'addr_test1a' }, { address: 'addr_test1b' }]);
+    // how an earlier consumer read them: a.address of every entry, its UTxOs fetched on its own
+    expect(answer.addresses.map((a: { address: string; utxos?: unknown }) => [a.address, Array.isArray(a.utxos)])).toEqual([['addr_test1a', false], ['addr_test1b', false]]);
+  });
+
+  it('passes the transaction count of the block to its paging backend, from the request or the stored block', async () => {
+    const paging = { getBlockTransactions: vi.fn().mockResolvedValue([]) };
+    client.getPaginatingBackend.mockReturnValue(paging as never);
+    stored.readBlockTransactions.mockResolvedValue(null);
+    stored.readBlock.mockResolvedValue({ hash: BLK, txCount: 4 });
+    await call('GetBlockTransactions', { blockHash: BLK });
+    expect(paging.getBlockTransactions).toHaveBeenLastCalledWith(BLK, 4);
+    await call('GetBlockTransactions', { blockHash: BLK, txCount: 2 });
+    expect(paging.getBlockTransactions).toHaveBeenLastCalledWith(BLK, 2);
+    stored.readBlock.mockResolvedValue(null);
+    await call('GetBlockTransactions', { blockHash: BLK });
+    expect(paging.getBlockTransactions).toHaveBeenLastCalledWith(BLK, undefined);
+  });
+
   it('answers a stored transaction from the index, as JSON, without asking a backend', async () => {
     stored.readTransactionsByHash.mockResolvedValue(new Map([[TX, { hash: TX, fee: '1' }]]));
     expect(JSON.parse(String(await call('GetTransaction', { hash: TX })))).toEqual({ hash: TX, fee: '1' });
@@ -116,7 +140,7 @@ describe('CardanoBackendService', () => {
     stored.readBlock.mockResolvedValue({ hash: BLK, height: 9 });
     stored.readNextBlocks.mockResolvedValue([{ hash: 'n10', height: 10 }]);
     expect(JSON.parse(String(await call('GetNextBlocks', { afterHash: BLK, count: 5 })))).toEqual([{ hash: 'n10', height: 10 }]);
-    expect(stored.readNextBlocks).toHaveBeenCalledWith(fakeDb, 9, 5);
+    expect(stored.readNextBlocks).toHaveBeenCalledWith(fakeDb, 9, 5, BLK);
   });
 
   it('signals an orphaned cursor with the chain-point mismatch prefix', async () => {
@@ -147,6 +171,37 @@ describe('CardanoBackendService', () => {
     client.getLatestBlock.mockResolvedValue({ slot: 100, hash: BLK });
     expect(JSON.parse(String(await call('GetPoolIds')))).toEqual(['pool1a', 'pool1b']);
     expect(epochStateAt).toHaveBeenCalledWith({ slot: 100, hash: BLK });
+  });
+
+  it('answers a cursor it does not store and cannot follow with 503, not with a reorg', async () => {
+    stored.readBlock.mockResolvedValue(null);
+    stored.readBlockByHeight.mockResolvedValue(null);
+    await expect(call('GetNextBlocks', { afterHash: BLK, count: 5, afterHeight: 9 })).rejects.toMatchObject({ statusCode: 503 });
+    await expect(call('GetNextBlocks', { afterHash: BLK, count: 5 })).rejects.not.toThrow(/CHAIN_POINT_MISMATCH/);
+  });
+
+  it('answers whether a stake address is registered with its own verdict', async () => {
+    client.isRewardAccountRegistered.mockResolvedValue(false);
+    const STAKE = 'stake_test1uqehkck0lajq8gr28t9uxnuvgcqrc6070x3k9r8048z8y5gssrtvn';
+    expect(JSON.parse(String(await call('IsRewardAccountRegistered', { stakeAddress: STAKE })))).toBe(false);
+    expect(client.isRewardAccountRegistered).toHaveBeenCalledWith(STAKE);
+  });
+
+  it('shares one enumeration between the callers that arrive while it runs', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10 * 60_000);
+    let release: () => void = () => {};
+    const epochStateAt = vi.fn(() => new Promise((resolve) => { release = () => resolve({ pools: [{ poolId: 'pool1c' }], dreps: [] }); }));
+    client.getEpochStateBackend.mockReturnValue({ epochStateAt } as never);
+    client.getLatestBlock.mockResolvedValue({ slot: 100, hash: BLK });
+
+    const first = call('GetPoolIds');
+    const second = call('GetPoolIds');
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    expect(JSON.parse(String(await first))).toEqual(['pool1c']);
+    expect(JSON.parse(String(await second))).toEqual(['pool1c']);
+    expect(epochStateAt).toHaveBeenCalledTimes(1);
+    now.mockRestore();
   });
 
   it('refuses output lookups without a ledger-state backend', async () => {

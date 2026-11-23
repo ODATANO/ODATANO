@@ -67,6 +67,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
 import { CardanoCrawler, type CrawlerConfig } from '../../srv/blockchain/crawler/crawler';
 import type { ChainPoint, ChainSyncCallbacks, ChainSyncHandle } from '../../srv/blockchain/backends/cardano-backend';
 import type { BlockData } from '../../srv/utils/types';
+import { callSignal } from '../../srv/blockchain/backends/call-signal';
 
 const CONFIG: CrawlerConfig = {
   enabled: true, startSlot: 1000, startBlockHash: 'start'.padEnd(64, '0'), startHeight: 10,
@@ -177,8 +178,74 @@ describe('CardanoCrawler — epoch snapshots', () => {
     await settle(() => true);
 
     expect(snapshotEpoch).toHaveBeenCalledTimes(1);
-    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: null });
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: null }, expect.any(Function));
     await crawler.stop();
+  });
+
+  it('a timed-out snapshot is told to stop, and no second one starts while it still runs', async () => {
+    defaultDb();
+    let finish: () => void = () => undefined;
+    const snapshotEpoch = vi.fn(() => new Promise<{ pools: number; dreps: number }>((resolve) => { finish = () => resolve({ pools: 0, dreps: 0 }); }));
+    const { indexer } = makeIndexer(snapshotEpoch as never);
+    const { client, openChainSync, cbs } = chainSyncClient();
+    const crawler = makeCrawler(client, indexer);
+    const timeouts = CardanoCrawler as unknown as { SNAPSHOT_TIMEOUT_MS: number };
+    const original = timeouts.SNAPSHOT_TIMEOUT_MS;
+    Object.defineProperty(CardanoCrawler, 'SNAPSHOT_TIMEOUT_MS', { value: 20, configurable: true });
+    try {
+      await crawler.start();
+      await settle(() => openChainSync.mock.calls.length > 0);
+      await cbs().rollForward(block(), [], TIP_EPOCH_3);
+      await settle(() => snapshotEpoch.mock.calls.length > 0);
+      const shouldStop = (snapshotEpoch.mock.calls[0] as unknown as [number, unknown, () => boolean])[2];
+      expect(shouldStop()).toBe(false);
+
+      await new Promise((r) => setTimeout(r, 60));
+      expect(shouldStop()).toBe(true);
+      // the retry backoff is over, but the first attempt has not ended
+      (crawler as unknown as { snapshotRetryAfter: number }).snapshotRetryAfter = 0;
+      await cbs().rollForward(block({ hash: 'blk2'.padEnd(64, '1'), height: 42, slot: 259_350 }), [], TIP_EPOCH_3);
+      await settle(() => true);
+      expect(snapshotEpoch).toHaveBeenCalledTimes(1);
+      finish();
+    } finally {
+      Object.defineProperty(CardanoCrawler, 'SNAPSHOT_TIMEOUT_MS', { value: original, configurable: true });
+      await crawler.stop();
+    }
+  });
+
+  it('a timed-out snapshot has its call signal aborted, and a work that never ends blocks only for the grace period', async () => {
+    defaultDb();
+    let signal: AbortSignal | undefined;
+    const snapshotEpoch = vi.fn(() => { signal = callSignal(); return new Promise<{ pools: number; dreps: number }>(() => undefined); });
+    const { indexer } = makeIndexer(snapshotEpoch as never);
+    const { client, openChainSync, cbs } = chainSyncClient();
+    const crawler = makeCrawler(client, indexer);
+    const limits = CardanoCrawler as unknown as { SNAPSHOT_TIMEOUT_MS: number; SNAPSHOT_ABORT_GRACE_MS: number };
+    const original = { timeout: limits.SNAPSHOT_TIMEOUT_MS, grace: limits.SNAPSHOT_ABORT_GRACE_MS };
+    Object.defineProperty(CardanoCrawler, 'SNAPSHOT_TIMEOUT_MS', { value: 20, configurable: true });
+    Object.defineProperty(CardanoCrawler, 'SNAPSHOT_ABORT_GRACE_MS', { value: 40, configurable: true });
+    try {
+      await crawler.start();
+      await settle(() => openChainSync.mock.calls.length > 0);
+      await cbs().rollForward(block(), [], TIP_EPOCH_3);
+      await settle(() => snapshotEpoch.mock.calls.length > 0);
+      expect(signal?.aborted).toBe(false);
+
+      await new Promise((r) => setTimeout(r, 30));
+      // the backend closes its ledger connection on this signal
+      expect(signal?.aborted).toBe(true);
+
+      await new Promise((r) => setTimeout(r, 60));
+      (crawler as unknown as { snapshotRetryAfter: number }).snapshotRetryAfter = 0;
+      await cbs().rollForward(block({ hash: 'blk2'.padEnd(64, '1'), height: 42, slot: 259_350 }), [], TIP_EPOCH_3);
+      await settle(() => snapshotEpoch.mock.calls.length > 1);
+      expect(snapshotEpoch).toHaveBeenCalledTimes(2);
+    } finally {
+      Object.defineProperty(CardanoCrawler, 'SNAPSHOT_TIMEOUT_MS', { value: original.timeout, configurable: true });
+      Object.defineProperty(CardanoCrawler, 'SNAPSHOT_ABORT_GRACE_MS', { value: original.grace, configurable: true });
+      await crawler.stop();
+    }
   });
 
   it('snapshots the next epoch when the boundary is crossed', async () => {
@@ -322,7 +389,9 @@ describe('CardanoCrawler — epoch snapshots', () => {
     // indexBlockFull got the block's transaction object; snapshotEpoch got no tx at all —
     // it opens its own, so a few thousand rows never inflate the atomic block write
     expect(indexer.indexBlockFull.mock.calls[0][0]).toBeDefined();
-    expect(snapshotEpoch.mock.calls[0]).toHaveLength(2);
+    // epoch, block and the stop check; no transaction
+    expect(snapshotEpoch.mock.calls[0]).toHaveLength(3);
+    expect(typeof snapshotEpoch.mock.calls[0][2]).toBe('function');
     await crawler.stop();
   });
 
@@ -339,7 +408,7 @@ describe('CardanoCrawler — epoch snapshots', () => {
     await cbs().rollForward(block(), [], tip);
     await settle(() => snapshotEpoch.mock.calls.length > 0);
 
-    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: 'blk'.padEnd(64, '1') });
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 259_300, time: 1700000000, hash: 'blk'.padEnd(64, '1') }, expect.any(Function));
     await crawler.stop();
   });
 
@@ -361,7 +430,7 @@ describe('CardanoCrawler — epoch snapshots', () => {
       block({ hash: 'blk2'.padEnd(64, '1'), height: 400, slot: 300_000 }), [], { slot: 345_700, hash: 'tip'.padEnd(64, '2'), height: 466 },
     );
     await settle(() => snapshotEpoch.mock.calls.length > 0);
-    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 300_000, time: 1700000000, hash: 'blk2'.padEnd(64, '1') });
+    expect(snapshotEpoch).toHaveBeenCalledWith(3, { slot: 300_000, time: 1700000000, hash: 'blk2'.padEnd(64, '1') }, expect.any(Function));
     await crawler.stop();
   });
 

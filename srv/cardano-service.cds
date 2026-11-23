@@ -19,7 +19,8 @@ service CardanoODataService @(impl: './cardano-service') {
     @readonly
     @title      : 'Blocks'
     @description: 'Projection for Blocks'
-    entity Blocks                   as projection on db.Blocks;
+    // withdrawalsReported is bookkeeping of the crawl, not chain data
+    entity Blocks                   as projection on db.Blocks excluding { withdrawalsReported };
 
     @readonly
     @title      : 'Epochs'
@@ -59,7 +60,8 @@ service CardanoODataService @(impl: './cardano-service') {
     @readonly
     @title      : 'Assets'
     @description: 'Projection for Native-Asset Information'
-    entity Assets                   as projection on db.Assets;
+    // firstSeenSlot is bookkeeping of the crawl, not chain data
+    entity Assets                   as projection on db.Assets excluding { firstSeenSlot };
 
     @readonly
     @title      : 'Asset History'
@@ -149,7 +151,7 @@ service CardanoODataService @(impl: './cardano-service') {
     @readonly
     @title      : 'Accounts'
     @description: 'Projection for Accounts'
-    entity Accounts                 as projection on db.Accounts;
+    entity Accounts                 as projection on db.Accounts excluding { addressList };
 
     @readonly
     @title      : 'Addresses'
@@ -411,7 +413,7 @@ service CardanoODataService @(impl: './cardano-service') {
     @odatano.agent: 'read'
     action ParseTransactionCbor(
                                 @title: 'Transaction CBOR'
-                                @description: 'Hex-encoded transaction CBOR; signed or unsigned. Capped at 128 KiB of hex.'
+                                @description: 'Hex-encoded transaction CBOR; signed or unsigned. At most 65536 hex characters (32 KiB).'
                                 cbor: LargeString)                    returns ParsedTransaction;
 
     @title      : 'Decode Plutus Data'
@@ -419,6 +421,6 @@ service CardanoODataService @(impl: './cardano-service') {
     @odatano.agent: 'read'
     action DecodePlutusData(
                                 @title: 'PlutusData CBOR'
-                                @description: 'Hex-encoded PlutusData CBOR. Capped at 128 KiB of hex.'
+                                @description: 'Hex-encoded PlutusData CBOR. At most 65536 hex characters (32 KiB).'
                                 cbor: LargeString)                    returns LargeString;
 }

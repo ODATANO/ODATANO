@@ -24,7 +24,6 @@ import {
 
 import {
   ExternalSignerType,
-  SigningStatus,
   UnsignedTxExportPayload,
   SignatureVerificationResult,
 } from '../../srv/utils/types';
@@ -171,6 +170,17 @@ describe('SignatureVerifier', () => {
       expect(result.witnessCount).toBeGreaterThan(0);
       expect(result.signerKeyHashes.length).toBeGreaterThan(0);
       expect(result.warnings).toHaveLength(0);
+    });
+
+    it('fails a transaction with a malformed vkey witness entry beside a valid one', () => {
+      // a second witness entry that is no [vkey, signature] byte pair; the node would refuse it
+      const malformed = VALID_SIGNED_TX_CBOR.replace('a100d9010281', 'a100d9010282').replace(/f5f6$/, '820102f5f6');
+      expect(verifier.extractTxBodyHash(malformed)).toBe(expectedHash);
+
+      const result = verifier.verify(malformed, { expectedTxBodyHash: expectedHash, requireSignature: true });
+
+      expect(result.isValid).toBe(false);
+      expect(result.errorMessage).toContain('not a [vkey, signature] byte pair');
     });
 
     it('should fail when transaction body hash does not match expected', () => {
@@ -544,7 +554,7 @@ describe('ExternalSignerModule', () => {
       it('should create initial workflow state with pending status', () => {
         const state = module.createWorkflowState(signingRequest);
 
-        expect(state.status).toBe(SigningStatus.PENDING);
+        expect(state.status).toBe('pending');
         expect(state.request).toBe(signingRequest);
         expect(state.timestamps.created).toBe(signingRequest.createdAt);
         expect(state.signedTxCbor).toBeUndefined();
@@ -557,7 +567,7 @@ describe('ExternalSignerModule', () => {
         const initialState = module.createWorkflowState(signingRequest);
         const signedState = module.markAsSigned(initialState, VALID_SIGNED_TX_CBOR);
 
-        expect(signedState.status).toBe(SigningStatus.SIGNED);
+        expect(signedState.status).toBe('signed');
         expect(signedState.signedTxCbor).toBe(VALID_SIGNED_TX_CBOR);
         expect(signedState.timestamps.signed).toBeDefined();
       });
@@ -578,7 +588,7 @@ describe('ExternalSignerModule', () => {
 
         const verifiedState = module.markAsVerified(signedState, verificationResult);
 
-        expect(verifiedState.status).toBe(SigningStatus.VERIFIED);
+        expect(verifiedState.status).toBe('verified');
         expect(verifiedState.verificationResult).toBe(verificationResult);
         expect(verifiedState.timestamps.verified).toBeDefined();
       });
@@ -597,7 +607,7 @@ describe('ExternalSignerModule', () => {
 
         const failedState = module.markAsVerified(initialState, verificationResult);
 
-        expect(failedState.status).toBe(SigningStatus.FAILED);
+        expect(failedState.status).toBe('failed');
         expect(failedState.errorMessage).toBe('Verification failed');
         expect(failedState.timestamps.failed).toBeDefined();
       });
@@ -609,7 +619,7 @@ describe('ExternalSignerModule', () => {
         const txHash = 'tx-hash-123';
         const submittedState = module.markAsSubmitted(initialState, txHash);
 
-        expect(submittedState.status).toBe(SigningStatus.SUBMITTED);
+        expect(submittedState.status).toBe('submitted');
         expect(submittedState.txHash).toBe(txHash);
         expect(submittedState.timestamps.submitted).toBeDefined();
       });
@@ -621,7 +631,7 @@ describe('ExternalSignerModule', () => {
         const errorMessage = 'Something went wrong';
         const failedState = module.markAsFailed(initialState, errorMessage);
 
-        expect(failedState.status).toBe(SigningStatus.FAILED);
+        expect(failedState.status).toBe('failed');
         expect(failedState.errorMessage).toBe(errorMessage);
         expect(failedState.timestamps.failed).toBeDefined();
       });

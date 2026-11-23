@@ -1,15 +1,11 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-core-logo-on-dark.svg">
-    <img src="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-core-logo.svg" alt="ODATANO CORE" height="84">
+    <source media="(prefers-color-scheme: dark)" srcset="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-logo-on-dark.svg">
+    <img src="https://cdn.jsdelivr.net/npm/@odatano/brand@1/logos/odatano-logo.svg" alt="ODATANO" height="84">
   </picture>
 </p>
 
 # Enterprise OData Services for the Cardano Blockchain
-
-Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk) all four milestones completed and approved (April 2026).
-
-**ODATANO** is an SAP CAP–based service that exposes the Cardano blockchain via a standardized **OData V4** interface, enabling enterprise-grade read and write access with native transaction building.
 
 [![Tests](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml/badge.svg)](https://github.com/ODATANO/ODATANO/actions/workflows/test.yaml)
 [![Coverage](https://codecov.io/gh/ODATANO/ODATANO/branch/main/graph/badge.svg)](https://codecov.io/gh/ODATANO/ODATANO)
@@ -17,16 +13,19 @@ Funded by [Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsor
 [![npm downloads](https://img.shields.io/npm/dt/@odatano/core?logo=npm&label=downloads&color=blue)](https://www.npmjs.com/package/@odatano/core)
 [![License](https://img.shields.io/badge/license-Apache%202.0-yellow)](LICENSE)
 
+**ODATANO** (`@odatano/core`) is an SAP CAP plugin that serves the Cardano blockchain as **OData V4**:
+read chain data, build, sign and submit transactions. Funded by
+[Cardano Catalyst Fund 14](https://projectcatalyst.io/funds/14/sponsored-by-leftovers/sap-cardano-odata-v4-api-with-cap-and-sap-cardano-sdk).
 
 ## Quick Start
 
-### As CAP Plugin (recommended)
-
-Add ODATANO to any existing SAP CAP project:
+In an SAP CAP project:
 
 ```bash
 npm install @odatano/core @cap-js/sqlite
 ```
+
+Add to `package.json`:
 
 ```json
 {
@@ -34,171 +33,68 @@ npm install @odatano/core @cap-js/sqlite
     "requires": {
       "db": { "kind": "sqlite" },
       "auth": { "users": { "alice": { "roles": ["Read", "Transact", "Sign"] } } },
-      "odatano-core": {
-        "network": "preview",
-        "backends": ["koios"]
-      }
+      "odatano-core": { "network": "preview", "backends": ["koios"] }
     }
   }
 }
 ```
 
-The services ask for the roles `Read`, `Transact` and `Sign` (`Admin` for operator actions). The `auth`
-entry gives them to CAP's development user `alice`; in production your own authentication assigns them.
-
 ```bash
-cds deploy --to sqlite 
-cds serve
-```
-
-Koios works without an account on its public tier. A [Koios token](https://koios.rest) is optional and raises the rate limit. Put it in a `.env` file in the project root (loaded automatically by `cds serve` / `cds watch`), not in `package.json`:
-
-```bash
-# .env (optional)
-KOIOS_API_KEY=your_koios_token
-```
-
-> Config in `cds.requires.odatano-core` takes precedence over environment
-> variables; a `koiosApiKey` set there would override the `.env` value.
-
-Other backends are optional and can be combined, for example `["ogmios", "koios"]` with a local node, or
-`blockfrost` with a Blockfrost key or a self-hosted Blockfrost-compatible node. See the
-[Backend Configuration Guide](docs/guides/BACKEND_CONFIGURATION.md).
-
-### Standalone
-
-Run ODATANO as a self-contained service (no host CAP project needed):
-
-```bash
-git clone https://github.com/ODATANO/ODATANO && cd ODATANO
-npm ci
-cp .env.example .env   # set NETWORK, BACKENDS (default koios), optional KOIOS_API_KEY
 cds deploy --to sqlite
 cds serve
+curl -u alice: http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
-Or with Docker — this brings up a local **cardano-node + Ogmios + ODATANO** stack
-(Preview), with the service pre-wired to the local Ogmios backend:
-
-```bash
-docker compose up -d                      # full stack
-docker compose up -d cardano-node ogmios  # just the chain backend (pre-sync)
-docker compose logs -f ogmios             # watch sync (/health: 202 syncing, 200 near tip)
-```
-
-> First sync from genesis takes hours; the node DB persists in a Docker volume so
-> restarts resume. Until Ogmios catches up, queries fall back to Koios
-> (optional `KOIOS_API_KEY`).
-
-Service available at `http://localhost:4004`. See the [Quick Start Guide](docs/QUICK_START.md#local-ogmios--cardano-node-docker) for the local Ogmios stack and full details.
-
-## Dev Mode: Mocked Authentication
-
-> **Heads-up.** `cds serve` uses CAP's mocked auth: any Basic-Auth header logs in as the named mock user and passwords are not checked. This repository gives `alice` and `bob` the roles `Read`, `Transact` and `Sign`, `carol` only `Read`, and `admin` all four (`.cdsrc.json`); any other name is logged in without a role and gets 403. Anonymous requests get 401, but anyone reaching the port can authenticate.
->
-> Production needs the `[production]` profile (`NODE_ENV=production`), which switches to `auth: xsuaa`. Don't expose a dev-mode instance. See the [Security Guide](docs/guides/SECURITY_GUIDE.md#authentication-xsuaa).
->
-> The Docker image runs `NODE_ENV=production` with HTTP basic auth via `@odatano/cap-auth` (`ODATANO_HTTP_PASSWORD` required, user `ODATANO_HTTP_USER` default `odatano`, roles `ODATANO_HTTP_ROLES` default `Read,Transact,Sign,Admin`; 20 failed attempts per 15 min per client address and user, then 429). `ODATANO_AUTH=dummy` disables authentication for local testing only. `getLiveness()` and `VerifyDataSignature` stay anonymous.
->
-> Database of the image: `ODATANO_DB_URL=postgres://user:pw@host:5432/db` selects PostgreSQL (schema deployed on every boot); otherwise SQLite at `ODATANO_DB_PATH` (default `/data/db.sqlite`). `docker compose run --rm --no-deps odatano migrate --from /data/db.sqlite` copies an existing SQLite file into a freshly deployed PostgreSQL.
+- **Backend.** Koios needs no account. Ogmios with a local node, Blockfrost and another ODATANO are the
+  alternatives: [Backend Configuration](docs/guides/BACKEND_CONFIGURATION.md).
+- **Login.** `alice` is a development user of CAP and the password is not checked, so never expose a
+  development instance. In production your own authentication assigns the roles `Read`, `Transact`, `Sign` and `Admin`:
+  [Security Guide](docs/guides/SECURITY_GUIDE.md).
+- **Without a CAP project.** Clone this repository, or start cardano-node, Ogmios and ODATANO with
+  `ODATANO_HTTP_PASSWORD=<password> docker compose up -d`: [Quick Start](docs/QUICK_START.md),
+  [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md).
 
 ## Services
 
 | Service | Path | Purpose |
 |---|---|---|
-| CardanoODataService | `/odata/v4/cardano/` | Read blockchain data (33 entities, 22 actions) |
-| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build & submit transactions (14 actions) |
-| CardanoSignService | `/odata/v4/cardano-sign/` | External signing + HSM (9 actions) |
-| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler / pre-sync control (off by default) |
-| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs (off by default) |
-| CardanoBackendService | `/odata/v4/cardano-backend/` | Chain data in provider shape for another ODATANO that uses this one as its `odatano` backend |
-| CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants: scoped bearer tokens for agents (off by default) |
+| CardanoODataService | `/odata/v4/cardano/` | Read chain data (33 entities, 22 actions) |
+| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build and submit transactions, Plutus included (14 actions) |
+| CardanoSignService | `/odata/v4/cardano-sign/` | External signing and HSM (9 actions) |
+| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler, status and health probes |
+| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs |
+| CardanoAgentService | `/odata/v4/cardano-agent/` | Scoped, budgeted tokens for agents |
+| CardanoBackendService | `/odata/v4/cardano-backend/` | Chain data for another ODATANO that uses this one as its backend |
 
-The indexer and the worker service also publish **CAP events**, so a consumer can subscribe instead of polling —
-in-process, no broker required:
-
-```js
-(await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)
-(await cds.connect.to('CardanoIndexerService')).on('blockIndexed', ({ data }) => …)
-```
-
-## Agent grants (off by default)
-
-Hand an agent a **scoped, budgeted token** instead of a user.
-
-```bash
-AGENT_GRANTS_ENABLED=true            # or cds.requires.odatano-core.agentGrants.enabled
-AGENT_GRANTS_DELEGATE=mocked         # CAP auth kind that keeps authenticating non-token requests (default: configured kind)
-AGENT_GRANT_ADMIN_RATE_LIMIT=10      # grant administration calls per principal per hour (or agentGrants.adminRateLimit)
-AGENT_TOKEN_CACHE_MS=10000           # a resolved token is reused this long before the row is read again; 0 = off (or agentGrants.tokenCacheMs)
-AGENT_GRANT_USAGE_RETENTION_DAYS=400 # usage counters older than this are deleted once a day; 0 = keep all (or agentGrants.usageRetentionDays)
-```
-
-1. An **Admin** issues a grant (`POST /odata/v4/cardano-agent/CreateAgentGrant`): an allow list of
-   actions, a daily budget and an expiry. The response carries the token `odat_…` **once**; the
-   server stores only its SHA-256.
-2. The agent sends `x-agent-token: odat_…` on the service paths. It runs as the principal
-   `agent:<grantId>` with the single role `agent-grant`, never as the operator: every
-   `@requires: 'Admin'` surface (pause/resume, HSM signing, grant administration) refuses it by
-   construction. Reads and compute-only actions are always allowed; allow-listed actions each cost
-   one budget unit per UTC day (a build is the service an agent buys); everything else is 403.
-   An agent signs its transactions itself: the wallet worker, which signs with server-held keys,
-   answers every token request with 403.
-3. `GET /odata/v4/cardano-agent/GetGrantStatus()` tells the agent what it may do and how much budget
-   is left; `RevokeAgentGrant` turns the token into an unknown token immediately.
-4. Lifecycle (Admin; the same semantics as the gateway's peer services, so one client drives
-   them all): `UpdateAgentGrant` changes label, allow list, daily budget or expiry
-   (absent = untouched, explicit `null` = cleared; 409 `GRANT_REVOKED` on a revoked grant); `RotateAgentGrantToken` returns a fresh token once, the old
-   one is unknown from the next request; `GetGrantUsage(grantId, since, until)` lists admitted calls
-   per service and action over up to 366 days (an Admin for any grant, a token for its own). All
-   administration calls share the per-principal hourly rate limit above.
-
-Grantable: `Build*`, `SetCollateral`, `CreateSigningRequest`, `VerifySignature`, `SubmitTransaction`,
-`SubmitSignedTransaction`, `SubmitVerifiedTransaction`, `CheckSubmissionStatus`. Never: `SignWithHsm*`,
-`SubmitWalletJob`, `CancelJob`, `Pause*`/`Resume*`, `pauseCrawler`/`resumeCrawler`, grant administration.
-
-Programmatic seams for other packages (`@odatano/x402` sells grants against a 402 payment):
-`issueAgentGrant()`, `updateAgentGrant()`, `rotateAgentGrantToken()`, `revokeAgentGrantById()`,
-`getGrantUsage()`, `registerTransportLane()` from `@odatano/core`.
-
-## Liveness and readiness probes
-
-`GET /odata/v4/cardano-indexer/getLiveness()` answers `200 { status: "alive", timestamp, uptime,
-version, network }` **without credentials** (`@requires: 'any'`) as long as the process runs — no
-backend or DB probe, no secrets. The Docker `HEALTHCHECK`, compose and upstream probes use it
-instead of the service document, so a wrong operator password no longer reads as "ODATANO down".
-
-`GET /odata/v4/cardano-indexer/getReadiness()` answers, also without credentials, whether this
-instance can serve requests: `200 { status: "ready", timestamp, context, database, hsm }`, or `503`
-with the same body and `status: "not_ready"` while the app context, the database or a configured
-HSM is missing (`hsm` is `null` without an HSM). Point a load balancer or an upstream gateway at it.
-
-The state of crawler, worker and backends stays authenticated: `getStatus()`, `GetWorkerStatus()`,
-`GetNetworkInformation`.
+The crawler, the wallet worker and agent grants are off until configured. The indexer and the worker also
+publish CAP events (`blockIndexed`, `jobConfirmed`), so a CAP application subscribes and does not poll. The
+[User Guide](docs/guides/USER_GUIDE.md) and the [Crawler Guide](docs/guides/CRAWLER_GUIDE.md) describe all of it.
 
 ## Requirements
 
-- **Node.js >= 22.5** and **@sap/cds 10** (peer dependency `^10`). CAP 9 hosts cannot load `@odatano/core@2`.
-- Upgrading a consumer from 1.x: run **`cds deploy`**. 2.0 adds six tables (`CardanoSyncState`,
-  `CardanoReorgLog`, `CardanoWorkerWallets`, `CardanoWalletJobs`, `CardanoAgentGrants`,
-  `CardanoAgentGrantUsage`) plus a `dedupKey` column; without the redeploy the new services answer
-  `no such table` while the old ones keep working.
+- Node.js 22.5 or later and `@sap/cds` 10 (peer dependency). A CAP 9 project cannot load `@odatano/core@2`.
+- Coming from 1.x: [Upgrading to 2.0](docs/guides/UPGRADE_2.0.md).
 
 ## Documentation
 
-| Guide | Description |
-|-------|-------------|
-| [Quick Start](docs/QUICK_START.md) | Get running in 5 minutes |
-| [User Guide](docs/guides/USER_GUIDE.md) | API usage, entities, and examples |
-| [Developer Guide](docs/guides/DEVELOPER_GUIDE.md) | Architecture and development |
-| [Transaction Workflow](docs/guides/TRANSACTION_WORKFLOW.md) | Build → Sign → Submit flow |
-| [Security Guide](docs/guides/SECURITY_GUIDE.md) | Authentication, signing security, HSM |
-| [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Container deployment |
+| Guide | Content |
+|---|---|
+| [Quick Start](docs/QUICK_START.md) | Plugin, standalone and local node setup, first requests |
+| [User Guide](docs/guides/USER_GUIDE.md) | Entities, actions, signing, wallet worker, agent grants, events |
+| [Crawler Guide](docs/guides/CRAWLER_GUIDE.md) | Chain crawler, snapshots, backfills, UTxO set |
+| [Transaction Workflow](docs/guides/TRANSACTION_WORKFLOW.md) | Build, sign and submit, Plutus contracts |
+| [Backend Configuration](docs/guides/BACKEND_CONFIGURATION.md) | Koios, Ogmios, Blockfrost, another ODATANO |
+| [Security Guide](docs/guides/SECURITY_GUIDE.md) | Authentication, roles, signing, HSM |
+| [Docker Deployment](docs/guides/DOCKER_DEPLOYMENT.md) | Image, compose stack, database, health probes |
+| [Production Deployment](docs/guides/PRODUCTION_DEPLOYMENT.md) | SAP BTP Cloud Foundry and HANA |
+| [SAP Integration Examples](docs/guides/SAP_INTEGRATION_EXAMPLES.md) | Calling the services from S/4HANA and ABAP |
 | [Upgrading to 2.0](docs/guides/UPGRADE_2.0.md) | What a 1.x deployment and its clients change |
+| [Developer Guide](docs/guides/DEVELOPER_GUIDE.md) | Architecture and development |
+| [Changelog](CHANGELOG.md) | Every change by version |
 
 ## License
 
-Apache License 2.0 - see [LICENSE](LICENSE)
+Apache License 2.0, see [LICENSE](LICENSE).
 
 ## Support
 

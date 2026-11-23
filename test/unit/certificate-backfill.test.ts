@@ -17,10 +17,9 @@ vi.mock('@sap/cds', () => {
         one: {
           // one object that is both the builder and the query the fake db receives
           from: (entity: string) => {
-            const q: any = { _op: 'SELECT.one', entity };
+            const q: any = { _op: 'SELECT.one', entity, SELECT: {} };
             q.columns = () => q;
             q.where = (where: unknown) => { q._where = where; return q; };
-            q.orderBy = () => q;
             return q;
           },
         },
@@ -33,6 +32,7 @@ vi.mock('@sap/cds', () => {
       },
       UPSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'UPSERT', entity, entries }) }) },
       DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, _where: where }) }) },
+      UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', entity, _set: set, _where: where }) }) }) },
     },
   };
   return { default: cdsMock, ...cdsMock };
@@ -57,6 +57,7 @@ function fakeIndex(known: Record<string, number>) {
   dbRun.mockImplementation(async (q: Q) => {
     // every delete finds two stored rows
     if (q._op === 'DELETE') return 2;
+    if (q._op === 'UPDATE') return 1;
     if (q.entity !== 'odatano.cardano.Blocks') return undefined;
     const w = q._where;
     if (q._op === 'SELECT.one') {
@@ -89,6 +90,13 @@ function fakeClient(script: Array<[ReturnType<typeof block>, any[]]>, afterScrip
 beforeEach(() => { dbRun.mockReset(); });
 
 describe('intersectionBefore', () => {
+  it('reads the newest block in the order a plain index on slot serves', async () => {
+    fakeIndex({ a: 300 });
+    await intersectionBefore(fakeDb as never, 500);
+    const q = dbRun.mock.calls.map(([c]) => c as any).find((c) => c._op === 'SELECT.one' && c.entity === 'odatano.cardano.Blocks');
+    expect(q?.SELECT.orderBy).toEqual([{ ref: ['slot'], sort: 'desc', nulls: 'first' }]);
+  });
+
   it('takes the newest indexed block below the slot, else the crawl start point', async () => {
     fakeIndex({ a: 100, b: 200, c: 300 });
     expect(await intersectionBefore(fakeDb as any, 250)).toEqual({ hash: 'b', slot: 200, height: undefined });
@@ -132,6 +140,19 @@ describe('backfillCertificates', () => {
     expect(upserts[1].entries).toEqual([{ tx_hash: 't1', stakeAddress: 'stake1', lovelace: '5' }]);
     expect(upserts[2].entries).toEqual([{ tx_hash: 't4', certIndex: 1, kind: 'vote_delegation', stakeAddress: 'stake1', poolId: null, drepId: 'drep1', deposit: null, epoch: null }]);
     expect(progress).toEqual([1, 1, 2]);   // one report per batch; the skipped block's batch reports the unchanged count
+  });
+
+  it('marks a stored block whose transactions all report their withdrawals, as the crawl does', async () => {
+    fakeIndex({ start: 100, b1: 110, b2: 120 });
+    const silent = { hash: 't9', certificates: [] } as any;   // a transaction that reports no withdrawals
+    const { client } = fakeClient([
+      [block(110, 'b1'), [tx('t1'), tx('t2')]],
+      [block(120, 'b2'), [tx('t3'), silent]],
+    ]);
+    await backfillCertificates({ client, fromSlot: 110, toSlot: 120, batchBlocks: 5 });
+
+    const updates = dbRun.mock.calls.map(([q]) => q).filter((q) => q._op === 'UPDATE');
+    expect(updates).toEqual([{ _op: 'UPDATE', entity: 'odatano.cardano.Blocks', _set: { withdrawalsReported: true }, _where: { hash: { in: ['b1'] } } }]);
   });
 
   it('removes the stored rows of a transaction whose script phase failed', async () => {

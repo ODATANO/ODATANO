@@ -39,6 +39,26 @@ const expectThat = (holds, what) => { if (!holds) { console.error('FAIL ' + what
 })().catch((err) => { console.error(err); process.exit(1); });
 `;
 
+// Runs in the consumer project with NODE_ENV=production. CAP merges a plugin's package.json `cds`
+// section and its .cdsrc.json into the host's configuration, so the plugin may contribute no database,
+// login, build or typer setting.
+const CONSUMER_CONFIG = `
+const cds = require('@sap/cds');
+const fs = require('fs');
+const path = require('path');
+const expectThat = (holds, what) => { if (!holds) { console.error('FAIL ' + what); process.exit(1); } };
+const plugin = path.dirname(require.resolve('@odatano/core/package.json'));
+const shipped = require('@odatano/core/package.json').cds ?? {};
+expectThat(Object.keys(shipped).every((k) => k === 'log'), 'the package.json cds section holds only log, has: ' + Object.keys(shipped));
+expectThat(!['.cdsrc.json', '.cdsrc.js', '.cdsrc.yaml'].some((f) => fs.existsSync(path.join(plugin, f))), 'the package ships no .cdsrc file');
+const { db, auth } = cds.env.requires;
+expectThat(db.kind === 'sqlite' && db.credentials?.url === ':memory:', 'the database is the one the host configured: ' + JSON.stringify(db));
+expectThat(db.pool?.max === 1, 'the SQLite pool keeps one connection: ' + JSON.stringify(db.pool));
+expectThat(auth.kind === 'mocked', 'the login is the one the host configured: ' + JSON.stringify(auth.kind));
+expectThat(!(cds.env.build?.tasks ?? []).length, 'no build tasks from the plugin');
+expectThat(cds.env.typer?.ieee754compatible !== true, 'no typer setting from the plugin');
+`;
+
 const fail = (msg) => {
   console.error(`FAIL ${msg}`);
   process.exitCode = 1;
@@ -94,6 +114,10 @@ try {
   writeFileSync(join(consumer, 'transaction-contract.cjs'), TRANSACTION_CONTRACT);
   run('node transaction-contract.cjs', consumer);
   ok('the installed CAP keeps a transaction idle until its first statement');
+
+  writeFileSync(join(consumer, 'consumer-config.cjs'), CONSUMER_CONFIG);
+  execSync('node consumer-config.cjs', { cwd: consumer, stdio: ['ignore', 'inherit', 'inherit'], env: { ...process.env, NODE_ENV: 'production' } });
+  ok('in production the host keeps its own database, login and build configuration');
 
   const port = await freePort();
   const url = `http://127.0.0.1:${port}`;

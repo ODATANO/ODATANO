@@ -5,8 +5,6 @@
  */
 
 import cds from '@sap/cds';
-import { Cbor, CborArray, CborMap } from '@harmoniclabs/cbor';
-import { toHex } from '@harmoniclabs/uint8array-utils';
 // Native require: shares the module graph with the booted CAP server.
 const { createTestContext, resetAppContext } =
   require('../../srv/server') as typeof import('../../srv/server');
@@ -21,8 +19,9 @@ process.env.SKIP_AUTO_INIT = 'true';
 process.env.BACKENDS = 'koios';
 
 const WALLET = 'itest-wallet';
-const TX_HASH = 'a'.repeat(64);
 import { TEST_FIXTURES } from './test-fixtures';
+// the hash of the fixture body, which the worker checks its own signature and the send rules against
+const TX_HASH = TEST_FIXTURES.txBodyHash;
 // A real preview address: with the server booted the validators are network-aware,
 // so a placeholder would fail request preparation before the job ever builds.
 const REQUEST = JSON.stringify({
@@ -30,8 +29,9 @@ const REQUEST = JSON.stringify({
   lovelaceAmount: '2000000',
 });
 
-/** The signer is real, so the build stub must return parseable CBOR: [ body(map), witnesses(map) ]. */
-const MINIMAL_UNSIGNED_TX = toHex(Cbor.encode(new CborArray([new CborMap([]), new CborMap([])])));
+// The signer is real, so the build stub returns a real unsigned transaction: it carries an expiry
+// and inputs, and the worker verifies its own signature over this body before the send.
+const UNSIGNED_TX = TEST_FIXTURES.unsignedTxCbor;
 
 /** Build and submit are stubbed — this suite is about persistence, not chain I/O. */
 function stubDeps() {
@@ -44,7 +44,7 @@ function stubDeps() {
   };
   const indexer = {
     indexSimpleBuildResult: vi.fn(async () => ({
-      id: 'build-1', unsignedTxCbor: MINIMAL_UNSIGNED_TX, txBodyHash: 'e'.repeat(64), fee: '170000',
+      id: 'build-1', unsignedTxCbor: UNSIGNED_TX, txBodyHash: TX_HASH, fee: '170000',
     })),
     persistTransactionSubmission: vi.fn(async () => ({})),
   };

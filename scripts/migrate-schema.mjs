@@ -47,6 +47,11 @@ export function rebuiltTableSql(createSql, table, newName) {
     return retyped.replace(new RegExp(`^(\\s*CREATE TABLE\\s+)"?${table}"?`, 'i'), `$1${newName}`);
 }
 
+// What a SAP HANA user does instead: an HDI container takes no DDL from the runtime user.
+export const HANA_UPGRADE = 'SAP HANA: this script cannot migrate an HDI container. Deploy this version into a new HDI container '
+    + 'and point the application at it. The chain data is read again on demand; the records of your own transactions stay in the '
+    + 'old container. docs/guides/UPGRADE_2.0.md has the steps.';
+
 // Tables that moved from the transaction hash to Transactions.txSeq as their key.
 // `to` is the entity that holds the rows in the model of this version.
 const TX_SEQ_TABLES = [
@@ -69,6 +74,69 @@ export function copySql(spec, columns, target) {
 async function count(tx, table) {
     const [row] = await tx.run(`SELECT count(*) AS n FROM ${table}`);
     return Number(row.n);
+}
+
+/** Name of the unique constraint that holds one idempotency key per job. */
+const WALLET_JOBS_DEDUP = 'odatano_cardano_CardanoWalletJobs_dedup';
+
+/** An allow list as stored: a JSON array of names, anything else is empty. */
+function grantList(raw) {
+    try {
+        const list = JSON.parse(String(raw ?? '[]'));
+        return Array.isArray(list) ? list.filter(n => typeof n === 'string') : [];
+    } catch {
+        return [];
+    }
+}
+
+/** The grantable operations of a model, `Service.operation`, by their name without the service. */
+export function grantableByName(model) {
+    const definitions = Object.entries(model?.definitions ?? {});
+    const services = definitions.filter(([, def]) => def.kind === 'service').map(([name]) => name);
+    const byName = new Map();
+    const add = (service, operation, def) => {
+        if (def?.['@odatano.agent'] !== 'grant') return;
+        byName.set(operation, [...(byName.get(operation) ?? []), `${service}.${operation}`]);
+    };
+    for (const [name, def] of definitions) {
+        const service = services.find(s => name.startsWith(`${s}.`));
+        if (!service) continue;
+        if (def.kind === 'action' || def.kind === 'function') add(service, name.slice(service.length + 1), def);
+        for (const [bound, action] of Object.entries(def.actions ?? {})) add(service, bound, action);
+    }
+    return byName;
+}
+
+// A stored allow list with every name qualified. A name without a service allowed the operation of
+// that name in every service, so it becomes all of them; a name nothing declares any more is dropped.
+export function qualifiedGrantList(list, byName) {
+    const grantable = new Set([...byName.values()].flat());
+    const out = list.flatMap(name => (name.includes('.') ? (grantable.has(name) ? [name] : []) : (byName.get(name) ?? [])));
+    return [...new Set(out)];
+}
+
+/** Lower-cased columns of a unique constraint, in order; null when the table or the constraint is missing. */
+// Where one idempotency key is held by several jobs, every job but one releases it: a job still in
+// flight keeps it, else the newest. createdAt, then ID, break a tie the same way on every database.
+export function releaseSharedClaimsSql(table) {
+    const flight = (alias) => `CASE WHEN ${alias}.status IN ('submitting', 'submitted') THEN 1 ELSE 0 END`;
+    return `UPDATE ${table} SET dedupKey = ID WHERE dedupKey <> ID AND EXISTS (`
+        + `SELECT 1 FROM ${table} o WHERE o.dedupKey = ${table}.dedupKey AND o.ID <> ${table}.ID AND (`
+        + `${flight('o')} > ${flight(table)} OR (${flight('o')} = ${flight(table)} AND (`
+        + `o.createdAt > ${table}.createdAt OR (o.createdAt = ${table}.createdAt AND o.ID > ${table}.ID)))))`;
+}
+
+export async function uniqueColumns(db, table, constraint) {
+    if (db.kind === 'postgres') {
+        const rows = await db.run(`SELECT a.attname AS name FROM pg_constraint c JOIN pg_namespace n ON n.oid = c.connamespace
+            JOIN unnest(c.conkey) WITH ORDINALITY k(attnum, pos) ON true
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+            WHERE n.nspname = current_schema() AND c.conname = '${constraint.toLowerCase()}' ORDER BY k.pos`);
+        return rows.length ? rows.map(r => String(r.name).toLowerCase()) : null;
+    }
+    const [stored] = await db.run(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = '${table}'`);
+    const match = String(stored?.sql ?? '').match(new RegExp(`CONSTRAINT\\s+"?${constraint}"?\\s+UNIQUE\\s*\\(([^)]*)\\)`, 'i'));
+    return match ? match[1].split(',').map(c => c.trim().replace(/"/g, '').toLowerCase()) : null;
 }
 
 // The steps, oldest first. `due` says whether the database still needs the step (`pending` names the
@@ -113,7 +181,15 @@ export const STEPS = [
             delete definitions[E('TransactionInputAssets')];
             for (const spec of TX_SEQ_TABLES) definitions[E(spec.to)] = image[E(spec.to)];
             const transactions = definitions[E('Transactions')];
-            if (transactions?.elements) transactions.elements.txSeq = image[E('Transactions')].elements.txSeq;
+            const current = image[E('Transactions')].elements;
+            if (!transactions?.elements) return;
+            transactions.elements.txSeq = current.txSeq;
+            // the compositions into the rebuilt tables join on txSeq now; a stale join makes the
+            // deploy emit an empty statement for them
+            const rebuilt = new Set(TX_SEQ_TABLES.map(t => E(t.to)));
+            for (const [name, element] of Object.entries(current)) {
+                if (element.target && rebuilt.has(element.target)) transactions.elements[name] = element;
+            }
         },
     },
     {
@@ -191,6 +267,60 @@ export const STEPS = [
             delete definitions[E('TransactionInputs')]?.elements?.assets;
         },
     },
+    {
+        name: 'CardanoWalletJobs: one idempotency key per user across wallets and kinds',
+        async due(db) {
+            const columns = await uniqueColumns(db, T('CardanoWalletJobs'), WALLET_JOBS_DEDUP);
+            return columns !== null && columns.join(',') !== 'dedupkey';
+        },
+        async apply(tx) {
+            const table = T('CardanoWalletJobs');
+            await tx.run(releaseSharedClaimsSql(table));
+            if (tx.kind === 'postgres') {
+                await tx.run(`ALTER TABLE ${table} DROP CONSTRAINT ${WALLET_JOBS_DEDUP}`);
+                await tx.run(`ALTER TABLE ${table} ADD CONSTRAINT ${WALLET_JOBS_DEDUP} UNIQUE (dedupKey)`);
+                return;
+            }
+            // SQLite cannot change a table constraint: the table is rebuilt with the same rows
+            const rebuilt = `${table}_dedup_new`;
+            const rows = await count(tx, table);
+            const [stored] = await tx.run(`SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = '${table}'`);
+            const createSql = String(stored.sql).replace(/(CONSTRAINT\s+"?\w+_dedup"?\s+UNIQUE\s*)\([^)]*\)/i, '$1(dedupKey)');
+            if (createSql === stored.sql) throw new Error(`${table}: no constraint ${WALLET_JOBS_DEDUP} in its table definition`);
+            await tx.run(createSql.replace(new RegExp(`^(\\s*CREATE TABLE\\s+)"?${table}"?`, 'i'), `$1${rebuilt}`));
+            await tx.run(`INSERT INTO ${rebuilt} SELECT * FROM ${table}`);
+            const copied = await count(tx, rebuilt);
+            if (copied !== rows) throw new Error(`${table}: ${rows} rows, ${copied} copied`);
+            await tx.run(`DROP TABLE ${table}`);
+            await tx.run(`ALTER TABLE ${rebuilt} RENAME TO ${table}`);
+        },
+        model(definitions, image) {
+            const stored = definitions[E('CardanoWalletJobs')];
+            if (stored) stored['@assert.unique.dedup'] = image[E('CardanoWalletJobs')]['@assert.unique.dedup'];
+        },
+    },
+    {
+        name: 'CardanoAgentGrants: allow lists name Service.operation',
+        async due(db) {
+            if (!(await columnsOf(db, T('CardanoAgentGrants'))).has('allowedactions')) return false;
+            const rows = await db.run(`SELECT allowedActions AS actions FROM ${T('CardanoAgentGrants')}`);
+            const open = rows.filter(r => grantList(r.actions).some(name => !name.includes('.'))).length;
+            return open ? `${open} grants` : false;
+        },
+        async apply(tx, { model }) {
+            const byName = grantableByName(model);
+            const table = T('CardanoAgentGrants');
+            const update = tx.kind === 'postgres'
+                ? `UPDATE ${table} SET allowedActions = $1 WHERE ID = $2`
+                : `UPDATE ${table} SET allowedActions = ? WHERE ID = ?`;
+            for (const row of await tx.run(`SELECT ID AS id, allowedActions AS actions FROM ${table}`)) {
+                const list = grantList(row.actions);
+                if (!list.some(name => !name.includes('.'))) continue;
+                await tx.run(update, [JSON.stringify(qualifiedGrantList(list, byName)), row.id]);
+            }
+        },
+        model() {},
+    },
 ];
 
 /** Names of all views of the schema, the ones created last first. */
@@ -200,6 +330,17 @@ async function viewNames(db) {
             WHERE c.relkind = 'v' AND n.nspname = current_schema() ORDER BY c.oid DESC`)
         : await db.run(`SELECT name FROM sqlite_schema WHERE type = 'view' ORDER BY rowid DESC`);
     return rows.map(r => r.name);
+}
+
+/** Database names of the views the models define, lower-cased. */
+export function modelViewNames(...models) {
+    const names = new Set();
+    for (const model of models) {
+        for (const [name, def] of Object.entries(model?.definitions ?? {})) {
+            if (def.kind === 'entity' && isView(def)) names.add(name.replace(/\./g, '_').toLowerCase());
+        }
+    }
+    return names;
 }
 
 async function hasModelTable(db) {
@@ -220,24 +361,47 @@ async function modelOfThisVersion(db) {
         if (!found) throw new Error(`the model has no table ${T(name)}`);
         return found;
     };
-    return { image: cds.compile.to.sql.delta(model, options).afterImage, ddl };
+    return { model, options, image: cds.compile.to.sql.delta(model, options).afterImage, ddl };
 }
 
 const isView = (def) => Boolean(def.query || def.projection);
 
+/** PostgreSQL columns of a table with length, precision and scale, by lower-cased name. */
+async function columnSizes(db, table) {
+    const rows = await db.run(`SELECT column_name AS name, character_maximum_length AS length, numeric_precision AS precision, numeric_scale AS scale
+        FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table.toLowerCase()}'`);
+    return new Map(rows.map(r => [String(r.name).toLowerCase(), r]));
+}
+
+/** `element` with the length, precision and scale its PostgreSQL column has. */
+export function sizedAsStored(element, column) {
+    if (!column) return element;
+    const sized = { ...element };
+    if (element.type === 'cds.Decimal' && column.precision != null) {
+        sized.precision = Number(column.precision);
+        sized.scale = Number(column.scale ?? 0);
+    }
+    if (element.type === 'cds.String' && column.length != null) sized.length = Number(column.length);
+    return sized;
+}
+
 // The model of this version cut down to what the database holds: its tables and their columns,
-// no views. The schema deploy then adds exactly what is missing.
+// no views. On PostgreSQL the sizes are the stored ones, so the deploy widens what this version widened.
 export async function modelOfDatabase(db, image) {
     const definitions = {};
     for (const [name, def] of Object.entries(image.definitions)) {
         if (def.kind !== 'entity') { definitions[name] = def; continue; }
         if (isView(def)) continue;
-        const columns = await columnsOf(db, name.replace(/\./g, '_'));
+        const table = name.replace(/\./g, '_');
+        const columns = await columnsOf(db, table);
         if (!columns.size) continue;
-        const elements = Object.fromEntries(Object.entries(def.elements ?? {}).filter(([, element]) => {
+        const sizes = db.kind === 'postgres' ? await columnSizes(db, table) : new Map();
+        const elements = {};
+        for (const [elementName, element] of Object.entries(def.elements ?? {})) {
             const column = element['@cds.persistence.name'];
-            return column === undefined || columns.has(String(column).toLowerCase());
-        }));
+            if (column !== undefined && !columns.has(String(column).toLowerCase())) continue;
+            elements[elementName] = column === undefined ? element : sizedAsStored(element, sizes.get(String(column).toLowerCase()));
+        }
         definitions[name] = { ...def, elements };
     }
     return { ...image, definitions };
@@ -250,7 +414,30 @@ async function connected(db) {
             return await db.run('SELECT 1 AS x');
         } catch (err) {
             if (attempt === 15) throw err;
+            await new Promise(resolve => setTimeout(resolve, Math.min(500 * attempt, 5000)));
         }
+    }
+}
+
+// Statements of the deploy from `prior` to this version that render as nothing. @cap-js/postgres
+// names a statement by the hash of its text, so two empty ones collide and the deploy fails.
+// SQLite runs an empty statement as a no-op, so only PostgreSQL counts.
+export function emptyDeltaStatements(model, options, prior) {
+    if (options.kind !== 'postgres') return 0;
+    const { drops, createsAndAlters } = cds.compile.to.sql.delta(model, options, prior);
+    return [...drops, ...createsAndAlters].filter(sql => !String(sql).trim()).length;
+}
+
+/** Refuses a stored model the deploy cannot take, before the deploy changes anything. */
+export async function assertDeployable(db) {
+    if (db.kind !== 'postgres') return;
+    if (!(await hasModelTable(db))) return;
+    const prior = JSON.parse((await db.run('SELECT csn FROM cds_model'))[0].csn);
+    const { model, options } = await modelOfThisVersion(db);
+    const empty = emptyDeltaStatements(model, options, prior);
+    if (empty) {
+        throw new Error(`the deploy from the stored model (cds_model) would run ${empty} empty statements, which the database refuses. `
+            + 'The stored model holds a change the migration steps do not cover. Nothing was changed.');
     }
 }
 
@@ -268,7 +455,8 @@ async function dueSteps(db) {
 // returns the names of the steps it ran. A database without a stored model gets one here.
 // Whenever it changes something the views are gone afterwards; the deploy creates them.
 export async function migrateSchema(db, { dryRun = false, log = console.log } = {}) {
-    if (db.kind !== 'postgres' && db.kind !== 'sqlite') return [];
+    if (db.kind === 'hana') throw new Error(HANA_UPGRADE);
+    if (db.kind !== 'postgres' && db.kind !== 'sqlite') throw new Error(`unsupported database kind ${db.kind}: PostgreSQL and SQLite are migrated`);
     await connected(db);
 
     const due = await dueSteps(db);
@@ -288,18 +476,20 @@ export async function migrateSchema(db, { dryRun = false, log = console.log } = 
     const names = due.map(d => d.step.name);
     if (dryRun) { log('dry run: nothing changed'); return names; }
 
-    const { image, ddl } = await modelOfThisVersion(db);
-    const views = await viewNames(db);
+    const { model: current, options, image, ddl } = await modelOfThisVersion(db);
     await db.tx(async (tx) => {
         const started = Date.now();
         const done = (msg) => log(`[${Math.round((Date.now() - started) / 1000)}s] ${msg}`);
 
-        for (const name of views) await tx.run(`DROP VIEW IF EXISTS "${name}"${db.kind === 'postgres' ? ' CASCADE' : ''}`);
+        const model = stored ? JSON.parse((await tx.run('SELECT csn FROM cds_model'))[0].csn) : null;
+        // only views of the models: any other view stays, and one that depends on ours makes the drop fail
+        const ours = modelViewNames(model, image);
+        const views = (await viewNames(tx)).filter(name => ours.has(String(name).toLowerCase()));
+        for (const name of views) await tx.run(`DROP VIEW IF EXISTS "${name}"`);
         done(`${views.length} views dropped`);
 
-        const model = stored ? JSON.parse((await tx.run('SELECT csn FROM cds_model'))[0].csn) : null;
         for (const { step } of due) {
-            await step.apply(tx, { ddl, log: done });
+            await step.apply(tx, { ddl, log: done, model: current });
             if (model) step.model(model.definitions, image.definitions);
             done(step.name);
         }
@@ -309,9 +499,14 @@ export async function migrateSchema(db, { dryRun = false, log = console.log } = 
             for (const [name, def] of Object.entries(model.definitions)) {
                 if (isView(def)) delete model.definitions[name];
             }
+            const empty = emptyDeltaStatements(current, options, model);
+            if (empty) throw new Error(`after the steps the deploy would run ${empty} empty statements; nothing was changed`);
             await tx.run(db.kind === 'postgres' ? 'UPDATE cds_model SET csn = $1' : 'UPDATE cds_model SET csn = ?', [JSON.stringify(model)]);
         } else {
-            const csn = JSON.stringify(await modelOfDatabase(tx, image));
+            const adopted = await modelOfDatabase(tx, image);
+            const empty = emptyDeltaStatements(current, options, adopted);
+            if (empty) throw new Error(`for the stored model written from the tables the deploy would run ${empty} empty statements; nothing was changed`);
+            const csn = JSON.stringify(adopted);
             await tx.run(`CREATE TABLE cds_model (csn ${db.kind === 'postgres' ? 'TEXT' : 'CLOB'})`);
             await tx.run(db.kind === 'postgres' ? 'INSERT INTO cds_model VALUES ($1)' : 'INSERT INTO cds_model VALUES (?)', [csn]);
         }
@@ -322,7 +517,6 @@ export async function migrateSchema(db, { dryRun = false, log = console.log } = 
 
 async function main() {
     const db = await cds.connect.to('db');
-    if (db.kind !== 'postgres' && db.kind !== 'sqlite') throw new Error(`unsupported database kind ${db.kind}`);
     const dryRun = process.argv.includes('--dry-run');
     const ran = await migrateSchema(db, { dryRun });
     if (!ran.length) console.log('The schema needs no migration.');

@@ -1,15 +1,20 @@
 import type { Network } from '../blockchain/cardano-client';
+import { configuredNetworkName } from '../config';
 
 // Holds the active network so validators can read it without importing server.ts.
-// Null before bootstrap.
 let active: Network | null = null;
+
+const NETWORKS: readonly string[] = ['mainnet', 'preview', 'preprod'];
 
 /** Record the active network. Pass `null` to clear (shutdown/reset). */
 export function setActiveNetwork(n: Network | null): void {
   active = n;
 }
 
-/** The active network, or `null` if the app context has not been initialized. */
+// The network of the running app context, else the configured one. Before the context exists a
+// request is still checked against its network; the missing context then answers 503 by itself.
 export function getActiveNetwork(): Network | null {
-  return active;
+  if (active) return active;
+  const configured = configuredNetworkName();
+  return NETWORKS.includes(configured) ? configured as Network : null;
 }

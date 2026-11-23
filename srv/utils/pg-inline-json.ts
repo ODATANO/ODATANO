@@ -2,6 +2,7 @@
 // streams them through a temp table, which costs three round trips per write.
 // Streams a caller passes in keep the driver's path.
 import cds from '@sap/cds';
+import { configuredDbKind } from './db-kind';
 import { Readable } from 'stream';
 
 const logger = cds.log('PgInlineJson');
@@ -14,7 +15,6 @@ export function isInlineRowStream(v: unknown): v is Readable & { _raw: unknown[]
   return v instanceof Readable && Array.isArray((v as { _raw?: unknown })._raw);
 }
 
-const dbKind = (): string => String(((cds.env?.requires as Record<string, { kind?: string }> | undefined)?.db)?.kind ?? '');
 
 async function drain(stream: Readable): Promise<string> {
   const parts: Buffer[] = [];
@@ -28,7 +28,7 @@ export function installPostgresInlineJson(): boolean {
   try {
     PostgresService = require('@cap-js/postgres/lib/PostgresService');
   } catch (err) {
-    if (dbKind() === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, bulk writes keep the COPY buffer: ${String((err as Error)?.message ?? err)}`);
+    if (configuredDbKind() === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, bulk writes keep the COPY buffer: ${String((err as Error)?.message ?? err)}`);
     return false;
   }
   const proto = PostgresService?.prototype;
@@ -46,6 +46,6 @@ export function installPostgresInlineJson(): boolean {
     })();
   };
   proto[INSTALLED] = true;
-  if (dbKind() === 'postgres') logger.info('Bulk writes on Postgres: row lists sent inline, no COPY buffer');
+  if (configuredDbKind() === 'postgres') logger.info('Bulk writes on Postgres: row lists sent inline, no COPY buffer');
   return true;
 }

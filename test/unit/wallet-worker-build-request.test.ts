@@ -394,12 +394,18 @@ describe('preparePayoutRequest', () => {
 
   it('passes forced and protected inputs and the validity window on', () => {
     const ref = [{ txHash: TX_HASH, outputIndex: 1 }];
+    const end = String(Date.now() + 3_600_000);
     const result = payout([output('2000000')], {
-      forceInputsJson: JSON.stringify(ref), protectInputsJson: JSON.stringify(ref), validityEndMs: '1800000000000',
+      forceInputsJson: JSON.stringify(ref), protectInputsJson: JSON.stringify(ref), validityEndMs: end,
     });
     expect(result.forceInputs).toEqual(ref);
     expect(result.protectInputs).toEqual(ref);
-    expect(result.validityEndMs).toBe('1800000000000');
+    expect(result.validityEndMs).toBe(end);
+  });
+
+  it('refuses an expiry more than 24 hours ahead', () => {
+    expect(() => payout([output('2000000')], { validityEndMs: String(Date.now() + 25 * 3_600_000) }))
+      .toThrow(/at most 24 hours from now/);
   });
 
   it('rejects a job without recipients', () => {

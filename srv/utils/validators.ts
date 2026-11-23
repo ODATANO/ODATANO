@@ -1,10 +1,11 @@
 import { bech32 } from "bech32";
 import {BECH32_MAX_LENGTH,MAX_JSON_SIZE,MAX_DEPTH,PLUTUS_DATA_MAX_DEPTH,MAX_KEYS,MAX_ARRAY_LENGTH,MAX_STRING_LENGTH,MAX_EPOCH,POOL_ID_BYTES,DREP_ID_BYTES,TX_HASH_REGEX,HEX_64_REGEX,HEX_56_REGEX,ASSET_UNIT_REGEX,
-  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH
+  POOL_ID_REGEX, DREP_ID_REGEX, HRP, ED25519_KEY_HASH_REGEX, MAX_POSIX_MS_DIGITS, MAX_TX_CBOR_HEX_LENGTH, MAX_VALIDITY_MS
 } from "./const";
 
 // Leaf module, not `../server`: importing server would pull the whole server/indexer graph in here.
 import { getActiveNetwork } from "./network-context";
+import { decodeShelleyAddress } from "./mappers";
 /** Trimmed string, or null when not a string or empty after trim. */
 function safeTrimString(s: unknown): string | null {
   if (typeof s !== "string") return null;
@@ -154,12 +155,11 @@ export function isValidDrepId(drepRaw: unknown): drepRaw is string {
   return false;
 }
 
-/** Bech32 address with the HRP of the active network; false before the app context is ready. */
+/** Bech32 address with the HRP of the active network. */
 export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
   const addr = safeTrimString(addrRaw);
   if (!addr) return false;
 
-  // No network yet (app context not initialized): a clean 400 instead of a leaked init error
   const network = getActiveNetwork();
   if (!network) return false;
 
@@ -176,7 +176,7 @@ export function isValidBech32Address(addrRaw: unknown): addrRaw is string {
   return false;
 }
 
-/** Bech32 stake address with the HRP of the active network; false before the app context is ready. */
+/** Bech32 stake address with the HRP of the active network. */
 export function isValidBech32StakeAddress(stakeRaw: unknown): stakeRaw is string {
   const stake = safeTrimString(stakeRaw);
   if (!stake) return false;
@@ -216,21 +216,8 @@ export function isValidTxCborHex(cborRaw: unknown): cborRaw is string {
 // Payment credential hash of a Shelley address and whether it is a script credential.
 // Null for undecodable or stake addresses.
 export function extractPaymentCredential(address: string): { hash: string; isScript: boolean } | null {
-  try {
-    const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
-    const bytes = Buffer.from(bech32.fromWords(decoded.words));
-    // 1 header byte + 28-byte payment credential (+ optional 28-byte stake part)
-    if (bytes.length < 29) return null;
-    const addrType = bytes[0] >> 4;
-    // types 0-7 are payment addresses; 14/15 are stake addresses (no payment part)
-    if (addrType > 7) return null;
-    return {
-      hash: bytes.subarray(1, 29).toString('hex'),
-      isScript: (addrType & 0x1) === 1,
-    };
-  } catch {
-    return null;
-  }
+  const decoded = decodeShelleyAddress(address);
+  return decoded.paymentCredential ? { hash: decoded.paymentCredential, isScript: decoded.isScript } : null;
 }
 
 /** Validate an array of Ed25519 key hashes (56 hex chars each); throws on any invalid entry. */
@@ -339,19 +326,17 @@ export function validateTransactionInputs(
     }
   }
 
-  // 65536 hex chars = 32 KB binary
-  const MAX_CBOR_HEX_LENGTH = 65536;
   if (inputs.signedTxCbor && !isValidCbor(inputs.signedTxCbor)) {
     errors.push({
       type: 'invalid',
       field: 'signedTxCbor',
       message: 'Invalid signedTxCbor format'
     });
-  } else if (inputs.signedTxCbor && typeof inputs.signedTxCbor === 'string' && inputs.signedTxCbor.length > MAX_CBOR_HEX_LENGTH) {
+  } else if (inputs.signedTxCbor && typeof inputs.signedTxCbor === 'string' && inputs.signedTxCbor.length > MAX_TX_CBOR_HEX_LENGTH) {
     errors.push({
       type: 'invalid',
       field: 'signedTxCbor',
-      message: `signedTxCbor exceeds maximum size of ${MAX_CBOR_HEX_LENGTH} hex characters`
+      message: `signedTxCbor exceeds maximum size of ${MAX_TX_CBOR_HEX_LENGTH} hex characters`
     });
   }
 
@@ -464,6 +449,13 @@ export function validateTransactionInputs(
         message: 'validityEndMs must be greater than validityStartMs'
       });
     }
+  }
+  if (!validityEndErr && inputs.validityEndMs && Number(inputs.validityEndMs) > Date.now() + MAX_VALIDITY_MS) {
+    errors.push({
+      type: 'invalid',
+      field: 'validityEndMs',
+      message: `validityEndMs may be at most ${MAX_VALIDITY_MS / 3_600_000} hours from now`
+    });
   }
 
   return errors;

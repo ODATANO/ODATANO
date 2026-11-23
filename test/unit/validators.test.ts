@@ -1082,6 +1082,12 @@ describe('Validator Helper Methods and Type Guards', () => {
         expect(errors).toEqual([]);
       });
 
+      it('should reject a validityEndMs more than 24 hours from now', () => {
+        expect(validateTransactionInputs({ validityEndMs: String(Date.now() + 23 * 3_600_000) }, [])).toEqual([]);
+        const errors = validateTransactionInputs({ validityEndMs: String(Date.now() + 25 * 3_600_000) }, []);
+        expect(errors).toEqual([expect.objectContaining({ field: 'validityEndMs', message: expect.stringContaining('24 hours') })]);
+      });
+
       it('should reject non-numeric validityStartMs', () => {
         const errors = validateTransactionInputs({ validityStartMs: 'abc' }, []);
         expect(errors).toHaveLength(1);

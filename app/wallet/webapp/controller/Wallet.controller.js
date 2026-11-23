@@ -974,7 +974,8 @@ sap.ui.define([
                     switch (r.status) {
                         case "pending": aPending.push(r); break;
                         case "verified": aVerified.push(r); break;
-                        case "submitted": case "confirmed": case "expired": case "failed":
+                        // submitting and unresolved were sent: they belong with the sent requests
+                        case "submitting": case "submitted": case "confirmed": case "expired": case "failed": case "unresolved":
                             aSubmitted.push(r); break;
                     }
                 });

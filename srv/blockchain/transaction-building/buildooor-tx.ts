@@ -47,7 +47,7 @@ import {
 } from "@harmoniclabs/cardano-ledger-ts/dist/tx/metadata/TxMetadatum";
 import { DataI, dataFromCbor, dataToCbor, type Data } from "@harmoniclabs/plutus-data";
 import { CardanoClient } from "../cardano-client";
-import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS } from '../../utils/const'
+import { EXECUTION_UNIT_BUFFER, ABS_CPU_BUFFER, ABS_MEM_BUFFER, MIN_CHANGE_LOVELACE, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, GENESIS_INFOS_BY_NETWORK, DEFAULT_VALIDITY_START_OFFSET_MS, DEFAULT_VALIDITY_END_OFFSET_MS, MAX_VALIDITY_MS } from '../../utils/const'
 import { sizePlaceholderScript } from '../../utils/reference-script';
 
 /** Policy of a mint action: the script itself, or the UTxO that carries it as reference script. */
@@ -868,7 +868,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
 
   /** Build the standard TxBuildResult object */
   private _buildResult(
-    req: Pick<TxBuildRequest, 'senderAddress'>, ctx: TxBuildContext,
+    req: Pick<TxBuildRequest, 'senderAddress' | 'changeAddress'>, ctx: TxBuildContext,
     txDetails: ReturnType<BuildooorTxBuilder['_extractTxDetails']>,
     extra?: { scriptHash?: string; mintScriptHash?: string; forcedInputsUsed?: number; referenceInputsUsed?: number }
   ): TxBuildResult {
@@ -886,6 +886,7 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
       unsignedTxCbor: txDetails.unsignedTxCbor,
       txBodyHash: txDetails.txBodyHash,
       senderAddress: req.senderAddress,
+      changeAddress: req.changeAddress ?? req.senderAddress,
       network: this.cardanoClient.network,
       builderEngine: this.name,
       sizeBytes: txDetails.sizeBytes,
@@ -1471,10 +1472,10 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
     return ledgerScript(this._parsePlutusV3Script(hex, 'referenceScript'));
   }
 
-  // Uses `scriptRefCbor`, else a full-CBOR `scriptRef`. With hash and size only, a placeholder
-  // of that size stands in so the fee counts its bytes.
+  // Uses `scriptRefCbor`. With hash and size only, a placeholder of that size stands in so the
+  // fee counts its bytes.
   private _buildInputRefScript(utxo: OdatanoUtxo): Script | undefined {
-    const cbor = utxo.scriptRefCbor ?? (utxo.scriptRef && utxo.scriptRef.length > 56 ? utxo.scriptRef : undefined);
+    const cbor = utxo.scriptRefCbor ?? undefined;
     if (!cbor) {
       if (utxo.scriptRef && utxo.scriptRefSize) {
         logger.debug(`UTxO ${utxo.txHash}#${utxo.outputIndex} carries scriptRef hash and size only; fee counts ${utxo.scriptRefSize} bytes, local Plutus eval will not see the script`);
@@ -1559,22 +1560,28 @@ export class BuildooorTxBuilder implements CardanoTxBuilder {
   // UTxO Mapping & Configuration Helpers
   //---------------------------------------------------------------------------
 
-  // Script builds default to two minutes ago until one hour ahead.
-  // Plain transfers pass only explicit bounds through.
+  // Every build expires: without validityEndMs one hour ahead. Script builds also start two minutes
+  // ago; plain transfers set a start only when the caller asks for one. The expiry is what lets a
+  // submit that got no answer be called failed once the tip has passed it.
   private _resolveValiditySlots(req: Pick<TxBuildRequest, 'validityStartMs' | 'validityEndMs'>, mode: 'script' | 'passthrough'): { invalidBefore?: bigint; invalidAfter?: bigint } {
     const hasStart = req.validityStartMs !== undefined && req.validityStartMs !== null && req.validityStartMs !== '';
     const hasEnd = req.validityEndMs !== undefined && req.validityEndMs !== null && req.validityEndMs !== '';
+    const nowMs = Date.now();
+    // a start in the future moves the default expiry with it, so the range never inverts
+    const endMs = hasEnd
+      ? Number(req.validityEndMs)
+      : Math.max(nowMs, hasStart ? Number(req.validityStartMs) : nowMs) + DEFAULT_VALIDITY_END_OFFSET_MS;
+    if (endMs > nowMs + MAX_VALIDITY_MS) {
+      throw new TransactionValidationError(`The transaction would expire more than ${MAX_VALIDITY_MS / 3_600_000} hours from now; choose an earlier validityEndMs or validityStartMs`);
+    }
 
     if (mode === 'passthrough') {
-      const result: { invalidBefore?: bigint; invalidAfter?: bigint } = {};
+      const result: { invalidBefore?: bigint; invalidAfter?: bigint } = { invalidAfter: BigInt(this.txBuilder.posixToSlot(endMs)) };
       if (hasStart) result.invalidBefore = BigInt(this.txBuilder.posixToSlot(Number(req.validityStartMs)));
-      if (hasEnd) result.invalidAfter = BigInt(this.txBuilder.posixToSlot(Number(req.validityEndMs)));
       return result;
     }
 
-    const nowMs = Date.now();
     const startMs = hasStart ? Number(req.validityStartMs) : nowMs - DEFAULT_VALIDITY_START_OFFSET_MS;
-    const endMs = hasEnd ? Number(req.validityEndMs) : nowMs + DEFAULT_VALIDITY_END_OFFSET_MS;
 
     const startSlot = this.txBuilder.posixToSlot(startMs);
     const endSlot = this.txBuilder.posixToSlot(endMs);

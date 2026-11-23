@@ -1,8 +1,8 @@
 # Transaction Workflow Guide
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
-This guide covers building, signing, and submitting Cardano transactions via the ODATANO API.
+How to build, sign and submit a Cardano transaction through the ODATANO API.
 
 ---
 
@@ -22,14 +22,19 @@ This guide covers building, signing, and submitting Cardano transactions via the
 
 ## Overview
 
-ODATANO follows a **Build → Sign → Submit** workflow with complete private key isolation:
+A transaction takes three steps: build, sign, submit.
 
-![alt text](<../assets/architecture & flow diagramms/tx-flow-ad.png>)
+![Transaction flow](<../assets/architecture & flow diagramms/tx-flow-ad.png>)
 
-- Server **never** sees private keys
-- Signing is external (CLI, browser wallet, hardware wallet) or via HSM (key never leaves chip)
-- Full audit trail via TransactionBuilds, SigningRequests, TransactionSubmissions entities
-- Transaction builder: Buildooor (the sole builder; CSL was removed)
+- The server builds the unsigned transaction and submits the signed one.
+- Signing happens outside the server: with the Cardano CLI, a browser wallet or a hardware wallet. In this
+  flow the server holds no private key. With an HSM the server signs, and the key stays in the HSM.
+- Every build, signing request and submission is stored: `TransactionBuilds`, `SigningRequests`,
+  `TransactionSubmissions`.
+- Buildooor builds the transactions.
+
+Every request needs a login. The transaction service asks for the role `Transact`, the signing service
+for `Sign`. In development add `-u alice:` to a `curl` call.
 
 ---
 
@@ -47,18 +52,20 @@ ODATANO follows a **Build → Sign → Submit** workflow with complete private k
 }
 ```
 
-**Response** includes `unsignedTxCbor`, `txBodyHash`, `fee`, `inputs[]`, `outputs[]`, and a `buildId` for tracking.
+The server reads the protocol parameters and the sender's UTxOs, selects inputs, calculates the fee and
+adds the change output.
 
-The server fetches protocol parameters and UTxOs, selects inputs, calculates fees, creates change output, serializes to unsigned CBOR, and stores the build record.
+The answer carries `unsignedTxCbor`, `txBodyHash`, `fee` and the build `id`. Pass the `id` as `buildId` in
+the later steps. The selected inputs and the outputs are stored with the build.
 
 ### Step 2: Sign Transaction (External)
 
-**The server never performs this step.** Private keys remain under client control.
+The server does not take part in this step.
 
 #### Cardano CLI
 
 ```bash
-echo '{ "type": "Tx ConwayEra", "description": "", "cborHex": "84a50081..." }' > unsigned.tx
+echo '{ "type": "Unwitnessed Tx ConwayEra", "description": "", "cborHex": "84a50081..." }' > unsigned.tx
 
 cardano-cli conway transaction sign \
   --tx-body-file unsigned.tx \
@@ -66,8 +73,11 @@ cardano-cli conway transaction sign \
   --testnet-magic 2 \
   --out-file signed.tx
 
-cat signed.tx | jq -r '.cborHex'
+jq -r '.cborHex' signed.tx
 ```
+
+`--testnet-magic 2` is Preview, `--testnet-magic 1` is Preprod, `--mainnet` is mainnet. A signing request
+carries the commands for its transaction in `cardanoCliCommand`.
 
 #### Browser Wallet (CIP-30)
 
@@ -82,13 +92,11 @@ before it submits. `VerifySignature` and `SubmitVerifiedTransaction` accept it t
 
 #### Hardware Wallet (Ledger/Trezor)
 
-Via browser extension integration (same CIP-30 API as above).
+A hardware wallet signs through a browser wallet extension, with the same CIP-30 call.
 
 ### Step 3: Submit Signed Transaction
 
 **POST** `/odata/v4/cardano-transaction/SubmitTransaction`
-
-`signedTxCbor` is either the full signed transaction (cardano-cli, HSM) or the witness set from a CIP-30 wallet.
 
 ```json
 {
@@ -97,38 +105,38 @@ Via browser extension integration (same CIP-30 API as above).
 }
 ```
 
-**Response** includes `txHash`, `status`, `submittedAt`, and `submittedToBackend`. Submission goes to Ogmios (primary), then the configured providers (Koios, Blockfrost) as fallback.
+`signedTxCbor` is the full signed transaction (cardano-cli, HSM) or the witness set from a CIP-30 wallet.
+
+The answer is the `TransactionSubmissions` row with `txHash`, `status` and `submittedAt`. The transaction
+goes to Ogmios first, then to the configured providers (Koios, Blockfrost). A refusal by the node is final.
 
 ---
 
 ## Signing Methods
 
-| Method | Speed | Security | Key Location | Use Case |
-|--------|-------|----------|-------------|----------|
-| Cardano CLI | Medium | High | File system (`.skey`) | Backend automation |
-| Browser Wallet (CIP-30) | Fast | Very High | Browser extension | Web dApps, Fiori |
-| Hardware Wallet | Slow | Maximum | Dedicated device | High-value transactions |
-| HSM (PKCS#11) | Fast | Maximum | HSM chip | Enterprise automation |
+| Method | Key location | Typical use |
+|--------|--------------|-------------|
+| Cardano CLI | Key file (`.skey`) | Backend automation |
+| Browser wallet (CIP-30) | Browser extension | Web applications, Fiori |
+| Hardware wallet | Device | High-value transactions |
+| HSM (PKCS#11) | HSM | Server-side signing |
 
 ---
 
 ## HSM Signing
 
-When an HSM is configured, ODATANO supports automated server-side signing. The private key never leaves the HSM chip.
+With an HSM configured the server signs. The private key stays in the HSM.
 
-### Workflow Comparison
-
-**External (4 steps):** Build → CreateSigningRequest → Sign (client) → SubmitVerifiedTransaction
-
-**HSM (2 steps):** Build → SignAndSubmitWithHsm
+- **External:** build → `CreateSigningRequest` → sign → `SubmitVerifiedTransaction`
+- **HSM:** build → `SignAndSubmitWithHsm`
 
 ### HSM Actions
 
 | Action | Description |
 |--------|-------------|
-| `GetHsmStatus` | Check HSM connection, key info, derived Cardano address |
-| `SignWithHsm` | Sign a build (creates signing request + verification, no submit) |
-| `SignAndSubmitWithHsm` | Sign + submit in one atomic step |
+| `GetHsmStatus` | Connection, key and the Cardano address derived from the key |
+| `SignWithHsm` | Signs a build and stores the signing request. Does not submit |
+| `SignAndSubmitWithHsm` | Signs a build and submits it |
 
 ### Configuration
 
@@ -141,10 +149,16 @@ HSM_KEY_LABEL=cardano-signing-key
 HSM_REQUIRES_ROLE=HsmSigner   # REQUIRED: startup fails without it
 ```
 
-`HSM_REQUIRES_ROLE` is mandatory whenever `HSM_ENABLED=true` — the server throws a
-`ConfigError` at startup if it is missing. It names the role a caller must hold to use
-any HSM signing path: `SignWithHsm`, `SignAndSubmitWithHsm`, and `SubmitWalletJob` for an
-HSM-backed worker wallet. Callers without it get **403 `ODATANO_FORBIDDEN`**.
+`HSM_REQUIRES_ROLE` is required with `HSM_ENABLED=true`. Without it the service does not initialize and
+answers 503. It names the role a caller needs, on top of the role of the service, for `GetHsmStatus`,
+`SignWithHsm`, `SignAndSubmitWithHsm` and for `SubmitWalletJob` on an HSM wallet.
+
+- A caller without the role gets **403 `ODATANO_FORBIDDEN`**, with the message
+  `[ODATANO_FORBIDDEN] <Action>: …`.
+- Without a connected HSM, `SignWithHsm` and `SignAndSubmitWithHsm` answer **503
+  `ODATANO_HSM_NOT_CONFIGURED`**.
+- The HSM signs only a build whose change goes back to the HSM address. The build row, its stored change
+  outputs and the unsigned body are checked; any other build is a 400.
 
 ### Example
 
@@ -167,57 +181,105 @@ const submission = await POST('/odata/v4/cardano-sign/SignAndSubmitWithHsm', {
 // → { txHash: "abc123...", status: "submitted" }
 ```
 
-For HSM security details, supported hardware, and SoftHSM dev setup, see [Security Guide](SECURITY_GUIDE.md#hsm-pkcs11-integration).
+The [Security Guide](SECURITY_GUIDE.md#hsm-pkcs11-integration) has the settings and a
+check of the module.
 
 ---
 
 ## Transaction Types
 
 ### Simple ADA Transfer
-**Action:** `BuildSimpleAdaTransaction` — Transfer lovelace between addresses. Supports `outputDatumJson` or `outputDatumCbor` for sending to script addresses and `assetsJson` for including native tokens.
+
+`BuildSimpleAdaTransaction` sends lovelace from one address to another.
+
+- `assetsJson` adds native tokens.
+- `outputDatumJson` or `outputDatumCbor` puts an inline datum on the output. A script address needs one.
 
 ### Transaction with Metadata
-**Action:** `BuildTransactionWithMetadata` — ADA transfer with attached CIP-20 metadata (invoices, receipts, on-chain records).
+
+`BuildTransactionWithMetadata` is an ADA transfer with transaction metadata, for example a CIP-20 message
+for an invoice or a receipt.
 
 ### Multi-Asset Transfer
-**Action:** `BuildMultiAssetTransaction` — Transfer ADA + native tokens. Supports `outputDatumJson` or `outputDatumCbor` for script address outputs.
+
+`BuildMultiAssetTransaction` sends ADA and native tokens. `outputDatumJson` or `outputDatumCbor` puts an
+inline datum on the output.
 
 ### Token Minting
-**Action:** `BuildMintTransaction` — Create native tokens. Supports `scriptParamsJson` for parameterized validators, `inlineDatumJson` for datum on minted output, `mintRedeemerJson` for custom redeemers, `lockOnScript` to route output to script address, and `requiredSignersJson` for Plutus `extra_signatories`.
+
+`BuildMintTransaction` mints or burns native tokens.
+
+- `scriptParamsJson` applies parameters to a parameterized policy.
+- `mintRedeemerJson` sets the redeemer.
+- `inlineDatumJson` puts a datum on the output that receives the tokens.
+- `lockOnScript` together with `scriptParamsJson` sends that output to the script address.
+- `requiredSignersJson` fills the `extra_signatories` a Plutus script checks.
 
 ### Plutus Smart Contract Spending
-**Action:** `BuildPlutusSpendTransaction` — Spend UTxOs locked at Plutus script addresses. Supports `inlineDatumJson` for continuing output datum (state machines), `lockOnScript` to re-lock at script address, and `requiredSignersJson`.
+
+`BuildPlutusSpendTransaction` spends a UTxO at a Plutus script address.
+
+- `inlineDatumJson` puts a datum on the continuing output, as a state machine needs it.
+- `lockOnScript` together with `scriptParamsJson` sends the output back to the script address.
+- `requiredSignersJson` fills `extra_signatories`.
 
 **Plutus workflow:**
 ```
-1. Lock:  BuildMintTransaction (lockOnScript + inlineDatumJson) → Sign → Submit
-2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemer + lockOnScript) → Sign → Submit
+1. Lock:  BuildSimpleAdaTransaction (outputDatumJson, recipient = script address) → Sign → Submit
+          or BuildMintTransaction (lockOnScript + scriptParamsJson + inlineDatumJson) → Sign → Submit
+2. Spend: BuildPlutusSpendTransaction (validatorScript + redeemerJson + script UTxO) → Sign → Submit
 ```
 
 ### Several Script Inputs
-**Action:** `BuildPlutusTransaction` — Spend several script UTxOs in one transaction (for example a batcher filling
-orders against a state UTxO), each with its own redeemer. A script input carries its validator inline or points
-at a UTxO holding it as reference script. The outputs are built exactly in the given order with their datums,
-change comes after them. Every redeemer's execution units come back under `redeemers`.
 
-`withdrawalsJson` adds reward-account withdrawals: with a staking script (inline or by reference) the script runs
-under the Reward purpose, which is how withdraw-zero oracles and shared validators are consumed; without a script
-the stake key signs. The reward account must be registered on chain, otherwise the build is refused. The node
-confirms a registration only for a credential delegated to a pool or a DRep; for any other credential Blockfrost and Koios
-answer from the certificate history (the first that knows the account decides), and with Ogmios alone the build
-goes on and the node decides at submit;
-`certificatesJson` registers (or deregisters) the credential, in the same transaction if needed. A registration
-without a script is the witness-free legacy certificate, also for a script credential; with a script it is the
-Conway deposit certificate and the script runs under the Certifying purpose. The deposit is balanced by the builder.
+`BuildPlutusTransaction` spends several script UTxOs in one transaction, each with its own redeemer. An
+example is a batcher that fills orders against a state UTxO.
+
+- A script input carries its validator inline, or points at a UTxO that holds it as a reference script.
+- The outputs are built in the given order with their datums. The change comes after them.
+- The answer lists the execution units of every redeemer under `redeemers`.
+
+**Withdrawals (`withdrawalsJson`)**
+
+- With a staking script, inline or by reference, the script runs under the Reward purpose. Withdraw-zero
+  oracles and shared validators are consumed this way.
+- Without a script the stake key signs.
+- The reward account must be registered on chain, otherwise the build is refused.
+- The node confirms a registration only for a credential that is delegated to a pool or a DRep. For any
+  other credential Blockfrost and Koios answer from the certificate history; the first that knows the
+  account decides. With Ogmios alone the build goes on and the node decides at submit.
+
+**Certificates (`certificatesJson`)**
+
+- They register or deregister a stake credential, in the same transaction as a withdrawal if needed.
+- A registration without a script is the legacy certificate. It needs no witness, also for a script
+  credential.
+- A registration with a script is the Conway deposit certificate. The script runs under the Certifying
+  purpose.
+- The builder balances the deposit.
+
+**Inputs of another party (`forceInputsJson`)**
 
 `forceInputsJson` may name UTxOs of other key addresses, for a purchase that a third party funds in the same
-transaction. Each such address must have its payment key hash in `requiredSignersJson`, every unit its UTxOs bring
-must be spent by `outputsJson` (the sender's change never carries it), and it is never used as collateral. Each
-party adds its witness to the same `unsignedTxCbor`. `protectInputsJson` keeps named sender UTxOs out of coin
-selection and collateral on every build action.
+transaction.
+
+- Each such address needs its payment key hash in `requiredSignersJson`.
+- `outputsJson` must spend every unit these UTxOs bring. The sender's change never carries it.
+- Such a UTxO is never used as collateral.
+- Each party adds its witness to the same `unsignedTxCbor`.
+
+`protectInputsJson` keeps named sender UTxOs out of coin selection and collateral. `BuildSimpleAdaTransaction`,
+`BuildMintTransaction`, `BuildPlutusSpendTransaction` and `BuildPlutusTransaction` take it.
 
 ### Collateral Setup
-**Action:** `SetCollateral` — Creates a dedicated 5 ADA collateral UTxO for Plutus transactions. When the address already holds an ADA-only UTxO of >= 5 ADA without a reference script (the only kind the builders take as collateral) and at least one other UTxO to fund with, it returns **200** with `collateralAvailable: true` and builds nothing. Returns 400 if the address holds less than 6 ADA in total (5 ADA collateral + 1 ADA fee buffer).
+
+`SetCollateral` makes sure an address has a collateral UTxO for Plutus transactions.
+
+- The address has one when it holds an ADA-only UTxO of at least 5 ADA without a reference script, and one
+  more UTxO to fund with. The builder takes no other kind as collateral. The answer is then **200** with
+  `collateralAvailable: true`, and nothing is built.
+- Otherwise the action builds a transaction that sends 5 ADA to the address itself. Sign and submit it.
+- The answer is 400 when the address holds less than 6 ADA in total: 5 ADA collateral and 1 ADA for the fee.
 
 ---
 
@@ -235,6 +297,15 @@ selection and collateral on every build action.
 | outputDatumCbor | String | No | Inline datum as PlutusData CBOR hex, written byte for byte; excludes `outputDatumJson` |
 | ensureMinAda | Boolean | No | Raise `lovelaceAmount` to the output min-ADA instead of rejecting it |
 | assetsJson | String | No | Native assets: `[{"unit":"policyId+name","quantity":"amt"}]` |
+| forceInputsJson | String | No | `[{txHash, outputIndex}]` UTxOs that must be consumed |
+| protectInputsJson | String | No | `[{txHash, outputIndex}]` sender UTxOs that must never be spent |
+| lockOnScript | Boolean | No | Send the output to the script address of `validatorScript` instead of `recipientAddress` |
+| validatorScript | String | No | Plutus validator CBOR hex. Required with `lockOnScript`; only the address is derived from it |
+| scriptParamsJson | String | No | PlutusData parameters applied to `validatorScript` before the address is derived |
+| referenceScriptHex | String | No | Plutus V3 script CBOR hex to store on the output as reference script. Raises the output min-ADA |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms; the end defaults to now + 3 600 000 and may be at most 24 h ahead |
+
+Returns `scriptHash` and `scriptAddress` with `lockOnScript`.
 
 ### BuildTransactionWithMetadata
 
@@ -258,6 +329,8 @@ selection and collateral on every build action.
 | outputDatumJson | String | No | Inline datum for recipient output |
 | outputDatumCbor | String | No | Inline datum as PlutusData CBOR hex, written byte for byte; excludes `outputDatumJson` |
 | ensureMinAda | Boolean | No | Raise `lovelaceAmount` to the output min-ADA instead of rejecting it |
+| referenceScriptHex | String | No | Plutus V3 script CBOR hex to store on the output as reference script. Raises the output min-ADA |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms; the end defaults to now + 3 600 000 and may be at most 24 h ahead |
 
 ### BuildMintTransaction
 
@@ -266,22 +339,32 @@ selection and collateral on every build action.
 | senderAddress | bech32 | Yes | Sender (pays fees) |
 | recipientAddress | bech32 | Yes | Recipient (overridden when `lockOnScript=true`) |
 | lovelaceAmount | Integer | Yes | Lovelace with minted assets |
-| mintActionsJson | String | Yes | Mint actions: `[{"assetUnit":"policyId+name","quantity":"amt"}]` |
-| mintingPolicyScript | String | Yes | Minting policy CBOR hex |
+| mintActionsJson | String | Yes | Mint actions: `[{"assetUnit":"policyId+name","quantity":"amt"}]`. An action may carry its own `mintingPolicyScript` and `redeemerJson` |
+| mintingPolicyScript | String | Yes | Minting policy CBOR hex, for the actions without their own |
 | changeAddress | bech32 | No | Change address |
 | requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
 | scriptParamsJson | String | No | PlutusData params for parameterized validators |
 | inlineDatumJson | String | No | Inline datum on recipient output |
 | mintRedeemerJson | String | No | Minting redeemer (defaults to integer 0) |
-| lockOnScript | Boolean | No | Route output to derived script address |
+| lockOnScript | Boolean | No | Route output to derived script address; needs `scriptParamsJson` |
+| forceInputsJson | String | No | `[{txHash, outputIndex}]` UTxOs that must be consumed |
+| protectInputsJson | String | No | `[{txHash, outputIndex}]` sender UTxOs that must never be spent |
+| referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only reference inputs |
+| extraOutputsJson | String | No | Further outputs `[{address, lovelaceAmount, assets?, inlineDatumJson?, referenceScriptHex?}]`. With them the minted assets go where the entries put them and the first output stays ADA-only |
+| metadataJson | String | No | Transaction metadata (JSON), an object keyed by label |
+| referenceScriptHex | String | No | Plutus V3 script CBOR hex to store on the recipient output as reference script |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms; defaults to now − 120 000 and now + 3 600 000; the end may be at most 24 h ahead |
 
 Returns `scriptHash`, `fingerprint`, `scriptAddress` when applicable.
 
-`assetUnit` is either the full `policyId+assetName` hex — the 56-hex policyId prefix must
-match the minting policy's script hash, otherwise the request is rejected with 400 — or,
-when `scriptParamsJson` is set, a bare assetName of at most 28 bytes (56 hex) that is
-expanded with the applied script's policyId. Asset names longer than 28 bytes are
-length-indistinguishable from a full unit and must always be passed as a full unit.
+`assetUnit` takes one of two forms:
+
+- The full `policyId+assetName` hex. Its first 56 hex characters must be the script hash of the minting
+  policy, otherwise the request is rejected with 400.
+- With `scriptParamsJson`: a bare asset name of at most 28 bytes (56 hex). ODATANO puts the policy id of the
+  applied script in front.
+
+An asset name longer than 28 bytes cannot be told from a full unit by its length. Pass it as a full unit.
 
 ### BuildPlutusSpendTransaction
 
@@ -299,7 +382,16 @@ length-indistinguishable from a full unit and must always be passed as a full un
 | requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
 | scriptParamsJson | String | No | PlutusData params for parameterized validators |
 | inlineDatumJson | String | No | Inline datum on continuing output |
-| lockOnScript | Boolean | No | Re-lock at derived script address |
+| lockOnScript | Boolean | No | Re-lock at derived script address; needs `scriptParamsJson` |
+| forceInputsJson | String | No | `[{txHash, outputIndex}]` UTxOs that must be consumed |
+| protectInputsJson | String | No | `[{txHash, outputIndex}]` sender UTxOs that must never be spent |
+| extraOutputsJson | String | No | Further outputs `[{address, lovelaceAmount, assets?, inlineDatumJson?, referenceScriptHex?}]` after the recipient output |
+| mintActionsJson | String | No | Mint actions for a spend and a mint in one transaction. Needs `mintingPolicyScript` |
+| mintingPolicyScript | String | No | Minting policy CBOR hex. Required with `mintActionsJson` |
+| mintRedeemerJson | String | No | Minting redeemer (defaults to integer 0) |
+| referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only reference inputs |
+| referenceScriptHex | String | No | Plutus V3 script CBOR hex to store on the recipient output as reference script |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms; defaults to now − 120 000 and now + 3 600 000; the end may be at most 24 h ahead |
 
 Returns `scriptHash`, `scriptAddress` when applicable.
 
@@ -313,12 +405,12 @@ Returns `scriptHash`, `scriptAddress` when applicable.
 | changeAddress | bech32 | No | Change address (defaults to senderAddress) |
 | referenceInputsJson | String | No | `[{txHash, outputIndex}]` read-only inputs; reference-script UTxOs are added automatically |
 | forceInputsJson | String | No | UTxOs that must be consumed; another key address's UTxO needs its key hash in `requiredSignersJson` and its value spent by `outputsJson` |
-| protectInputsJson | String | No | Sender UTxOs that must never be spent (also on the other build actions) |
-| withdrawalsJson | String | No | 1..16 withdrawals: `{rewardAddress, lovelace, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
-| certificatesJson | String | No | 1..16 certificates: `{type: registerStake | deregisterStake, stakeAddress, deposit?, stakingScript? | referenceScript?, scriptParamsJson?, redeemerJson? | redeemerCbor?}` |
+| protectInputsJson | String | No | Sender UTxOs that must never be spent |
+| withdrawalsJson | String | No | 1..16 withdrawals: `{rewardAddress, lovelace, stakingScript? \| referenceScript?, scriptParamsJson?, redeemerJson? \| redeemerCbor?}` |
+| certificatesJson | String | No | 1..16 certificates: `{type: registerStake \| deregisterStake, stakeAddress, deposit?, stakingScript? \| referenceScript?, scriptParamsJson?, redeemerJson? \| redeemerCbor?}` |
 | requiredSignersJson | String | No | Ed25519 key hashes for `extra_signatories` |
-| mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript? | referenceScript?, redeemerJson?}]`, a policy per action; with `referenceScript` the `assetUnit` is policyId+assetName |
-| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms |
+| mintActionsJson | String | No | `[{assetUnit, quantity, mintingPolicyScript? \| referenceScript?, redeemerJson?}]`, a policy per action; with `referenceScript` the `assetUnit` is policyId+assetName |
+| validityStartMs / validityEndMs | String | No | Validity interval in Posix ms; defaults to now − 120 000 and now + 3 600 000; the end may be at most 24 h ahead |
 
 A `scriptInputsJson` entry:
 
@@ -328,12 +420,15 @@ A `scriptInputsJson` entry:
   "redeemerJson": "{\"constructor\":0,\"fields\":[]}", "datumJson": null }
 ```
 
-or with `"referenceScript": {"txHash": "…", "outputIndex": 0}` instead of `validatorScript`. `datumJson` is
-only for hash datums; inline datums are read from the UTxO. `redeemerCbor`, `datumCbor` and an output's
-`inlineDatumCbor` take PlutusData as CBOR hex instead of JSON and put those bytes into the transaction
-unchanged (no `__INPUT_IDX__` placeholders there). PlutusData JSON may nest up to 64 levels, every other
-JSON parameter up to 10; the size limit is 1 MB for both. Index placeholders in any redeemer or output datum
-(as the whole value of an `int` field):
+- `"referenceScript": {"txHash": "…", "outputIndex": 0}` replaces `validatorScript` when the validator sits
+  in a reference-script UTxO.
+- `datumJson` is for hash datums only. An inline datum is read from the UTxO.
+- `redeemerCbor`, `datumCbor` and an output's `inlineDatumCbor` take PlutusData as CBOR hex in place of
+  JSON. The bytes go into the transaction unchanged, so placeholders do not work there.
+- PlutusData JSON may nest up to 64 levels, every other JSON parameter up to 10. A parameter may be 1 MB long.
+
+**Index placeholders.** A redeemer or an output datum may name an index that is fixed only in the final
+transaction. The placeholder is the whole value of an `int` field:
 
 | Placeholder | Resolves to |
 |-------------|-------------|
@@ -341,30 +436,43 @@ JSON parameter up to 10; the size limit is 1 MB for both. Index placeholders in 
 | `__REF_IDX:<txHash>#<n>__` | index of the reference input in the sorted reference inputs, reference-script UTxOs included |
 | `__WDRL_IDX:<credential hash>__` | index of the withdrawal of that stake credential, script credentials first, then by hash |
 
-A placeholder naming a UTxO or credential the transaction does not carry is a 400. Buildooor numbers withdrawal
-redeemers by hash only, so a key-credential withdrawal that sorts before a scripted one by hash is refused with
-400. Reference-script bytes come from Ogmios
-or Koios; with Blockfrost alone a reference script cannot be used.
+- A placeholder that names a UTxO or a credential the transaction does not carry is a 400.
+- Buildooor numbers withdrawal redeemers by hash only. A key-credential withdrawal that sorts before a
+  scripted one by hash is therefore refused with 400.
+- Reference-script bytes come from Ogmios or Koios. With Blockfrost alone a reference script cannot be used.
 
-The response lists `redeemers` (`tag`, `index`, `mem`, `steps`); they are stored as `TransactionBuildRedeemers` (`tag`, `redeemerIndex`, `mem`, `steps`).
-400 errors name the cause: the output below min-ADA, the redeemer whose evaluation failed, a missing collateral
-(create one with `SetCollateral`), or a transaction above `maxTxSize`. A change output below min-ADA is reported as
-too little funding, not as an output to raise.
+**Answer and errors.** The answer lists `redeemers` (`tag`, `redeemerIndex`, `mem`, `steps`), as stored in
+`TransactionBuildRedeemers`. A 400 names the cause:
 
-Collateral is added only when a script runs. A build whose withdrawals and certificates all use key credentials
-carries none. When the other sender UTxOs cannot pay the outputs, the fee and the change, the collateral UTxO is
-also spent as an input; the ledger allows one UTxO as input and as collateral. For the same reason a UTxO named
-in `forceInputsJson` is the collateral when no other sender UTxO qualifies: it must belong to the sender, be
-ADA-only, carry no reference script and hold at least 5 ADA. A wallet with a single UTxO can then build a mint
-whose redeemer names that UTxO. This holds for `BuildMintTransaction` and `BuildPlutusSpendTransaction` as well.
+- an output below min-ADA
+- the redeemer whose evaluation failed
+- a missing collateral; create one with `SetCollateral`
+- a transaction above `maxTxSize`
 
-Sender UTxOs that carry a reference script stay out of coin selection as long as the other UTxOs cover the build.
-Only when those run short does the builder select from them too, and it does the same for a UTxO named in
-`forceInputsJson`. Spending such a UTxO costs the Conway reference-script fee (`minFeeRefScriptCostPerByte`,
-15 lovelace per byte on all networks, 1.2 times more for every 25 600 bytes in one transaction), counted over
-the scripts of all inputs and reference inputs. The builder prices it from the script bytes when the source
-delivers them (Ogmios, Koios) or from the stored script size (crawled UTxO set); a UTxO known by its script
-hash alone cannot be priced, which the log notes, and the node may then reject the transaction as underpaid.
+A change output below min-ADA is reported as too little funding, not as an output to raise.
+
+**Collateral.**
+
+- Collateral is added only when a script runs. A build whose withdrawals and certificates all use key
+  credentials carries none.
+- When the other sender UTxOs cannot pay the outputs, the fee and the change, the collateral UTxO is also
+  spent as an input. The ledger allows one UTxO as input and as collateral.
+- A UTxO named in `forceInputsJson` is the collateral when no other sender UTxO qualifies. It must belong
+  to the sender, be ADA-only, carry no reference script and hold at least 5 ADA. A wallet with a single UTxO
+  can then build a mint whose redeemer names that UTxO.
+- The same holds for `BuildMintTransaction` and `BuildPlutusSpendTransaction`.
+
+**Sender UTxOs with a reference script.**
+
+- They stay out of coin selection as long as the other UTxOs cover the build. Only when those run short
+  does the builder select from them. It also spends one that `forceInputsJson` names.
+- Spending such a UTxO costs the Conway reference-script fee (`minFeeRefScriptCostPerByte`): 15 lovelace
+  per byte on all networks, 1.2 times more for every 25 600 bytes in one transaction. The fee counts the
+  scripts of all inputs and reference inputs.
+- The builder prices it from the script bytes when the source delivers them (Ogmios, Koios), or from the
+  stored script size (crawled UTxO set).
+- A UTxO known by its script hash alone cannot be priced. The log notes it, and the node may reject the
+  transaction as underpaid.
 
 ### SetCollateral
 
@@ -372,23 +480,26 @@ hash alone cannot be priced, which the log notes, and the node may then reject t
 |-----------|------|----------|-------------|
 | address | bech32 | Yes | Address to set up collateral for |
 
-Returns 200 — either an unsigned build, or `collateralAvailable: true` when two or more UTxOs of >= 5 ADA already exist. Returns 400 on insufficient funds (< 6 ADA total).
+Returns 200 with an unsigned build, or with `collateralAvailable: true` when the address already holds an
+ADA-only UTxO of >= 5 ADA without a reference script and one more UTxO. Returns 400 when the address holds
+no UTxO or less than 6 ADA in total.
 
 ### SubmitTransaction
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | buildId | UUID | Yes | Build ID from a build action |
-| signedTxCbor | String | Yes | Fully signed transaction CBOR hex |
+| signedTxCbor | String | Yes | Signed transaction CBOR hex, or the witness set of a CIP-30 wallet |
 
 ### SubmitSignedTransaction
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | signedTxCbor | String | Yes | Fully signed transaction CBOR hex |
-| network | String | Yes | Target network |
+| network | String | No | `mainnet`, `preview` or `preprod`. A value that differs from the network of the server is a 400 |
 
-For externally built transactions (not via ODATANO actions).
+For a transaction that was not built by ODATANO. It must carry an expiry (TTL) at most 24 hours ahead;
+without one, or with a later one, the answer is 400 and nothing is sent.
 
 ---
 
@@ -396,11 +507,11 @@ For externally built transactions (not via ODATANO actions).
 
 | Error Code | HTTP | Cause | Resolution |
 |------------|------|-------|------------|
-| `ODATANO_INSUFFICIENT_FUNDS` | 400 | Sender doesn't have enough ADA | Top up address or reduce amount |
-| `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid amount, missing fields | Validate bech32 format, check required params |
-| `ODATANO_TX_VALIDATION_FAILED` | 400 | Wrong signing key or tampered CBOR | Verify correct `.skey`, re-build if modified |
-| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | All backends unreachable/timed out | Retry after 30s, check the status of the configured backends |
-| `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Transaction already on chain/mempool | Expected (idempotent), check explorer |
+| `ODATANO_INSUFFICIENT_FUNDS` | 400 | The sender does not hold enough ADA | Fund the address or lower the amount |
+| `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid amount, missing field | Check the bech32 format and the required parameters |
+| `ODATANO_TX_VALIDATION_FAILED` | 400 | Wrong signing key, changed CBOR, or a datum or redeemer that is not valid PlutusData | Check the key and the JSON; build again if the transaction was changed |
+| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | All backends unreachable or timed out | Retry later, check the configured backends |
+| `ODATANO_TX_ALREADY_SUBMITTED` | 409 | The transaction is already on chain or in the mempool | Nothing to do; a repeated submit ends here |
 | `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | The submit got no verdict from the node (timeout, outage, rate limit) | Do not build a replacement. Read the status until it leaves `submitting` / `pending` |
 
 ### What a failed submit means
@@ -410,36 +521,86 @@ A submit can end in three ways, and the stored status says which:
 | Outcome | Signing request | Submission | Response |
 |---------|-----------------|------------|----------|
 | The node accepted the transaction, or the chain already has it | `submitted` | `submitted` | 200, or 409 `ODATANO_TX_ALREADY_SUBMITTED` on `SubmitTransaction` / `SubmitSignedTransaction` |
-| The node refused the transaction and it is not on chain | `failed`, with `errorMessage` | `failed`, with `errorMessage` | the node's 4xx |
+| The transaction can never land | `failed`, with `errorMessage` | `failed`, with `errorMessage` | 400 with the reason |
+| It landed with failing scripts: only its collateral was spent | `failed` | `failed` | 400 with the reason |
 | No verdict | stays `submitting` | stays `pending` | 503 `ODATANO_SUBMIT_OUTCOME_UNKNOWN` |
+| It can no longer land, and nothing shows whether it did | `unresolved` | `unresolved` | 503 `ODATANO_SUBMIT_OUTCOME_UNKNOWN` |
 
-`failed` is therefore a statement about the chain: this transaction did not go out. Without a
-verdict the server keeps the signed transaction and resolves the record itself, at start and
-every 60 seconds. For 10 minutes after the submit it sends the same transaction again. After that
-it only reads the chain: on chain ends as `submitted`, not on chain as `failed`. Poll
-`GetSigningRequest`, or read the `TransactionSubmissions` row of the transaction hash, for the result.
+ODATANO sends only bytes that carry an expiry (TTL) at most 24 hours ahead, that have not expired and
+that are not marked to fail their scripts (`isValid` false). `SubmitTransaction`, `SubmitSignedTransaction`,
+`SubmitVerifiedTransaction` and `SignAndSubmitWithHsm` refuse other bytes with a 400. A transaction is valid
+only while the slot is below its TTL. Every transaction ODATANO builds expires one hour ahead unless
+`validityEndMs` says otherwise.
 
-With Ogmios as the only backend no transaction lookup exists, so there the node's answer to the
-repeated submit decides.
+`failed` is a statement about the chain: this transaction can never land. It takes one of two proofs:
+
+- The node refused it for a reason that holds for its bytes in any ledger state: missing or invalid
+  signatures, metadata, the wrong network, no inputs, minted ada. Ogmios refusals are judged by their
+  JSON-RPC code, Blockfrost and Koios refusals by the ledger failure they name.
+- Its expiry has passed by the rollback horizon (3k/f slots: 36 hours on mainnet and preprod, 7.2 hours
+  on preview) and one of its inputs is still unspent. A landed transaction spends all its inputs. The node
+  answers this; an indexer counts only after 3600 more slots.
+
+Every other refusal (spent inputs, fees, the validity interval, the value of the inputs) and every lookup
+that finds nothing is no verdict. A transaction is on chain once the crawled chain inside its coverage,
+a backend lookup or one of its own outputs shows it. A crawled row with only its collateral spent, or an
+unspent collateral return, means it landed with failing scripts.
+
+Past the horizon with every input spent and nothing showing whether by this transaction, the record is
+`unresolved`. The server stops reading it, and an Admin decides it with `ResolveSigningRequest` or
+`ResolveSubmission` (outcome `confirmed` or `failed`, an optional `txHash` check and a note kept in
+`resolution`). `failed` is refused with 409 `ODATANO_OUTCOME_STILL_OPEN` while the bytes have not expired
+and every input of them is unspent; one spent input already rules a landing out. A second resolve of the same record answers 409
+`ODATANO_RESOLVED_CONCURRENTLY`.
+
+A record stored by an earlier version may hold bytes without an expiry. Such bytes can land as long as
+every input is unspent, so the server never decides them by time: after 24 hours plus the horizon it reads
+them once an hour and logs the inputs that would end them. Spending one of those inputs ends such a
+transaction: once some inputs are spent and others not past the horizon, it never lands and the record
+fails.
+
+Without a verdict the server keeps the signed transaction and resolves the record itself, at start and
+every 60 seconds:
+
+- For 10 minutes after the submit it sends the same transaction again, never past its expiry.
+- After that it reads the chain until one of the proofs above holds or the transaction is found.
+
+`recheckFailedSubmits` (Admin, on `CardanoIndexerService`) reads every `failed` submission, signing request
+and wallet job failed as `TX_DROPPED` or `SUBMIT_REJECTED` again under these rules. One whose transaction is
+on chain with passing scripts goes back to `submitted`, with a `resolution` note; a job then confirms by
+depth. A found transaction whose script validity no source reports stays failed. Earlier versions marked
+some landed transactions `failed`.
+
+For the result, poll `GetSigningRequest` or read the `TransactionSubmissions` row of the transaction hash.
 
 ---
 
 ## Troubleshooting
 
 ### "All backends failed: Failed to acquire requested point"
-Ogmios node not fully synchronized. Check: `curl http://localhost:1337/health` — wait until `networkSynchronization > 0.99`.
+
+The Ogmios node is not fully synchronized. Check `curl http://localhost:1337/health` and wait until
+`networkSynchronization` is above 0.99.
 
 ### "Insufficient funds" but wallet has balance
-UTxOs not yet confirmed or spent in a pending transaction. Transactions submitted through this
-instance are tracked: their inputs are not offered again and their change to the sender is, until a
-crawled block holds them (at most 10 minutes). Transactions submitted elsewhere are not known until
-they are on chain; wait 1-2 minutes for confirmations.
+
+The UTxOs are not confirmed yet, or a pending transaction spends them.
+
+- Transactions submitted through this instance are tracked. Their inputs are not offered again and their
+  change to the sender is, until a crawled block holds them, at most 10 minutes.
+- Transactions submitted elsewhere are unknown until they are on chain. Wait one or two minutes.
 
 ### "Invalid signature" after signing
-Wrong signing key or unsigned TX was modified. Verify key matches sender address, check `--testnet-magic` matches network. Re-build if needed.
+
+The signing key is wrong, or the unsigned transaction was changed. Check that the key belongs to the sender
+address and that `--testnet-magic` matches the network. Build again if needed.
 
 ### "No ADA-only UTxO available for collateral"
-Plutus transactions require collateral. Use `SetCollateral` to create a dedicated 5 ADA UTxO, or ensure the sender already has an ADA-only UTxO of >= 5 ADA without a reference script plus another UTxO — that is the condition under which `SetCollateral` reports `collateralAvailable: true`, the same rule the builders apply. A sender UTxO named in `forceInputsJson` also serves as collateral when it is ADA-only, has no reference script and holds at least 5 ADA.
+
+A Plutus transaction needs collateral: an ADA-only UTxO of at least 5 ADA without a reference script, plus
+another UTxO to fund with. `SetCollateral` creates one, or reports `collateralAvailable: true` when the
+address has it. A sender UTxO named in `forceInputsJson` also serves as collateral when it is ADA-only, has
+no reference script and holds at least 5 ADA.
 
 ---
 
@@ -464,6 +625,4 @@ Plutus transactions require collateral. Use `SetCollateral` to create a dedicate
 - [Ogmios Documentation](https://ogmios.dev/)
 - [Cardano CLI Reference](https://github.com/IntersectMBO/cardano-cli)
 - [Buildooor TX Library](https://github.com/HarmonicLabs/buildooor)
-- [Security Guide](SECURITY_GUIDE.md) — Signing security, HSM details, signature verification
-
----
+- [Security Guide](SECURITY_GUIDE.md): signing security, HSM details, signature verification

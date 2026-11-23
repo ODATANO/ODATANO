@@ -56,6 +56,24 @@ describe('CircuitBreakerManager', () => {
       expect(cb.getState('koios')).toBe('closed');
       expect(cb.shouldAttempt('koios')).toBe(true);
     });
+
+    it('a verdict (404, 400) does not wipe the count of real failures', () => {
+      cb.recordFailure('koios');
+      cb.recordFailure('koios');
+      cb.recordVerdict('koios');
+      cb.recordFailure('koios');
+      expect(cb.getState('koios')).toBe('open');
+    });
+
+    it('a verdict releases a half-open probe and counts toward closing', async () => {
+      for (let i = 0; i < 3; i++) cb.recordFailure('koios');
+      await new Promise(r => setTimeout(r, 1100));
+      expect(cb.shouldAttempt('koios')).toBe(true);
+      expect(cb.shouldAttempt('koios')).toBe(true);
+      cb.recordVerdict('koios');
+      cb.recordVerdict('koios');
+      expect(cb.getState('koios')).toBe('closed');
+    });
   });
 
   // ==========================================================================

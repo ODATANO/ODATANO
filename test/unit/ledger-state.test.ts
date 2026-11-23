@@ -22,8 +22,16 @@ const matches = (r: Row, where: Where): boolean => {
   return Object.entries(where).every(([k, v]) => {
     if (v === null) return r[k] == null;
     if (v && typeof v === 'object' && 'in' in (v as Row)) return ((v as Row).in as unknown[]).map(String).includes(String(r[k]));
+    if (v && typeof v === 'object' && '<=' in (v as Row)) return r[k] != null && Number(r[k]) <= Number((v as Row)['<=']);
     return String(r[k]) === String(v);
   });
+};
+/** `max(column) as slot` over the matching rows, the one aggregate the undo reads. */
+const aggregate = (found: Row[], columns: unknown[] | undefined): Row[] | undefined => {
+  const max = (columns ?? []).map(String).map(c => /^max\((\w+)\) as (\w+)$/.exec(c)).find(Boolean);
+  if (!max) return undefined;
+  const values = found.map(r => r[max[1]]).filter(v => v != null).map(Number);
+  return [{ [max[2]]: values.length ? Math.max(...values) : null }];
 };
 
 const fakeTx = {
@@ -43,7 +51,12 @@ const fakeTx = {
         const found = table(e).filter(r => matches(r, q.where as Where)).map(r => ({ ...r }));
         return typeof q.limit === 'number' ? found.slice(0, q.limit) : found;
       }
-      case 'SELECT.one': { const r = table(e).find(r => matches(r, q.where as Where)); return r ? { ...r } : undefined; }
+      case 'SELECT.one': {
+        const found = table(e).filter(r => matches(r, q.where as Where));
+        const agg = aggregate(found, q.columns as unknown[] | undefined);
+        if (agg) return agg[0];
+        return found[0] ? { ...found[0] } : undefined;
+      }
       case 'DELETE': { const t = table(e); const keep = t.filter(r => !matches(r, q.where as Where)); const n = t.length - keep.length; tables.set(e, keep); return n; }
       case 'UPDATE': { let n = 0; for (const r of table(e)) if (matches(r, q.where as Where)) { Object.assign(r, q.set); n++; } return n; }
       default: return undefined;
@@ -60,7 +73,12 @@ vi.mock('@sap/cds', () => {
       DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }), _op: 'DELETE', entity }) },
       UPDATE: { entity: (entity: string) => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', entity, set, where }) }) }) },
       SELECT: {
-        one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
+        one: {
+          from: (entity: string) => ({
+            where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }),
+            columns: (...columns: unknown[]) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where, columns }) }),
+          }),
+        },
         from: (entity: string) => ({
           where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
           columns: () => ({
@@ -83,12 +101,14 @@ vi.mock('#cds-models/odatano/cardano', () => ({
 
 import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
 import type { BlockData, Transaction } from '../../srv/utils/types';
+import { computeCip14Fingerprint } from '../../srv/utils/mappers';
 
 // base address (preview) + its reward account; a second base address on the SAME stake key
 const ADDR_A = 'addr_test1qqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxdvaqvlg96unszfywdfrjwq0m8zp0m7wjza0n2pfeep5h7qw62gd8';
 const STAKE_A = 'stake_test1uzkwsx05zawfcpyj8x53e8q8an3qhal8fpwhe4q5uus6tlq5k9vsh';
 const ADDR_E = 'addr_test1vqetxfc069tpemq25f954mrg2rxsr9jgvqe78hvyn9zuxxgntxrh0'; // enterprise, no stake
-const UNIT = `${'p'.repeat(56)}746f6b656e`;
+const POLICY = 'c'.repeat(56);
+const UNIT = `${POLICY}746f6b656e`;
 // payment key hash of ADDR_A and ADDR_E
 const PAYMENT = '32b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319';
 
@@ -119,7 +139,7 @@ describe('buildLedgerUtxoRows', () => {
   it('derives stake address, type and script flag from the address itself', () => {
     const { row, assets } = buildLedgerUtxoRows(out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }]), 100);
     expect(row).toMatchObject({ txHash: T1, outputIndex: 0, address: ADDR_A, stakeAddress: STAKE_A, addressType: 'base', isScript: false, lovelace: '5000000', createdSlot: 100, spentTxHash: null, hasAssets: true, utxo_paymentCredential: PAYMENT });
-    expect(assets).toEqual([{ utxo_txHash: T1, utxo_outputIndex: 0, unit: UNIT, asset_quantity: '3', asset_policyId: 'p'.repeat(56), asset_assetNameHex: '746f6b656e', asset_assetName: 'token' }]);
+    expect(assets).toEqual([{ utxo_txHash: T1, utxo_outputIndex: 0, unit: UNIT, asset_quantity: '3', asset_policyId: POLICY, asset_assetNameHex: '746f6b656e', asset_assetName: 'token', asset_fingerprint: computeCip14Fingerprint(POLICY, '746f6b656e') }]);
     expect(buildLedgerUtxoRows(out(T1, 1, ADDR_E, '1'), null).row).toMatchObject({ stakeAddress: null, addressType: 'enterprise', createdSlot: null, hasAssets: false, utxo_paymentCredential: PAYMENT });
   });
 });
@@ -227,29 +247,82 @@ describe('readLedgerOutputs (shared lookup)', () => {
 });
 
 describe('undoLedgerForTransactions (reorg)', () => {
-  it('drops what the rolled-back txs created, reopens what they spent, and recounts', async () => {
+  it('drops what the rolled-back txs created, reopens what they spent, and takes their sums back', async () => {
     await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }])] })]);
     const before = { a: { ...addr(ADDR_A)! }, acc: { ...account(STAKE_A)! }, assets: rows('LedgerAddressAssets').map(r => ({ ...r })) };
     await applyBlockToLedger(fakeTx as never, block(110), [
       tx(T2, { inputs: [inp(T1, 0)], outputs: [out(T2, 0, ADDR_E, '4800000', [{ unit: UNIT, quantity: '3' }])] }),
     ]);
 
-    const touched = await undoLedgerForTransactions(fakeTx as never, [T2]);
+    const touched = await undoLedgerForTransactions(fakeTx as never, [T2], 100);
 
     expect(touched.sort()).toEqual([ADDR_A, ADDR_E].sort());
     expect(rows('LedgerUTxOs').find(u => u.txHash === T2)).toBeUndefined();
     expect(rows('LedgerUTxOAssets').find(u => u.utxo_txHash === T2)).toBeUndefined();
     expect(rows('LedgerUTxOs').find(u => u.txHash === T1)).toMatchObject({ spentTxHash: null, spentSlot: null });
-    expect(addr(ADDR_A)).toMatchObject({ totalLovelace: before.a.totalLovelace, utxoCount: before.a.utxoCount, stakeAddress: STAKE_A });
-    expect(addr(ADDR_E)).toMatchObject({ totalLovelace: '0', utxoCount: 0 });
+    expect(addr(ADDR_A)).toMatchObject({ totalLovelace: before.a.totalLovelace, utxoCount: before.a.utxoCount, stakeAddress: STAKE_A, lastActiveSlot: 100 });
+    // ADDR_E first appeared in the rolled-back block, so it is gone
+    expect(addr(ADDR_E)).toBeUndefined();
     expect(rows('LedgerAddressAssets').filter(r => r.address_address === ADDR_A)).toEqual([expect.objectContaining({ unit: UNIT, asset_quantity: '3' })]);
     expect(rows('LedgerAddressAssets').filter(r => r.address_address === ADDR_E)).toHaveLength(0);
     expect(account(STAKE_A)).toMatchObject({ controlledAmount: before.acc.controlledAmount, utxoCount: before.acc.utxoCount });
   });
 
   it('is a no-op for an empty set', async () => {
-    expect(await undoLedgerForTransactions(fakeTx as never, [])).toEqual([]);
+    expect(await undoLedgerForTransactions(fakeTx as never, [], 0)).toEqual([]);
     expect(fakeTx.run).not.toHaveBeenCalled();
+  });
+
+  it('gives the same sums as a recount, and reads no address beyond the touched rows', async () => {
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [
+      out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }]), out(T1, 1, ADDR_A, '1000000'), out(T1, 2, ADDR_E, '700'),
+    ] })]);
+    // the rolled-back blocks: one spends an old output, the next spends an output of the first
+    await applyBlockToLedger(fakeTx as never, block(110), [
+      tx(T2, { inputs: [inp(T1, 0)], outputs: [out(T2, 0, ADDR_A, '4000000', [{ unit: UNIT, quantity: '1' }]), out(T2, 1, ADDR_E, '900000', [{ unit: UNIT, quantity: '2' }])] }),
+    ]);
+    await applyBlockToLedger(fakeTx as never, block(120), [
+      tx(T3, { inputs: [inp(T2, 0), inp(T1, 1)], outputs: [out(T3, 0, ADDR_E, '4900000', [{ unit: UNIT, quantity: '1' }])] }),
+    ]);
+    fakeTx.run.mockClear();
+
+    await undoLedgerForTransactions(fakeTx as never, [T2, T3], 100);
+
+    // no read of all open rows of an address (that is the recount)
+    const openReads = fakeTx.run.mock.calls.filter(([q]) => q._op === 'SELECT.many' && q.entity === 'LedgerUTxOs'
+      && (q.where as Row | undefined)?.address !== undefined);
+    expect(openReads).toHaveLength(0);
+    const undone = { a: { ...addr(ADDR_A)! }, e: { ...addr(ADDR_E)! }, acc: { ...account(STAKE_A)! }, assets: rows('LedgerAddressAssets').map(r => ({ ...r })) };
+
+    await recountLedgerAddresses(fakeTx as never, [ADDR_A, ADDR_E]);
+    expect(undone.a).toMatchObject({ totalLovelace: addr(ADDR_A)!.totalLovelace, utxoCount: addr(ADDR_A)!.utxoCount, lastActiveSlot: 100 });
+    expect(undone.e).toMatchObject({ totalLovelace: addr(ADDR_E)!.totalLovelace, utxoCount: addr(ADDR_E)!.utxoCount });
+    expect(undone.acc).toMatchObject({ controlledAmount: account(STAKE_A)!.controlledAmount, utxoCount: account(STAKE_A)!.utxoCount });
+    expect(undone.a).toMatchObject({ totalLovelace: '6000000', utxoCount: 2 });
+    expect(undone.assets.map(r => [r.address_address, r.asset_quantity]).sort()).toEqual([[ADDR_A, '3']]);
+  });
+
+  // More than one chunk of 500: the creator of an output and its spender land in different chunks.
+  it.each([['spender first', true], ['creator first', false]])('matches a recount when creator and spender sit in different chunks (%s)', async (_label, spenderFirst) => {
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000', [{ unit: UNIT, quantity: '3' }]), out(T1, 1, ADDR_A, '1000000')] })]);
+    await applyBlockToLedger(fakeTx as never, block(110), [
+      tx(T2, { inputs: [inp(T1, 0)], outputs: [out(T2, 0, ADDR_A, '4000000', [{ unit: UNIT, quantity: '3' }])] }),
+    ]);
+    const fillers = Array.from({ length: 600 }, (_, i) => i.toString(16).padStart(4, '0').padEnd(64, 'c'));
+    await applyBlockToLedger(fakeTx as never, block(115), fillers.map((h, i) => tx(h, { index: i, outputs: [out(h, 0, ADDR_A, '1')] })));
+    await applyBlockToLedger(fakeTx as never, block(120), [
+      tx(T3, { inputs: [inp(T2, 0)], outputs: [out(T3, 0, ADDR_A, '3900000', [{ unit: UNIT, quantity: '3' }])] }),
+    ]);
+
+    const order = spenderFirst ? [T3, ...fillers, T2] : [T2, ...fillers, T3];
+    await undoLedgerForTransactions(fakeTx as never, order, 100);
+    const undone = { a: { ...addr(ADDR_A)! }, acc: { ...account(STAKE_A)! }, assets: rows('LedgerAddressAssets').map(r => ({ ...r })) };
+
+    await recountLedgerAddresses(fakeTx as never, [ADDR_A]);
+    expect(undone.a).toMatchObject({ totalLovelace: '6000000', utxoCount: 2 });
+    expect(undone.a).toMatchObject({ totalLovelace: addr(ADDR_A)!.totalLovelace, utxoCount: addr(ADDR_A)!.utxoCount });
+    expect(undone.acc).toMatchObject({ controlledAmount: account(STAKE_A)!.controlledAmount, utxoCount: account(STAKE_A)!.utxoCount });
+    expect(undone.assets.map(r => [r.address_address, r.asset_quantity])).toEqual([[ADDR_A, '3']]);
   });
 });
 

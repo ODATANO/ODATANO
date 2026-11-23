@@ -213,11 +213,11 @@ describe('backfillAssetDecimals', () => {
     seedTrail();
     // ordered by unit: REF < FT < RFT < PLAIN (labels 000643b0 < 0014df10 < 001bc280 < 4f...)
     tables.set('Assets', [
-      { unit: PLAIN, initialMintTxHash: null, decimals: null },
-      { unit: FT, initialMintTxHash: null, decimals: null },
-      { unit: FT, initialMintTxHash: MINT, decimals: 0 },
-      { unit: RFT, initialMintTxHash: null, decimals: null },
-      { unit: REF, initialMintTxHash: null, decimals: null },
+      { unit: PLAIN, validFrom: '2026-01-01', initialMintTxHash: null, decimals: null },
+      { unit: FT, validFrom: '2026-01-01', initialMintTxHash: null, decimals: null },
+      { unit: FT, validFrom: '2026-01-02', initialMintTxHash: MINT, decimals: 0 },
+      { unit: RFT, validFrom: '2026-01-01', initialMintTxHash: null, decimals: null },
+      { unit: REF, validFrom: '2026-01-01', initialMintTxHash: null, decimals: null },
     ]);
     const seen: unknown[] = [];
 
@@ -226,10 +226,10 @@ describe('backfillAssetDecimals', () => {
     expect(r).toEqual({ scanned: 5, candidates: 2, filled: 2 });
     expect(table('Assets').map((x) => [x.unit, x.decimals])).toEqual([[PLAIN, null], [FT, 8], [FT, 8], [RFT, 8], [REF, null]]);
     expect(seen.at(-1)).toEqual(r);
-    // page queries carry the unit cursor only, never a column predicate
+    // page queries carry the key cursor only, never a column predicate
     const pages = fakeTx.run.mock.calls.map(([q]) => q as Query).filter((q) => q._op === 'SELECT' && q.entity === 'Assets');
     expect(pages.length).toBeGreaterThan(1);
-    for (const q of pages) expect(Object.keys(q._where ?? {}).every((k) => k === 'unit')).toBe(true);
+    for (const q of pages) expect(Object.keys(q._where ?? {}).every((k) => k === 'unit' || k === 'validFrom')).toBe(true);
   });
 
   it("uses the token's own mint from an enriched slice when the reference mint is not in AssetHistory", async () => {

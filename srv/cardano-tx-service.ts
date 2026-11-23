@@ -1,22 +1,26 @@
 import cds, { Request } from '@sap/cds';
-import { bech32 } from 'bech32';
 import { handleRequest } from './utils/backend-request-handler';
 import { rejectInvalid, throwIfValidationErrors, rejectMissing, NotFoundError } from './utils/errors';
-import { validateTransactionInputs, isValidBech32Address, validateJsonWithLimits, validatePlutusJson, isAssetUnit } from './utils/validators';
+import { checkResolvedTxHash, refuseFailedWhileItCanLand, resolutionNote, resolvedConcurrently } from './utils/resolution';
+import { validateTransactionInputs, isValidBech32Address, validatePlutusJson } from './utils/validators';
 import { getTxHashFromCbor, getLovelace, isCollateralCandidate, applyScriptParameters } from './utils/tx-build-helper';
-import { Script } from '@harmoniclabs/cardano-ledger-ts';
-import { computeCip14Fingerprint, scriptHashToEnterpriseAddress, mapError } from './utils/mappers';
+import { computeCip14Fingerprint, scriptHashToEnterpriseAddress, mapError, decodeShelleyAddress } from './utils/mappers';
 import { getCardanoIndexer, getCardanoClient } from './server';
 import type { Network } from './blockchain/cardano-client';
 import { toSignedTransaction } from './utils/signing-helper';
 import { detachedTx, readOutside } from './utils/tx-utils';
 import { pageOf } from './utils/paging';
 import { submitRecorded } from './blockchain/signing/submission-finalizer';
+import { sendProblem } from './blockchain/signing/landing-proof';
 import { SubmitTransaction } from '#cds-models/CardanoTransactionService';
-import { POLICY_ID_HEX_LENGTH, MIN_FULL_ASSET_UNIT_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE, BECH32_MAX_LENGTH } from './utils/const';
+import { POLICY_ID_HEX_LENGTH, COLLATERAL_LOVELACE, FEE_BUFFER_LOVELACE } from './utils/const';
 import { answerNumbersAsText } from './utils/result-numbers';
-import type { JSONValue, MintAction, TxBuildPlutusSpendRequest, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseMintActionPolicyFields, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates, parsePlutusCbor } from './utils/tx-request-parsers';
+import type { JSONValue, TxBuildPlutusRequest, ScriptInput, WithdrawalInput, CertificateInput } from './utils/types';
+import { parseUtxoRefArray, parseRequiredSigners, parseScriptInputs, parseOutputList, parsePolicyMintActions, parseWithdrawals, parseCertificates } from './utils/tx-request-parsers';
+import {
+  prepareMetadataRequest, prepareMintRequest, prepareMultiAssetRequest, preparePlutusSpendRequest, prepareSimpleAdaRequest,
+  scriptHashOf, type BuildRequestError, type Prepared, type PreparedBuild,
+} from './utils/build-request';
 
 const { SELECT, UPDATE } = cds.ql;
 
@@ -24,6 +28,27 @@ const { SELECT, UPDATE } = cds.ql;
 const SUBMISSION_CONFIRMATION_DEPTH = 3;
 
 const logger = cds.log('CardanoTxService');
+
+/** The network, read only where a script address is derived. */
+const networkOf = (): Network => getCardanoClient().network;
+
+/** Answers a request the shared preparation refused: a missing field, or the reason and its field. */
+function refuse(req: Request, action: string, refusal: BuildRequestError): never {
+  if (refusal.missing && refusal.field) return rejectMissing(req, action, refusal.field);
+  return rejectInvalid(req, action, refusal.error, refusal.field);
+}
+
+/** The prepared request, or the answer: a refusal, or what a server that is not ready says. */
+function prepareOrAnswer<T>(req: Request, action: string, prepare: () => Prepared<T>): PreparedBuild<T> {
+  let result: Prepared<T>;
+  try {
+    result = prepare();
+  } catch (err: unknown) {
+    return mapError(req, err, action);
+  }
+  if ('error' in result) return refuse(req, action, result);
+  return result;
+}
 
 
 /** CardanoTransactionService handlers: transaction building, submission and script helpers. */
@@ -33,190 +58,49 @@ module.exports = (srv: cds.Service) => {
 
   const {
     TransactionBuilds,
+    TransactionBuildRedeemers,
     TransactionSubmissions,
     AddressTransactionBuilds
   } = require('#cds-models/CardanoTransactionService');
 
   // BuildSimpleAdaTransaction: ADA (optionally with assets / datum) to one recipient or a script.
   srv.on('BuildSimpleAdaTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, outputDatumJson, assetsJson, forceInputsJson, validatorScript, scriptParamsJson, lockOnScript, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
-
-    const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, referenceScriptHex, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'lovelaceAmount']
-    );
-    throwIfValidationErrors(req, 'BuildSimpleAdaTransaction', errors);
-    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
-      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'Invalid changeAddress format', 'changeAddress');
-    }
-
-    const cleanData = { ...req.data };
-
-    const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
-    if (forceInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', forceInputsResult.error, 'forceInputsJson');
-    cleanData.forceInputs = forceInputsResult.parsed;
-    delete cleanData.forceInputsJson;
-    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
-    if (protectInputsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', protectInputsResult.error, 'protectInputsJson');
-    cleanData.protectInputs = protectInputsResult.parsed;
-    delete cleanData.protectInputsJson;
-    if (outputDatumJson) {
-      const jsonResult = validatePlutusJson(outputDatumJson, 'outputDatumJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'outputDatumJson');
-      cleanData.outputDatum = jsonResult.parsed;
-      delete cleanData.outputDatumJson;
-    }
-    delete cleanData.outputDatumCbor;
-    if (req.data.outputDatumCbor != null) {
-      if (outputDatumJson) return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'outputDatumJson and outputDatumCbor exclude each other; pass one', 'outputDatumCbor');
-      const cbor = parsePlutusCbor(req.data.outputDatumCbor, 'outputDatumCbor');
-      if (cbor.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', cbor.error, 'outputDatumCbor');
-      cleanData.outputDatumCbor = cbor.hex;
-    }
-
-    // Native assets to lock at a script address
-    const assetsResult = parseAssetsArray(assetsJson, 'assetsJson');
-    if (assetsResult.error) return rejectInvalid(req, 'BuildSimpleAdaTransaction', assetsResult.error, 'assetsJson');
-    if (assetsResult.parsed) {
-      cleanData.assets = assetsResult.parsed;
-      delete cleanData.assetsJson;
-    }
-
-    // Parameters for a parameterized validator
-    let scriptParams: JSONValue[] | undefined;
-    if (scriptParamsJson) {
-      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildSimpleAdaTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as JSONValue[];
-      if (!Array.isArray(scriptParams)) {
-        return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
-      }
-    }
-
-    if (lockOnScript && !validatorScript) {
-      return rejectInvalid(req, 'BuildSimpleAdaTransaction', 'lockOnScript requires validatorScript to derive the script address', 'validatorScript');
-    }
-
-    // lockOnScript: derive script hash + address and override the recipient before the build.
-    let derivedScriptHash: string | undefined;
-    let derivedScriptAddress: string | undefined;
-    if (lockOnScript && validatorScript) {
-      try {
-        const finalScript = scriptParams && scriptParams.length > 0
-          ? applyScriptParameters(validatorScript, scriptParams)
-          : validatorScript;
-        derivedScriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
-        derivedScriptAddress = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return rejectInvalid(req, 'BuildSimpleAdaTransaction', `Failed to derive script address: ${errMsg}`, 'validatorScript');
-      }
-      cleanData.recipientAddress = derivedScriptAddress;
-    }
-
-    delete cleanData.validatorScript;
-    delete cleanData.scriptParamsJson;
-    delete cleanData.lockOnScript;
-
-    if (referenceScriptHex) {
-      cleanData.referenceScript = referenceScriptHex;
-    }
-    delete cleanData.referenceScriptHex;
+    const action = 'BuildSimpleAdaTransaction';
+    const { request, scriptHash, scriptAddress } = prepareOrAnswer(req, action, () => prepareSimpleAdaRequest(req.data, networkOf));
 
     return handleRequest(req, async (db) => {
-      logger.debug({ senderAddress, recipientAddress: cleanData.recipientAddress, lovelaceAmount, hasDatum: !!outputDatumJson, hasAssets: !!assetsJson, lockOnScript: !!lockOnScript }, 'Building simple ADA transaction');
+      logger.debug({ senderAddress: request.senderAddress, recipientAddress: request.recipientAddress, lockOnScript: !!scriptAddress }, 'Building simple ADA transaction');
+      const buildResult = await getCardanoIndexer().indexSimpleBuildResult(db, request);
 
-      const buildResult = await getCardanoIndexer().indexSimpleBuildResult(db, cleanData);
-
-      // Persist the derived script address + hash on the build record
-      if (lockOnScript && derivedScriptHash && derivedScriptAddress && buildResult.id) {
-        buildResult.scriptHash = derivedScriptHash;
-        buildResult.scriptAddress = derivedScriptAddress;
-        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
-        await db.run(
-          UPDATE.entity(TransactionBuilds)
-            .set({ scriptHash: derivedScriptHash, scriptAddress: derivedScriptAddress })
-            .where({ id: buildResult.id })
-        );
+      // the derived script address and hash go on the build record
+      if (scriptHash && scriptAddress && buildResult.id) {
+        buildResult.scriptHash = scriptHash;
+        buildResult.scriptAddress = scriptAddress;
+        await db.run(UPDATE.entity(TransactionBuilds).set({ scriptHash, scriptAddress }).where({ id: buildResult.id }));
       }
-
       return buildResult;
     });
   });
+
   // BuildTransactionWithMetadata: ADA transfer with auxiliary metadata.
   srv.on('BuildTransactionWithMetadata', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, metadataJson } = req.data;
-
-    const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, metadataJson },
-      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']
-    );
-    throwIfValidationErrors(req, 'BuildTransactionWithMetadata', errors);
-    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
-      return rejectInvalid(req, 'BuildTransactionWithMetadata', 'Invalid changeAddress format', 'changeAddress');
-    }
-
-    // Already validated as JSON above
-    const parsedMetadata = JSON.parse(metadataJson);
+    const prepared = prepareMetadataRequest(req.data);
+    if ('error' in prepared) return refuse(req, 'BuildTransactionWithMetadata', prepared);
 
     return handleRequest(req, async (db) => {
-      logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, metadataKeyCount: Object.keys(parsedMetadata).length },
-        'Building transaction with metadata'
-      );
-
-      return await getCardanoIndexer().indexMetadataBuildResult(db, { ...req.data, metadataJson: parsedMetadata });
+      logger.debug({ senderAddress: prepared.request.senderAddress, recipientAddress: prepared.request.recipientAddress }, 'Building transaction with metadata');
+      return getCardanoIndexer().indexMetadataBuildResult(db, prepared.request);
     });
   });
 
   // BuildMultiAssetTransaction: ADA plus native assets to one recipient.
   srv.on('BuildMultiAssetTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, assetsJson, outputDatumJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
-
-    const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, assetsJson, referenceScriptHex, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']
-    );
-    throwIfValidationErrors(req, 'BuildMultiAssetTransaction', errors);
-    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
-      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'Invalid changeAddress format', 'changeAddress');
-    }
-
-    const assetsResult = parseAssetsArray(assetsJson, 'assetsJson');
-    if (assetsResult.error) return rejectInvalid(req, 'BuildMultiAssetTransaction', assetsResult.error, 'assetsJson');
-    const parsedAssets = assetsResult.parsed;
-    if (!parsedAssets || parsedAssets.length === 0) {
-      return rejectInvalid(req, 'BuildMultiAssetTransaction', 'assetsJson must contain at least one asset', 'assetsJson');
-    }
-
-    const cleanData = { ...req.data };
-    delete cleanData.assetsJson;
-
-    if (outputDatumJson) {
-      const jsonResult = validatePlutusJson(outputDatumJson, 'outputDatumJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMultiAssetTransaction', jsonResult.error!, 'outputDatumJson');
-      cleanData.outputDatum = jsonResult.parsed;
-      delete cleanData.outputDatumJson;
-    }
-    delete cleanData.outputDatumCbor;
-    if (req.data.outputDatumCbor != null) {
-      if (outputDatumJson) return rejectInvalid(req, 'BuildMultiAssetTransaction', 'outputDatumJson and outputDatumCbor exclude each other; pass one', 'outputDatumCbor');
-      const cbor = parsePlutusCbor(req.data.outputDatumCbor, 'outputDatumCbor');
-      if (cbor.error) return rejectInvalid(req, 'BuildMultiAssetTransaction', cbor.error, 'outputDatumCbor');
-      cleanData.outputDatumCbor = cbor.hex;
-    }
-
-    if (referenceScriptHex) {
-      cleanData.referenceScript = referenceScriptHex;
-    }
-    delete cleanData.referenceScriptHex;
+    const prepared = prepareMultiAssetRequest(req.data);
+    if ('error' in prepared) return refuse(req, 'BuildMultiAssetTransaction', prepared);
 
     return handleRequest(req, async (db) => {
-      logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, assets: parsedAssets, hasDatum: !!outputDatumJson },
-        'Building multi-asset transaction'
-      );
-      const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, { ...cleanData, assets: parsedAssets });
+      logger.debug({ senderAddress: prepared.request.senderAddress, assets: prepared.request.assets?.length ?? 0 }, 'Building multi-asset transaction');
+      const result = await getCardanoIndexer().indexMultiAssetBuildResult(db, prepared.request);
       logger.debug({ id: result.id, fee: result.fee, size: result.size }, 'Multi-asset transaction build result');
       return result;
     });
@@ -224,518 +108,47 @@ module.exports = (srv: cds.Service) => {
 
   // BuildMintTransaction: mint/burn under one or more Plutus policies.
   srv.on('BuildMintTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, requiredSignersJson, scriptParamsJson, inlineDatumJson, mintRedeemerJson, lockOnScript, forceInputsJson, referenceInputsJson, referenceScriptHex, extraOutputsJson, metadataJson, validityStartMs, validityEndMs } = req.data;
-
-    const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, mintActionsJson, mintingPolicyScript, referenceScriptHex, metadataJson, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'mintActionsJson', 'mintingPolicyScript']
-    );
-    throwIfValidationErrors(req, 'BuildMintTransaction', errors);
-    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
-      return rejectInvalid(req, 'BuildMintTransaction', 'Invalid changeAddress format', 'changeAddress');
-    }
-
-    // Mint actions: quantities become bigint; bare asset names are expanded with the policy id.
-    const parsedMintActionsRaw = JSON.parse(mintActionsJson);
-    if (!Array.isArray(parsedMintActionsRaw)) {
-      return rejectInvalid(req, 'BuildMintTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
-    }
-    const parsedMintActions = parsedMintActionsRaw.map((action: { assetUnit: string; quantity: string }, actionIndex: number) => {
-      if (!action || typeof action !== 'object') {
-        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
-      }
-      // Optional per-action mintingPolicyScript + redeemerJson
-      const policyFields = parseMintActionPolicyFields(action as unknown as Record<string, unknown>, actionIndex);
-      if (policyFields.error) {
-        return rejectInvalid(req, 'BuildMintTransaction', policyFields.error, 'mintActionsJson');
-      }
-      let actionPolicyId: string | undefined;
-      if (policyFields.script) {
-        try {
-          actionPolicyId = Script.fromCbor(Buffer.from(policyFields.script, 'hex')).hash.toString();
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          return rejectInvalid(req, 'BuildMintTransaction', `mintActions[${actionIndex}].mintingPolicyScript is not a valid Plutus script: ${errMsg}`, 'mintActionsJson');
-        }
-      }
-
-      const bareAssetNameForExpansion =
-        (!!scriptParamsJson || !!actionPolicyId) &&
-        typeof action.assetUnit === 'string' &&
-        action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
-        action.assetUnit.length % 2 === 0 &&
-        /^[0-9a-fA-F]*$/.test(action.assetUnit);
-      if (typeof action.assetUnit !== 'string' || (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`, 'mintActionsJson');
-      }
-      let assetUnit = action.assetUnit;
-      if (actionPolicyId) {
-        if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-          assetUnit = actionPolicyId + assetUnit;
-        } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
-          return rejectInvalid(req, 'BuildMintTransaction', `mintActions[${actionIndex}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`, 'mintActionsJson');
-        }
-      }
-      if (typeof action.quantity !== 'string') {
-        return rejectInvalid(req, 'BuildMintTransaction', 'Each mint action must have a string quantity', 'mintActionsJson');
-      }
-      if (!/^-?\d+$/.test(action.quantity)) {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity format: "${action.quantity}": must be an integer string`, 'mintActionsJson');
-      }
-      try {
-        return {
-          assetUnit,
-          quantity: BigInt(action.quantity),
-          ...((action as { redeemer?: number }).redeemer !== undefined ? { redeemer: (action as { redeemer?: number }).redeemer } : {}),
-          ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
-          ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
-        };
-      } catch {
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid quantity: "${action.quantity}": cannot parse as integer`, 'mintActionsJson');
-      }
-    });
-
-    const requiredSignersResult = parseRequiredSigners(requiredSignersJson);
-    if (requiredSignersResult.error) return rejectInvalid(req, 'BuildMintTransaction', requiredSignersResult.error, 'requiredSignersJson');
-    const requiredSigners = requiredSignersResult.parsed;
-
-    let scriptParams: JSONValue[] | undefined;
-    if (scriptParamsJson) {
-      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as JSONValue[];
-      if (!Array.isArray(scriptParams)) {
-        return rejectInvalid(req, 'BuildMintTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
-      }
-    }
-
-    let inlineDatum: JSONValue | undefined;
-    if (inlineDatumJson) {
-      const jsonResult = validatePlutusJson(inlineDatumJson, 'inlineDatumJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'inlineDatumJson');
-      inlineDatum = jsonResult.parsed as JSONValue;
-    }
-
-    let mintRedeemer: JSONValue | undefined;
-    if (mintRedeemerJson) {
-      const jsonResult = validatePlutusJson(mintRedeemerJson, 'mintRedeemerJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildMintTransaction', jsonResult.error!, 'mintRedeemerJson');
-      mintRedeemer = jsonResult.parsed as JSONValue;
-    }
-
-    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
-      return rejectInvalid(req, 'BuildMintTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
-    }
-
-    // extraOutputsJson: each minted token can sit on its own output with its own inline datum
-    const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
-    if (extraOutputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', extraOutputsResult.error, 'extraOutputsJson');
-    const extraOutputs = extraOutputsResult.parsed;
-
-    const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
-    if (forceInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', forceInputsResult.error, 'forceInputsJson');
-    const forceInputs = forceInputsResult.parsed;
-    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
-    if (protectInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', protectInputsResult.error, 'protectInputsJson');
-    const protectInputs = protectInputsResult.parsed;
-
-    // CIP-31 reference inputs
-    const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
-    if (refInputsResult.error) return rejectInvalid(req, 'BuildMintTransaction', refInputsResult.error, 'referenceInputsJson');
-    const referenceInputs = refInputsResult.parsed;
-
-    let parsedMetadata: JSONValue | undefined;
-    if (metadataJson) {
-      try {
-        parsedMetadata = JSON.parse(metadataJson) as JSONValue;
-      } catch (err: unknown) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        return rejectInvalid(req, 'BuildMintTransaction', `Invalid metadataJson: ${errMsg}`, 'metadataJson');
-      }
-      if (typeof parsedMetadata !== 'object' || parsedMetadata === null || Array.isArray(parsedMetadata)) {
-        return rejectInvalid(req, 'BuildMintTransaction', 'metadataJson must be an object with numeric label keys', 'metadataJson');
-      }
-    }
+    const { request, scriptAddress } = prepareOrAnswer(req, 'BuildMintTransaction', () => prepareMintRequest(req.data, networkOf));
+    const mintActions = request.mintActions ?? [];
 
     return handleRequest(req, async (db) => {
-      logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, mintActions: parsedMintActions, forceInputs: forceInputs?.length ?? 0, referenceInputs: referenceInputs?.length ?? 0, hasMetadata: !!parsedMetadata },
-        'Building minting transaction'
-      );
+      logger.debug({ senderAddress: request.senderAddress, mintActions: mintActions.length }, 'Building minting transaction');
+      const buildResult = await getCardanoIndexer().indexMintBuildResult(db, request);
 
-      const cleanData = { ...req.data };
-      delete cleanData.mintActionsJson;
-      delete cleanData.requiredSignersJson;
-      delete cleanData.scriptParamsJson;
-      delete cleanData.inlineDatumJson;
-      delete cleanData.mintRedeemerJson;
-      delete cleanData.lockOnScript;
-      delete cleanData.forceInputsJson;
-      delete cleanData.protectInputsJson;
-      delete cleanData.referenceInputsJson;
-      delete cleanData.extraOutputsJson;
-      if (parsedMetadata) {
-        cleanData.metadataJson = parsedMetadata;
-      } else {
-        delete cleanData.metadataJson;
-      }
-
-      if (referenceScriptHex) {
-        cleanData.referenceScript = referenceScriptHex;
-      }
-      delete cleanData.referenceScriptHex;
-
-      // Parameterized policy: apply params, then expand bare asset names with the applied hash.
-      let finalMintingPolicyScript = mintingPolicyScript;
-      let effectivePolicyId: string | undefined;
-      if (scriptParams && scriptParams.length > 0) {
-        try {
-          finalMintingPolicyScript = applyScriptParameters(mintingPolicyScript, scriptParams);
-          const appliedScript = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex'));
-          effectivePolicyId = appliedScript.hash.toString();
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          return rejectInvalid(req, 'BuildMintTransaction', `Failed to apply script parameters: ${errMsg}`, 'scriptParamsJson');
-        }
-        for (const action of parsedMintActions) {
-          if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-            action.assetUnit = effectivePolicyId + action.assetUnit;
-          }
-        }
-
-        // lockOnScript: route the output to the enterprise address of the applied script
-        if (lockOnScript) {
-          const scriptAddr = scriptHashToEnterpriseAddress(effectivePolicyId, getCardanoClient().network);
-          cleanData.recipientAddress = scriptAddr;
-          logger.debug({ scriptAddress: scriptAddr, scriptHash: effectivePolicyId }, 'lockOnScript: routing output to script address');
-        }
-      } else {
-        try {
-          effectivePolicyId = Script.fromCbor(Buffer.from(mintingPolicyScript, 'hex')).hash.toString();
-        } catch {
-          // Invalid script CBOR: skip the prefix check, the builder rejects it with its own message.
-        }
-      }
-
-      // Every action without its own policy must carry the top-level policy id prefix.
-      if (effectivePolicyId) {
-        const policyId = effectivePolicyId;
-        const mismatch = parsedMintActions.find(
-          (action) => !action.mintingPolicyScript && !action.assetUnit.toLowerCase().startsWith(policyId)
-        );
-        if (mismatch) {
-          return rejectInvalid(
-            req,
-            'BuildMintTransaction',
-            `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}: pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
-            'mintActionsJson'
-          );
-        }
-      }
-
-      const buildResult = await getCardanoIndexer().indexMintBuildResult(db, {
-        ...cleanData,
-        mintActions: parsedMintActions,
-        mintingPolicyScript: finalMintingPolicyScript,
-        requiredSigners,
-        inlineDatum,
-        mintRedeemer,
-        forceInputs,
-        protectInputs,
-        referenceInputs,
-        extraOutputs
-      });
-
-      // Post-build: CIP-14 fingerprint and scriptAddress
+      // CIP-14 fingerprint of the first minted asset, and the script address of lockOnScript
       if (buildResult.scriptHash) {
-        const policyId = buildResult.scriptHash;
         const updates: Record<string, string> = {};
-
-        // Fingerprint of the first minted asset. The policy id is taken from the unit, not from
-        // buildResult.scriptHash: a per-action policy may differ from the top-level script.
-        if (parsedMintActions.length > 0) {
-          const firstAssetUnit = parsedMintActions[0].assetUnit;
-          const firstPolicyId = firstAssetUnit.slice(0, POLICY_ID_HEX_LENGTH);
-          const assetNameHex = firstAssetUnit.slice(POLICY_ID_HEX_LENGTH);
-          buildResult.fingerprint = computeCip14Fingerprint(firstPolicyId, assetNameHex);
+        if (mintActions.length > 0) {
+          // the policy id comes from the unit: a per-action policy may differ from the top-level script
+          const firstUnit = mintActions[0].assetUnit;
+          buildResult.fingerprint = computeCip14Fingerprint(firstUnit.slice(0, POLICY_ID_HEX_LENGTH), firstUnit.slice(POLICY_ID_HEX_LENGTH));
           updates.fingerprint = buildResult.fingerprint;
         }
-
-        // lockOnScript: persist the derived script address on the build record
-        if (lockOnScript && scriptParams && scriptParams.length > 0) {
-          buildResult.scriptAddress = scriptHashToEnterpriseAddress(policyId, getCardanoClient().network);
+        if (scriptAddress) {
+          buildResult.scriptAddress = scriptHashToEnterpriseAddress(buildResult.scriptHash, networkOf());
           updates.scriptAddress = buildResult.scriptAddress;
         }
-
         if (buildResult.id && Object.keys(updates).length > 0) {
-          const { TransactionBuilds } = cds.entities('CardanoTransactionService');
           await db.run(UPDATE.entity(TransactionBuilds).set(updates).where({ id: buildResult.id }));
         }
       }
-
       return buildResult;
     });
   });
 
   // BuildPlutusSpendTransaction: consume a UTxO at a script address, optionally minting too.
   srv.on('BuildPlutusSpendTransaction', async (req: Request) => {
-    const { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, requiredSignersJson, scriptParamsJson, inlineDatumJson, lockOnScript, forceInputsJson, extraOutputsJson, mintActionsJson, mintingPolicyScript, mintRedeemerJson, referenceInputsJson, referenceScriptHex, validityStartMs, validityEndMs } = req.data;
-
-    const errors = validateTransactionInputs(
-      { senderAddress, recipientAddress, lovelaceAmount, validatorScript, scriptTxHash, scriptOutputIndex, redeemerJson, datumJson, referenceScriptHex, validityStartMs, validityEndMs },
-      ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'validatorScript', 'scriptTxHash', 'redeemerJson']
-    );
-    throwIfValidationErrors(req, 'BuildPlutusSpendTransaction', errors);
-    if (req.data.changeAddress && !isValidBech32Address(req.data.changeAddress)) {
-      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Invalid changeAddress format', 'changeAddress');
-    }
-
-    // A number: not covered by the required-fields check
-    if (scriptOutputIndex === undefined || scriptOutputIndex === null) {
-      return rejectMissing(req, 'BuildPlutusSpendTransaction', 'scriptOutputIndex');
-    }
-
-    const parsedRedeemer = JSON.parse(redeemerJson);
-    const parsedDatum = datumJson ? JSON.parse(datumJson) : undefined;
-
-    const requiredSignersResult = parseRequiredSigners(requiredSignersJson);
-    if (requiredSignersResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', requiredSignersResult.error, 'requiredSignersJson');
-    const requiredSigners = requiredSignersResult.parsed;
-
-    let scriptParams: JSONValue[] | undefined;
-    if (scriptParamsJson) {
-      const jsonResult = validatePlutusJson(scriptParamsJson, 'scriptParamsJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'scriptParamsJson');
-      scriptParams = jsonResult.parsed as JSONValue[];
-      if (!Array.isArray(scriptParams)) {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'scriptParamsJson must be a JSON array', 'scriptParamsJson');
-      }
-    }
-
-    let inlineDatum: JSONValue | undefined;
-    if (inlineDatumJson) {
-      const jsonResult = validatePlutusJson(inlineDatumJson, 'inlineDatumJson');
-      if (!jsonResult.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', jsonResult.error!, 'inlineDatumJson');
-      inlineDatum = jsonResult.parsed as JSONValue;
-    }
-
-    if (lockOnScript && (!scriptParams || scriptParams.length === 0)) {
-      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'lockOnScript requires scriptParamsJson to derive script address', 'lockOnScript');
-    }
-
-    const forceInputsResult = parseUtxoRefArray(forceInputsJson, 'forceInputsJson');
-    if (forceInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', forceInputsResult.error, 'forceInputsJson');
-    const forceInputs = forceInputsResult.parsed;
-    const protectInputsResult = parseUtxoRefArray(req.data.protectInputsJson, 'protectInputsJson');
-    if (protectInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', protectInputsResult.error, 'protectInputsJson');
-    const protectInputs = protectInputsResult.parsed;
-
-    // CIP-31 reference inputs
-    const refInputsResult = parseUtxoRefArray(referenceInputsJson, 'referenceInputsJson');
-    if (refInputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', refInputsResult.error, 'referenceInputsJson');
-    const referenceInputs = refInputsResult.parsed;
-
-    const extraOutputsResult = parseExtraOutputs(extraOutputsJson);
-    if (extraOutputsResult.error) return rejectInvalid(req, 'BuildPlutusSpendTransaction', extraOutputsResult.error, 'extraOutputsJson');
-    const extraOutputs = extraOutputsResult.parsed;
-
-    // Optional combined spend+mint parameters
-    let parsedMintActions: MintAction[] | undefined;
-    let parsedMintRedeemer: JSONValue | undefined;
-    if (mintActionsJson) {
-      if (!mintingPolicyScript) {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson requires mintingPolicyScript', 'mintingPolicyScript');
-      }
-      const mintJson = validateJsonWithLimits(mintActionsJson, 'mintActionsJson');
-      if (!mintJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mintJson.error!, 'mintActionsJson');
-      if (!Array.isArray(mintJson.parsed)) {
-        return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintActionsJson must be a JSON array', 'mintActionsJson');
-      }
-      parsedMintActions = mintJson.parsed.map((rawAction: unknown, actionIndex: number) => {
-        if (!rawAction || typeof rawAction !== 'object') {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must be an object with assetUnit and quantity', 'mintActionsJson');
-        }
-        const action = rawAction as Record<string, unknown>;
-        if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid quantity: "${action.quantity}": must be an integer string`, 'mintActionsJson');
-        }
-        if (typeof action.assetUnit !== 'string') {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'Each mint action must have assetUnit string', 'mintActionsJson');
-        }
-        // Optional per-action mintingPolicyScript + redeemerJson (same rules as BuildMintTransaction)
-        const policyFields = parseMintActionPolicyFields(action, actionIndex);
-        if (policyFields.error) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', policyFields.error, 'mintActionsJson');
-        }
-        let actionPolicyId: string | undefined;
-        if (policyFields.script) {
-          try {
-            actionPolicyId = Script.fromCbor(Buffer.from(policyFields.script, 'hex')).hash.toString();
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            return rejectInvalid(req, 'BuildPlutusSpendTransaction', `mintActions[${actionIndex}].mintingPolicyScript is not a valid Plutus script: ${errMsg}`, 'mintActionsJson');
-          }
-        }
-
-        const bareAssetNameForExpansion =
-          ((!!scriptParamsJson && mintingPolicyScript === validatorScript) || !!actionPolicyId) &&
-          action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
-          action.assetUnit.length % 2 === 0 &&
-          /^[0-9a-fA-F]*$/.test(action.assetUnit);
-        if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when a per-action mintingPolicyScript is set, or scriptParamsJson is set and the policy equals the validator)`, 'mintActionsJson');
-        }
-        let assetUnit = action.assetUnit;
-        if (actionPolicyId) {
-          if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-            assetUnit = actionPolicyId + assetUnit;
-          } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
-            return rejectInvalid(req, 'BuildPlutusSpendTransaction', `mintActions[${actionIndex}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`, 'mintActionsJson');
-          }
-        }
-        return {
-          assetUnit,
-          quantity: BigInt(action.quantity),
-          ...(typeof action.redeemer === 'number' ? { redeemer: action.redeemer } : {}),
-          ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
-          ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
-        };
-      });
-      if (mintRedeemerJson) {
-        const mrJson = validatePlutusJson(mintRedeemerJson, 'mintRedeemerJson');
-        if (!mrJson.valid) return rejectInvalid(req, 'BuildPlutusSpendTransaction', mrJson.error!, 'mintRedeemerJson');
-        parsedMintRedeemer = mrJson.parsed as JSONValue;
-      }
-    } else if (mintingPolicyScript || mintRedeemerJson) {
-      return rejectInvalid(req, 'BuildPlutusSpendTransaction', 'mintingPolicyScript / mintRedeemerJson require mintActionsJson', 'mintActionsJson');
-    }
+    const { request, scriptAddress } = prepareOrAnswer(req, 'BuildPlutusSpendTransaction', () => preparePlutusSpendRequest(req.data, networkOf));
 
     return handleRequest(req, async (db) => {
-      logger.debug(
-        { senderAddress, recipientAddress, lovelaceAmount, scriptTxHash, scriptOutputIndex },
-        'Building Plutus spending transaction'
-      );
+      logger.debug({ senderAddress: request.senderAddress, scriptUtxo: request.plutusScriptExecution.scriptUtxo }, 'Building Plutus spending transaction');
+      const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, request);
 
-      let finalValidatorScript = validatorScript;
-      if (scriptParams && scriptParams.length > 0) {
-        try {
-          finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Failed to apply script parameters: ${errMsg}`, 'scriptParamsJson');
-        }
+      // lockOnScript: the derived script address goes on the build record
+      if (scriptAddress && buildResult.scriptHash && buildResult.id) {
+        buildResult.scriptAddress = scriptHashToEnterpriseAddress(buildResult.scriptHash, networkOf());
+        await db.run(UPDATE.entity(TransactionBuilds).set({ scriptAddress: buildResult.scriptAddress }).where({ id: buildResult.id }));
       }
-
-      // A mint policy byte-equal to the validator (multi-purpose script) reuses the
-      // params-applied validator hex; any other policy passes through unchanged.
-      let finalMintingPolicyScript: string | undefined;
-      if (parsedMintActions) {
-        finalMintingPolicyScript = (mintingPolicyScript === validatorScript)
-          ? finalValidatorScript
-          : mintingPolicyScript;
-
-        if (finalMintingPolicyScript && scriptParams && scriptParams.length > 0 && mintingPolicyScript === validatorScript) {
-          let appliedPolicyId: string;
-          try {
-            appliedPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
-          } catch (err: unknown) {
-            const errMsg = err instanceof Error ? err.message : String(err);
-            return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Failed to hash applied script: ${errMsg}`, 'mintingPolicyScript');
-          }
-          for (const action of parsedMintActions) {
-            if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-              action.assetUnit = appliedPolicyId + action.assetUnit;
-            }
-          }
-        }
-
-        // Policy-id prefix check as in BuildMintTransaction: the builder discards the unit's
-        // first 56 hex chars, so a mismatched prefix would mint a truncated asset name.
-        if (finalMintingPolicyScript) {
-          let mintPolicyId: string | undefined;
-          try {
-            mintPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
-          } catch {
-            // Invalid script CBOR: skip the prefix check, the builder rejects it with its own message.
-          }
-          if (mintPolicyId) {
-            const policyId = mintPolicyId;
-            // Actions with a per-action script were already checked against that policy id.
-            const mismatch = parsedMintActions.find(
-              (action) => !action.mintingPolicyScript && !action.assetUnit.toLowerCase().startsWith(policyId)
-            );
-            if (mismatch) {
-              return rejectInvalid(
-                req,
-                'BuildPlutusSpendTransaction',
-                `assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}: pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`,
-                'mintActionsJson'
-              );
-            }
-          }
-        }
-      }
-
-      const cleanData: Record<string, unknown> = {
-        ...req.data,
-        plutusScriptExecution: {
-          validatorScript: finalValidatorScript,
-          scriptUtxo: {
-            txHash: scriptTxHash,
-            outputIndex: scriptOutputIndex,
-          },
-          redeemer: parsedRedeemer,
-          datum: parsedDatum,
-        },
-        requiredSigners,
-        inlineDatum,
-        forceInputs,
-        protectInputs,
-        referenceInputs,
-        extraOutputs,
-        mintActions: parsedMintActions,
-        mintingPolicyScript: finalMintingPolicyScript,
-        mintRedeemer: parsedMintRedeemer
-      };
-      if (referenceScriptHex) {
-        cleanData.referenceScript = referenceScriptHex;
-      }
-      delete cleanData.requiredSignersJson;
-      delete cleanData.scriptParamsJson;
-      delete cleanData.inlineDatumJson;
-      delete cleanData.lockOnScript;
-      delete cleanData.forceInputsJson;
-      delete cleanData.protectInputsJson;
-      delete cleanData.referenceInputsJson;
-      delete cleanData.extraOutputsJson;
-      delete cleanData.mintActionsJson;
-      delete cleanData.mintRedeemerJson;
-      delete cleanData.referenceScriptHex;
-
-      // lockOnScript: route the continuing output to the enterprise script address
-      if (lockOnScript && scriptParams && scriptParams.length > 0) {
-        try {
-          const appliedScript = Script.fromCbor(Buffer.from(finalValidatorScript, 'hex'));
-          const derivedScriptHash = appliedScript.hash.toString();
-          const scriptAddr = scriptHashToEnterpriseAddress(derivedScriptHash, getCardanoClient().network);
-          cleanData.recipientAddress = scriptAddr;
-          logger.debug({ scriptAddress: scriptAddr, scriptHash: derivedScriptHash }, 'lockOnScript: routing continuing output to script address');
-        } catch (err: unknown) {
-          const errMsg = err instanceof Error ? err.message : String(err);
-          return rejectInvalid(req, 'BuildPlutusSpendTransaction', `Failed to derive script address: ${errMsg}`, 'validatorScript');
-        }
-      }
-
-      const buildResult = await getCardanoIndexer().indexPlutusSpendBuildResult(db, cleanData as TxBuildPlutusSpendRequest);
-
-      // lockOnScript: persist the derived script address on the build record
-      if (lockOnScript && scriptParams && scriptParams.length > 0 && buildResult.scriptHash && buildResult.id) {
-        const scriptAddr = scriptHashToEnterpriseAddress(buildResult.scriptHash, getCardanoClient().network);
-        buildResult.scriptAddress = scriptAddr;
-        const { TransactionBuilds } = cds.entities('CardanoTransactionService');
-        await db.run(UPDATE.entity(TransactionBuilds).set({ scriptAddress: scriptAddr }).where({ id: buildResult.id }));
-      }
-
       return buildResult;
     });
   });
@@ -846,7 +259,12 @@ module.exports = (srv: cds.Service) => {
     };
     return handleRequest(req, async (db) => {
       logger.debug({ senderAddress, scriptInputs: scriptInputs.length, outputs: buildReq.outputs.length }, 'Building multi-script Plutus transaction');
-      return getCardanoIndexer().indexPlutusBuildResult(db, buildReq);
+      const build = await getCardanoIndexer().indexPlutusBuildResult(db, buildReq);
+      // the answer carries the execution units of every redeemer, as stored with the build
+      const redeemers = await db.run(
+        SELECT.from(TransactionBuildRedeemers).columns('tag', 'redeemerIndex', 'mem', 'steps').where({ build_id: build.id }).orderBy('tag', 'redeemerIndex')
+      );
+      return { ...build, redeemers };
     });
   });
 
@@ -942,6 +360,9 @@ module.exports = (srv: cds.Service) => {
       if (signedTxHash !== build.txBodyHash) {
         rejectInvalid(req, 'SubmitTransaction', `signedTxCbor hash '${signedTxHash}' does not match build txBodyHash '${build.txBodyHash}'`, 'signedTxCbor');
       }
+      // the body hash leaves isValid out, and a build stored by an earlier version may have no expiry
+      const problem = sendProblem(signedTxCbor, getCardanoClient().network);
+      if (problem) rejectInvalid(req, 'SubmitTransaction', problem, 'signedTxCbor');
 
       return await submitRecorded({ signedTxCbor, txHash: build.txBodyHash, buildId });
     } catch (e: unknown) {
@@ -963,6 +384,9 @@ module.exports = (srv: cds.Service) => {
       if (network && network !== configuredNetwork) {
         rejectInvalid(req, 'SubmitSignedTransaction', `network '${network}' does not match this deployment's network '${configuredNetwork}'`, 'network');
       }
+      // without an expiry within the cap an unanswered submit could stay undecided; isValid false only spends collateral
+      const expiry = sendProblem(signedTxCbor, configuredNetwork);
+      if (expiry) rejectInvalid(req, 'SubmitSignedTransaction', expiry, 'signedTxCbor');
       return await submitRecorded({ signedTxCbor, txHash: getTxHashFromCbor(signedTxCbor), buildId: null });
     } catch (e: unknown) {
       return mapError(req, e, 'SubmitSignedTransaction');
@@ -988,6 +412,29 @@ module.exports = (srv: cds.Service) => {
       }
 
       return submission;
+    });
+  });
+
+  // ResolveSubmission (Admin): settles an unresolved submission as an operator read it on the chain.
+  // Confirmed makes it submitted, so CheckSubmissionStatus counts its depth; failed ends it.
+  srv.on('ResolveSubmission', async (req: Request) => {
+    const { submissionId, outcome, txHash, note } = req.data as { submissionId: string; outcome: string; txHash?: string | null; note?: string | null };
+    return handleRequest(req, async (db) => {
+      // read and ask the chain before the request takes its connection
+      const submission = await readOutside(db, (d) => d.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId })));
+      if (!submission) throw new NotFoundError(`Submission '${submissionId}'`);
+      if (submission.status !== 'unresolved') {
+        rejectInvalid(req, 'ResolveSubmission', `Submission status is '${submission.status}': only an unresolved submission can be resolved`, 'submissionId');
+      }
+      checkResolvedTxHash(req, 'ResolveSubmission', txHash, submission.txHash);
+      const resolved = outcome === 'confirmed' ? 'confirmed' : 'failed';
+      await refuseFailedWhileItCanLand('ResolveSubmission', resolved, submission.signedTxCbor, getCardanoClient());
+      const won = await db.run(UPDATE.entity(TransactionSubmissions)
+        .set({ status: resolved === 'confirmed' ? 'submitted' : 'failed', resolution: resolutionNote(resolved, req.user?.id, note) })
+        .where({ id: submissionId, status: 'unresolved' }));
+      if (won === 0) throw resolvedConcurrently('ResolveSubmission');
+      logger.warn({ submissionId, outcome: resolved, by: req.user?.id }, 'Unresolved submission resolved by an operator');
+      return db.run(SELECT.one.from(TransactionSubmissions).where({ id: submissionId }));
     });
   });
 
@@ -1029,7 +476,7 @@ module.exports = (srv: cds.Service) => {
         const finalScript = scriptParams && scriptParams.length > 0
           ? applyScriptParameters(validatorScript, scriptParams)
           : validatorScript;
-        const scriptHash = Script.fromCbor(Buffer.from(finalScript, 'hex')).hash.toString();
+        const scriptHash = scriptHashOf(finalScript);
         const scriptAddress = scriptHashToEnterpriseAddress(scriptHash, targetNetwork);
         return { scriptAddress, scriptHash };
       } catch (err: unknown) {
@@ -1048,19 +495,14 @@ module.exports = (srv: cds.Service) => {
       return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Invalid bech32 address format', 'address');
     }
 
-    try {
-      const decoded = bech32.decode(address, BECH32_MAX_LENGTH);
-      const bytes = Buffer.from(bech32.fromWords(decoded.words));
-      // 1 header byte + 28-byte payment credential (+ optional 28-byte stake credential)
-      if (bytes.length < 29) {
-        return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address is too short to contain a payment credential', 'address');
-      }
-      const paymentKeyHash = bytes.slice(1, 29).toString('hex');
-      return { paymentKeyHash };
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      return rejectInvalid(req, 'ExtractPaymentKeyHash', `Failed to decode address: ${errMsg}`, 'address');
+    const decoded = decodeShelleyAddress(address);
+    if (!decoded.paymentCredential) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address carries no payment credential', 'address');
     }
+    if (decoded.isScript) {
+      return rejectInvalid(req, 'ExtractPaymentKeyHash', 'Address has a script payment credential, not a key hash', 'address');
+    }
+    return { paymentKeyHash: decoded.paymentCredential };
   });
 
 };

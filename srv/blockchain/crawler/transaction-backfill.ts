@@ -7,6 +7,7 @@ import { mapTransactionInputAssets, mapTransactionRedeemers, mapTransactionDatum
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { streamCrawledBlocks } from './certificate-backfill';
 import { fillOutputFields } from './output-datum-backfill';
+import { bulkSqlKind, connectedDbKind, jsonFillUpdate, type FillColumn } from '../../utils/db-kind';
 import type { LedgerLookup } from '../ledger-state';
 import { TransactionInputs, TransactionInputAssets, TransactionInputAssetCopies, TransactionOutputs, TransactionOutputAssets, TransactionRedeemers, TransactionDatums, type TransactionInput } from '#cds-models/odatano/cardano';
 
@@ -52,6 +53,8 @@ export interface TransactionBackfillOptions {
   toSlot: number;
   batchBlocks?: number;
   onProgress?: (p: TransactionBackfillProgress) => void;
+  /** Ends the stream after the current batch. */
+  shouldStop?: () => boolean;
 }
 
 export interface TransactionBackfillResult extends TransactionBackfillProgress {
@@ -130,7 +133,7 @@ const INPUTS_TABLE = 'odatano_cardano_TransactionInputs';
 const FILL_CHUNK = 5000;
 
 /** Fill columns in the order the JSON records and the SET list use them. */
-const FILL_COLUMNS: Array<[column: string, sqlType: string]> = [
+const FILL_COLUMNS: FillColumn[] = [
   ['spentTxHash', 'text'],
   ['spentOutputIndex', 'integer'],
   ['utxoData_dataHash', 'text'],
@@ -146,29 +149,20 @@ const FILL_COLUMNS: Array<[column: string, sqlType: string]> = [
 // One UPDATE per chunk that joins a JSON array of fills on the input key. COALESCE keeps existing
 // values. Null for databases other than Postgres and SQLite, which update row by row.
 export function inputFillStatement(kind: string): string | null {
+  const bulk = bulkSqlKind(kind);
+  if (!bulk) return null;
   const set = FILL_COLUMNS
     .map(([c]) => c.startsWith('has')
       ? `${c} = CASE WHEN v.address_address IS NOT NULL AND t.address_address IS NULL THEN v.${c} ELSE t.${c} END`
       : `${c} = COALESCE(t.${c}, v.${c})`)
     .join(', ');
-  if (kind === 'postgres') {
-    const cols = [['txSeq', 'bigint'], ['inputIndex', 'integer'], ...FILL_COLUMNS].map(([c, ty]) => `${c.toLowerCase()} ${ty}`).join(', ');
-    return `UPDATE ${INPUTS_TABLE} AS t SET ${set} FROM json_to_recordset($1::json) AS v(${cols}) ` +
-      'WHERE t.txSeq = v.txseq AND t.inputIndex = v.inputindex';
-  }
-  if (kind === 'sqlite' || kind === 'better-sqlite') {
-    const cols = ['txSeq', 'inputIndex', ...FILL_COLUMNS.map(([c]) => c)]
-      .map((c) => `json_extract(value, '$.${c.toLowerCase()}') AS ${c}`).join(', ');
-    return `UPDATE ${INPUTS_TABLE} AS t SET ${set} FROM (SELECT ${cols} FROM json_each(?)) AS v ` +
-      'WHERE t.txSeq = v.txSeq AND t.inputIndex = v.inputIndex';
-  }
-  return null;
+  return jsonFillUpdate(bulk, { table: INPUTS_TABLE, keys: [['txSeq', 'bigint'], ['inputIndex', 'integer']], values: FILL_COLUMNS, set });
 }
 
 /** Writes the fills of a batch: bulk statement where the database has one, else row by row. */
 async function writeInputFills(tx: CapTransaction, fills: InputFill[]): Promise<void> {
   if (!fills.length) return;
-  const sql = inputFillStatement((cds.db as { kind?: string } | undefined)?.kind ?? '');
+  const sql = inputFillStatement(connectedDbKind());
   if (!sql) {
     for (const f of fills) await tx.run(UPDATE.entity(TransactionInputs).set(f.set).where({ txSeq: f.txSeq, inputIndex: f.inputIndex }));
     return;

@@ -12,6 +12,11 @@ import {
   ScriptValidationError,
   SubmitOutcomeUnknownError,
   isSubmitRejection,
+  isBackendVerdict,
+  errorText,
+  ERROR_TEXT_MAX,
+  nodeRejectionReason,
+  submitRejection,
   getErrorStatus,
   getErrorMessage,
   normalizeBackendError,
@@ -167,6 +172,14 @@ describe('Error Classes', () => {
 
       expect(error.statusCode).toBe(503);
       expect(error.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
+    });
+
+    it('answers 404 only when every backend said 404, else the last other error', () => {
+      const notFound = new NotFoundError('Epoch', 'ogmios');
+      const outage = new ProviderUnavailableError('koios down', 'koios');
+      expect(new AllBackendsFailedError([outage, notFound]).statusCode).toBe(503);
+      expect(new AllBackendsFailedError([outage, notFound]).message).toContain('koios down');
+      expect(new AllBackendsFailedError([notFound, notFound]).statusCode).toBe(404);
     });
 
     it('should handle empty errors array', () => {
@@ -564,22 +577,22 @@ describe('Error Classes', () => {
       expect(result).toBeInstanceOf(TransactionValidationError);
     });
 
-    it('should convert 401 error to BackendError with auth failure', () => {
-      const error = { status: 401, message: 'Unauthorized' };
-      const result = normalizeBackendError(error, 'blockfrost');
-
-      expect(result.statusCode).toBe(401);
-      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result).toBeInstanceOf(BackendError);
+    it('turns a refused key (401, 402, 403) into a 503, so another backend is asked', () => {
+      for (const status of [401, 402, 403]) {
+        const result = normalizeBackendError({ status, message: 'Forbidden' }, 'koios');
+        expect(result).toBeInstanceOf(ProviderUnavailableError);
+        expect(result.statusCode).toBe(503);
+        expect(result.message).toContain(`Provider authentication failed (${status})`);
+        expect(isBackendVerdict(result)).toBe(false);
+      }
     });
 
-    it('should convert 403 error to BackendError with auth failure (when not rate limit)', () => {
-      const error = { status: 403, message: 'Forbidden' };
-      const result = normalizeBackendError(error, 'koios');
-
-      expect(result.statusCode).toBe(403);
-      expect(result.code).toBe(ERROR_CODES.PROVIDER_UNAVAILABLE);
-      expect(result).toBeInstanceOf(BackendError);
+    it('reads the HTTP status of a Blockfrost SDK error from status_code', () => {
+      const sdkError = (status_code: number, message: string) => Object.assign(new Error(message), { name: 'BlockfrostServerError', status_code, error: 'x' });
+      expect(normalizeBackendError(sdkError(400, 'ConwayUtxowFailure ValueNotConservedUTxO'), 'blockfrost')).toBeInstanceOf(TransactionValidationError);
+      expect(normalizeBackendError(sdkError(429, 'Usage is over limit.'), 'blockfrost')).toBeInstanceOf(RateLimitError);
+      expect(normalizeBackendError(sdkError(403, 'Invalid project token.'), 'blockfrost')).toBeInstanceOf(ProviderUnavailableError);
+      expect(normalizeBackendError(sdkError(404, 'The requested component has not been found.'), 'blockfrost').statusCode).toBe(404);
     });
 
     it('should convert 405 error to ProviderUnavailable', () => {
@@ -855,5 +868,27 @@ describe('BackendError on the wire', () => {
     expect(err.name).toBe('BackendError');
     expect(err.backendName).toBe('koios');
     expect((err.originalError as Error).message).toBe('socket');
+  });
+});
+
+describe('error helpers', () => {
+  it('errorText keeps the message of any thrown value within ERROR_TEXT_MAX', () => {
+    expect(errorText(new Error('boom'))).toBe('boom');
+    expect(errorText('plain')).toBe('plain');
+    expect(errorText(new Error('x'.repeat(ERROR_TEXT_MAX + 50)))).toHaveLength(ERROR_TEXT_MAX);
+  });
+
+  it('nodeRejectionReason collects the error entries of a submit-api body', () => {
+    expect(nodeRejectionReason({ contents: { error: ['BadInputsUTxO', 'ValueNotConservedUTxO'] } })).toBe('BadInputsUTxO; ValueNotConservedUTxO');
+    expect(nodeRejectionReason('{"error":"FeeTooSmallUTxO"}')).toBe('FeeTooSmallUTxO');
+    expect(nodeRejectionReason('plain text')).toBe('plain text');
+  });
+
+  it('submitRejection keeps the class of a known refusal and makes the rest a validation error', () => {
+    expect(submitRejection('transaction already known', 'koios', null)).toBeInstanceOf(TransactionAlreadySubmittedError);
+    expect(submitRejection('PlutusFailure in script', 'koios', null)).toBeInstanceOf(ScriptValidationError);
+    const refused = submitRejection('BadInputsUTxO', 'blockfrost', null);
+    expect(refused).toBeInstanceOf(TransactionValidationError);
+    expect(refused.message).toBe('node rejected the transaction: BadInputsUTxO');
   });
 });

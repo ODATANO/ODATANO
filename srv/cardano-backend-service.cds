@@ -18,7 +18,7 @@ service CardanoBackendService @(impl: './cardano-backend-service') {
     action GetNextBlocks(afterHash: String, @assert.range: [1, 500] count: Integer,
                          @assert.range: [0, _] afterHeight: Integer64)          returns LargeString;
     @odatano.agent: 'read'
-    action GetBlockTransactions(blockHash: String)                              returns LargeString;
+    action GetBlockTransactions(blockHash: String, @assert.range: [0, _] txCount: Integer) returns LargeString;
     @odatano.agent: 'read'
     action GetLatestBlock()                                                     returns LargeString;
     @odatano.agent: 'read'
@@ -47,6 +47,9 @@ service CardanoBackendService @(impl: './cardano-backend-service') {
     // --- stake, governance, assets, network ------------------------------------------------
     @odatano.agent: 'read'
     action GetAccount(stakeAddress: String)                                     returns LargeString;
+    @odatano.agent: 'read'
+    @description: 'Whether the stake address is registered, as this instance decides: true, false, or null when no source can tell.'
+    action IsRewardAccountRegistered(stakeAddress: String)                      returns LargeString;
     @odatano.agent: 'read'
     action GetPool(poolId: String)                                              returns LargeString;
     @odatano.agent: 'read'

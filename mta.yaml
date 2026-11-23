@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: odatano
-version: 2.0.0-rc.50
+version: 2.0.0-rc.51
 description: "A SAP CAP service for interacting with Cardano blockchain data."
 parameters:
   enable-parallel-deployments: true
@@ -10,7 +10,7 @@ build-parameters:
     - builder: custom
       commands:
         - npm ci
-        - npx cds-typer "*" --outputDirectory @cds-models
+        - npm run cds:types
         - npx tsc -p tsconfig.build.json
         - npx cds build --production
         - node scripts/build/gen-srv-package.js
@@ -30,7 +30,7 @@ modules:
     build-parameters:
       builder: custom
       commands:
-        - npm install --production
+        - npm ci --omit=dev
     provides:
       - name: srv-api # required by consumers of CAP services (e.g. approuter)
         properties:

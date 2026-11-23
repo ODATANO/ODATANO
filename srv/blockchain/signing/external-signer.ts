@@ -3,7 +3,6 @@ import { SignatureVerifier, getSignatureVerifier } from './signature-verifier';
 import { TransactionValidationError } from '../../utils/errors';
 import {
   ExternalSignerType,
-  SigningStatus,
   SigningInstructions,
   UnsignedTxExportPayload,
   SignedTxPayload,
@@ -172,7 +171,7 @@ export class ExternalSignerModule {
   /** Initial (pending) workflow state for a signing request. */
   public createWorkflowState(signingRequest: UnsignedTxExportPayload): SigningWorkflowState {
     return {
-      status: SigningStatus.PENDING,
+      status: 'pending',
       request: signingRequest,
       timestamps: {
         created: signingRequest.createdAt,
@@ -184,7 +183,7 @@ export class ExternalSignerModule {
   public markAsSigned(state: SigningWorkflowState, signedTxCbor: string): SigningWorkflowState {
     return {
       ...state,
-      status: SigningStatus.SIGNED,
+      status: 'signed',
       signedTxCbor,
       timestamps: {
         ...state.timestamps,
@@ -204,7 +203,7 @@ export class ExternalSignerModule {
 
     return {
       ...state,
-      status: SigningStatus.VERIFIED,
+      status: 'verified',
       verificationResult,
       timestamps: {
         ...state.timestamps,
@@ -217,7 +216,7 @@ export class ExternalSignerModule {
   public markAsSubmitted(state: SigningWorkflowState, txHash: string): SigningWorkflowState {
     return {
       ...state,
-      status: SigningStatus.SUBMITTED,
+      status: 'submitted',
       txHash,
       timestamps: {
         ...state.timestamps,
@@ -230,7 +229,7 @@ export class ExternalSignerModule {
   public markAsFailed(state: SigningWorkflowState, errorMessage: string): SigningWorkflowState {
     return {
       ...state,
-      status: SigningStatus.FAILED,
+      status: 'failed',
       errorMessage,
       timestamps: {
         ...state.timestamps,

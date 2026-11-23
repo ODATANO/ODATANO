@@ -37,6 +37,9 @@ describe('metadataIdFor', () => {
     expect(metadataIdFor('')).toBeNull();
     expect(metadataIdFor('1.5')).toBeNull();
     expect(metadataIdFor('-1')).toBeNull();
+    // above uint64: no wrap into another label
+    expect(metadataIdFor('18446744073709551616')).toBeNull();
+    expect(metadataIdFor('18446744073709552337')).toBeNull();
     expect(metadataIdFor(Number.NaN)).toBeNull();
   });
 });

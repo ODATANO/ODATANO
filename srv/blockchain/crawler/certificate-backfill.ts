@@ -8,7 +8,7 @@ import { chunk, IN_CHUNK } from '../../utils/collections';
 import { readCursor } from './sync-state';
 import { Block, TransactionCertificates, TransactionWithdrawals } from '#cds-models/odatano/cardano';
 
-const { SELECT, UPSERT, DELETE } = cds.ql;
+const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('CertificateBackfill');
 
 // Fill certificates and withdrawals for already crawled blocks from a second chain-sync stream.
@@ -41,6 +41,8 @@ export interface CertificateBackfillOptions {
   /** Rows are written per batch of blocks; smaller batches show progress sooner. */
   batchBlocks?: number;
   onProgress?: (p: CertificateBackfillProgress) => void;
+  /** Ends the stream after the current batch. */
+  shouldStop?: () => boolean;
 }
 
 export interface CertificateBackfillResult extends CertificateBackfillProgress {
@@ -56,9 +58,14 @@ export async function intersectionBefore(db: CapTransaction, slot: number): Prom
   const cursor = await readCursor(db);
   const floor = cursor?.startSlot ?? null;
   const range = floor != null ? { between: floor, and: slot - 1 } : { '<': slot };
-  const row = floor != null && slot - 1 < floor ? null : (await db.run(
-    SELECT.one.from(Block).columns('hash', 'slot', 'height').where({ slot: range }).orderBy('slot desc')
-  )) as { hash?: string; slot?: number | string; height?: number | string } | null;
+  type Row = { hash?: string; slot?: number | string; height?: number | string };
+  let row: Row | null = null;
+  if (floor == null || slot - 1 >= floor) {
+    const q = SELECT.one.from(Block).columns('hash', 'slot', 'height').where({ slot: range });
+    // nulls first is the order a plain index on slot is read backwards in; the range excludes null
+    q.SELECT.orderBy = [{ ref: ['slot'], sort: 'desc', nulls: 'first' }];
+    row = (await db.run(q)) as Row | null;
+  }
   if (row?.hash && row.slot != null) return { slot: Number(row.slot), hash: row.hash, height: row.height == null ? undefined : Number(row.height) };
   if (floor != null && cursor?.startBlockHash) return { slot: floor, hash: cursor.startBlockHash };
   return 'origin';
@@ -79,6 +86,8 @@ export interface CrawledBlockStreamOptions {
   batchBlocks?: number;
   /** Error class the range and backend checks throw. */
   errorType?: new (message: string) => Error;
+  /** Ends the stream after the current batch. */
+  shouldStop?: () => boolean;
 }
 
 // Stream `fromSlot..toSlot` over a second chain-sync connection and pass stored blocks to
@@ -135,7 +144,7 @@ export async function streamCrawledBlocks<T>(
     const onBlock = async (block: BlockData, txs: Transaction[]): Promise<void> => {
       if (settled) return;
       const slot = block.slot ?? 0;
-      if (slot > toSlot) { finish(); return; }
+      if (slot > toSlot || opts.shouldStop?.()) { finish(); return; }
       if (slot < fromSlot) return;   // between the intersection and the range: skipped, not counted
       pending.push({ hash: block.hash, slot, transactions: txs.length, payload: collect(block, txs) });
       if (pending.length >= batchBlocks) await flush();
@@ -171,6 +180,8 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
       certs: txs.flatMap((t) => mapTransactionCertificates(t.hash, t.certificates ?? [])),
       withdrawals: txs.flatMap((t) => mapTransactionWithdrawals(t.hash, t.withdrawals ?? [])),
       failed: txs.filter((t) => t.spendsCollaterals).map((t) => t.hash),
+      // the rule of the crawl: every transaction of the block reported its withdrawals
+      withdrawalsReported: txs.every((t) => t.withdrawals !== undefined),
     }),
     async (tx, blocks) => {
       const certs = blocks.flatMap((b) => b.payload.certs);
@@ -187,6 +198,10 @@ export async function backfillCertificates(opts: CertificateBackfillOptions): Pr
       for (const part of chunk(blocks.flatMap((b) => b.payload.failed), IN_CHUNK)) {
         progress.removed += Number(await tx.run(DELETE.from(TransactionCertificates).where({ tx_hash: { in: part } }))) || 0;
         progress.removed += Number(await tx.run(DELETE.from(TransactionWithdrawals).where({ tx_hash: { in: part } }))) || 0;
+      }
+      // the account snapshot derives credited amounts only over blocks marked here
+      for (const part of chunk(blocks.filter((b) => b.payload.withdrawalsReported).map((b) => b.hash), IN_CHUNK)) {
+        await tx.run(UPDATE.entity(Block).set({ withdrawalsReported: true }).where({ hash: { in: part } }));
       }
     },
     (atSlot) => {

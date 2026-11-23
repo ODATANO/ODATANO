@@ -83,6 +83,9 @@ function makeStore() {
       if (v !== null && typeof v === 'object' && '<=' in (v as Row)) {
         return row[k] != null && String(row[k]) <= String((v as Row)['<=']);
       }
+      if (v !== null && typeof v === 'object' && '<' in (v as Row)) {
+        return row[k] != null && String(row[k]) < String((v as Row)['<']);
+      }
       return row[k] === v || (v === null && (row[k] === null || row[k] === undefined));
     });
     return all || (or !== undefined && matches(row, or));
@@ -111,9 +114,9 @@ function makeStore() {
             // Mirror the deployed `dedup` UNIQUE constraint on the jobs table (SQLite table
             // constraint / HANA unique inverted index) so the fake gives the same guarantee.
             if (q.entity === 'odatano.cardano.CardanoWalletJobs'
-              && rows.some(r => r.walletId === e.walletId && r.kind === e.kind && r.dedupKey === e.dedupKey)) {
+              && rows.some(r => r.dedupKey === e.dedupKey)) {
               throw Object.assign(
-                new Error('UNIQUE constraint failed: odatano_cardano_CardanoWalletJobs.walletId, odatano_cardano_CardanoWalletJobs.kind, odatano_cardano_CardanoWalletJobs.dedupKey'),
+                new Error('UNIQUE constraint failed: odatano_cardano_CardanoWalletJobs.dedupKey'),
                 { code: 'SQLITE_CONSTRAINT_UNIQUE' },
               );
             }
@@ -153,6 +156,20 @@ describe('job-store: insertJob + idempotency', () => {
     expect(row).toMatchObject({
       walletId: 'w1', kind: 'simpleAda', status: 'pending', attempt: 0, maxAttempts: 3, priority: 100, createdBy: 'alice',
     });
+  });
+
+  it('refuses one key for another wallet or kind with 409: a key names one job per user', async () => {
+    const db = makeStore();
+    const first = await insertJob(db as never, { walletId: 'w1', kind: 'simpleAda', request: '{}', idempotencyKey: 'k1', createdBy: 'alice' });
+
+    await expect(insertJob(db as never, { walletId: 'w2', kind: 'simpleAda', request: '{}', idempotencyKey: 'k1', createdBy: 'alice' }))
+      .rejects.toMatchObject({ statusCode: 409, code: 'ODATANO_IDEMPOTENCY_KEY_CONFLICT' });
+    await expect(insertJob(db as never, { walletId: 'w1', kind: 'payout', request: '{}', idempotencyKey: 'k1', createdBy: 'alice' }))
+      .rejects.toMatchObject({ statusCode: 409 });
+    // another user's key of the same text is another job
+    const other = await insertJob(db as never, { walletId: 'w2', kind: 'payout', request: '{}', idempotencyKey: 'k1', createdBy: 'bob' });
+    expect(other.jobId).not.toBe(first.jobId);
+    expect(db.tables.get(JOBS)).toHaveLength(2);
   });
 
   it('dedupes on (walletId, kind, idempotencyKey) for non-failed rows', async () => {

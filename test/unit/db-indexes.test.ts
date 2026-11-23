@@ -3,7 +3,7 @@
  * the statements are plain SQL both databases accept, and a failing statement
  * never stops the others.
  */
-import { DB_INDEXES, DROPPED_DB_INDEXES, ensureDbIndexes, indexStatement } from '../../srv/utils/db-indexes';
+import { DB_INDEXES, DROPPED_DB_INDEXES, INDEX_LOCK_STATEMENT, INDEX_UNLOCK_STATEMENT, INVALID_INDEXES_STATEMENT, ensureDbIndexes, indexStatement } from '../../srv/utils/db-indexes';
 
 vi.mock('@sap/cds', () => {
   const cdsMock = {
@@ -61,10 +61,10 @@ describe('DB_INDEXES', () => {
 
   it('uses the PostgreSQL spelling (NULLS LAST) only on postgres; SQLite gets the plain DESC', () => {
     const desc = DB_INDEXES.find((i) => i.name === 'odatano_cardano_blocks_height_desc')!;
-    expect(indexStatement(desc, 'postgres')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_height_desc ON odatano_cardano_Blocks (height DESC NULLS LAST)');
+    expect(indexStatement(desc, 'postgres')).toBe('CREATE INDEX CONCURRENTLY IF NOT EXISTS odatano_cardano_blocks_height_desc ON odatano_cardano_Blocks (height DESC NULLS LAST)');
     // a nullable column: CAP sorts it ASC NULLS FIRST or DESC NULLS LAST, one index serves both
     const time = DB_INDEXES.find(i => i.name === 'odatano_cardano_blocks_time')!;
-    expect(indexStatement(time, 'postgres')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_time ON odatano_cardano_Blocks (time NULLS FIRST)');
+    expect(indexStatement(time, 'postgres')).toBe('CREATE INDEX CONCURRENTLY IF NOT EXISTS odatano_cardano_blocks_time ON odatano_cardano_Blocks (time NULLS FIRST)');
     expect(indexStatement(time, 'sqlite')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_time ON odatano_cardano_Blocks (time)');
     expect(indexStatement(desc, 'sqlite')).toBe('CREATE INDEX IF NOT EXISTS odatano_cardano_blocks_height_desc ON odatano_cardano_Blocks (height DESC)');
     expect(indexStatement(desc)).not.toContain('NULLS');
@@ -94,6 +94,59 @@ describe('ensureDbIndexes', () => {
     const r = await ensureDbIndexes({ kind: 'hana', run: async (sql: string) => { ran.push(sql); return 0; } });
     expect(ran).toEqual([]);
     expect(r).toEqual({ ensured: [], failed: [] });
+  });
+
+  it('builds on PostgreSQL on a connection of its own, outside the service transactions, and rebuilds an invalid index', async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const closed: unknown[] = [];
+    const client = {
+      query: async (sql: string, params?: unknown[]) => {
+        queries.push({ sql, params });
+        if (sql === INDEX_LOCK_STATEMENT) return { rows: [{ locked: true }] };
+        return { rows: sql === INVALID_INDEXES_STATEMENT ? [{ name: 'odatano_cardano_blocks_time' }] : [] };
+      },
+    };
+    const db = {
+      kind: 'postgres',
+      options: { credentials: { schema: 'odatano' } },
+      run: async () => { throw new Error('must not run inside a service transaction'); },
+      factory: { create: async () => client, destroy: (c: unknown) => { closed.push(c); } },
+    };
+
+    const r = await ensureDbIndexes(db);
+
+    expect(r).toEqual({ ensured: DB_INDEXES.map(s => s.name), failed: [] });
+    expect(queries[0].sql).toBe('SET search_path TO "odatano", public');
+    expect(queries[1].sql).toBe(INDEX_LOCK_STATEMENT);
+    expect(queries[2]).toEqual({ sql: INVALID_INDEXES_STATEMENT, params: [DB_INDEXES.map(s => s.name)] });
+    expect(queries[3].sql).toBe('DROP INDEX CONCURRENTLY IF EXISTS odatano_cardano_blocks_time');
+    expect(queries.filter(q => q.sql.startsWith('CREATE INDEX CONCURRENTLY IF NOT EXISTS'))).toHaveLength(DB_INDEXES.length);
+    expect(queries.at(-1)!.sql).toBe(INDEX_UNLOCK_STATEMENT);
+    expect(closed).toEqual([client]);
+  });
+
+  it('leaves the indexes to the instance that holds the lock, and drops nothing', async () => {
+    const queries: string[] = [];
+    const client = { query: async (sql: string) => { queries.push(sql); return { rows: sql === INDEX_LOCK_STATEMENT ? [{ locked: false }] : [] }; } };
+    const db = { kind: 'postgres', run: async () => 0, factory: { create: async () => client, destroy: () => undefined } };
+
+    expect(await ensureDbIndexes(db)).toEqual({ ensured: [], failed: [] });
+    expect(queries).toEqual([INDEX_LOCK_STATEMENT]);
+  });
+
+  it('keeps going when an invalid index cannot be dropped', async () => {
+    const client = {
+      query: async (sql: string) => {
+        if (sql === INDEX_LOCK_STATEMENT) return { rows: [{ locked: true }] };
+        if (sql === INVALID_INDEXES_STATEMENT) return { rows: [{ name: 'odatano_cardano_blocks_time' }] };
+        if (sql.startsWith('DROP INDEX CONCURRENTLY IF EXISTS odatano_cardano_blocks_time')) throw new Error('deadlock detected');
+        return { rows: [] };
+      },
+    };
+    const db = { kind: 'postgres', run: async () => 0, factory: { create: async () => client, destroy: () => undefined } };
+
+    const r = await ensureDbIndexes(db);
+    expect(r.ensured).toHaveLength(DB_INDEXES.length);
   });
 
   it('does nothing without a database service', async () => {

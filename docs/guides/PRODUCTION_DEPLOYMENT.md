@@ -1,6 +1,7 @@
 # ODATANO Production Deployment Guide
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
+
 ---
 
 ## Table of Contents
@@ -18,22 +19,20 @@
 
 ## Pre-Deployment Checklist
 
-- [ ] **Node >= 22.5** and **@sap/cds 10** on the target runtime (hard requirements)
-- [ ] **`cds deploy` run** when upgrading from 1.x — 2.0 adds `CardanoSyncState`, `CardanoReorgLog`,
-      `CardanoWorkerWallets`, `CardanoWalletJobs` plus a `dedupKey` column with a unique constraint
-- [ ] `HSM_REQUIRES_ROLE` set whenever `HSM_ENABLED=true` — startup throws `ConfigError` without it
-- [ ] Role collections assigned: `CardanoReader` reads, `CardanoUser` also builds, submits and signs,
-      `CardanoAdmin` also operates the crawler, the worker and agent grants. A user without a role gets 403
-- [ ] `NETWORK` set to target network (`mainnet`, `preview`, `preprod`)
-- [ ] `BACKENDS` specifies at least one provider
-- [ ] `KOIOS_API_KEY` set if the Koios public-tier rate limit is too low (optional)
-- [ ] With `blockfrost` in `BACKENDS`: `BLOCKFROST_API_KEY` set and matching the network prefix (see table)
-- [ ] (No transaction-builder config needed — Buildooor is the only builder)
+- [ ] Node.js 22.5 or later and `@sap/cds` 10 on the target runtime
+- [ ] Coming from 1.x: the steps of [Upgrading to 2.0](UPGRADE_2.0.md) are done
 - [ ] `NODE_ENV=production` set
-- [ ] Outbound HTTPS (port 443) to blockchain APIs is allowed
-- [ ] If using Ogmios: Cardano Node fully synced, WebSocket reachable
-- [ ] TLS/SSL termination configured for public-facing deployments
-- [ ] Build passes: `npm run build && npm run typecheck && npm test`
+- [ ] `NETWORK` set to the target network (`mainnet`, `preview`, `preprod`)
+- [ ] `BACKENDS` names at least one backend
+- [ ] With `blockfrost` in `BACKENDS`: `BLOCKFROST_API_KEY` set, with the prefix of the network (see table)
+- [ ] With `ogmios` in `BACKENDS`: the node is synced and its WebSocket is reachable
+- [ ] `KOIOS_API_KEY` set if the public rate limit of Koios is too low
+- [ ] With `HSM_ENABLED=true`: `HSM_PKCS11_MODULE`, `HSM_PIN` and `HSM_REQUIRES_ROLE` set
+- [ ] Users hold their roles. `CardanoReader` reads. `CardanoUser` also builds, submits and signs.
+      `CardanoAdmin` also operates the crawler, the worker and agent grants. A login without a role gets 403
+- [ ] Outbound HTTPS (port 443) to the providers is allowed
+- [ ] TLS ends in front of a public deployment
+- [ ] `npm run build && npm run typecheck && npm test` pass
 
 | Network | Address Prefix | Blockfrost Project Prefix (only with Blockfrost) |
 |---------|---------------|--------------------------|
@@ -45,68 +44,64 @@
 
 ## Environment Configuration
 
+A setting is an environment variable, or a key of `cds.requires.odatano-core` in a CAP project. The key
+wins over the variable.
+
 ### Core Variables
 
-| Variable | Required | Default | Production | Description |
-|----------|----------|---------|-----------|-------------|
-| `NETWORK` | Yes | `preview` | `mainnet` | Target Cardano network |
-| `BACKENDS` | Yes | `koios` | `ogmios,koios` | Comma-separated backend providers (order = priority) |
-| `NODE_ENV` | Yes | `development` | `production` | Activates HANA + XSUAA profiles |
-| `PORT` | No | `4004` | `4004` | HTTP server port |
-| `DEBUG` | No | – | – | Comma-separated `cds.log` module names logged at debug level |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NETWORK` | `preview` | `mainnet`, `preview` or `preprod` |
+| `BACKENDS` | `koios` | Comma-separated: `koios`, `ogmios`, `blockfrost`, `odatano`. The order has no effect; [Backend Configuration](BACKEND_CONFIGURATION.md) says which backend answers what |
+| `NODE_ENV` | `development` | `production` selects HANA and XSUAA (profile `[production]` in `package.json`) |
+| `PORT` | `4004` | HTTP port |
+| `DEBUG` | none | Comma-separated `cds.log` module names that log at debug level |
 
 ### API Keys
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `KOIOS_API_KEY` | No | Optional bearer token; raises the Koios public-tier rate limit |
-| `BLOCKFROST_API_KEY` | If using Blockfrost | Project ID (must match `NETWORK`) |
-| `OGMIOS_URL` | If using Ogmios | WebSocket URL |
+| `KOIOS_API_KEY` | No | Token that raises the public rate limit of Koios |
+| `BLOCKFROST_API_KEY` | With `blockfrost` | Project id; its prefix has to match `NETWORK` |
+| `OGMIOS_URL` | With `ogmios` | WebSocket URL |
+| `ODATANO_URL`, `ODATANO_API_KEY` | With `odatano` | The other ODATANO and its gateway key. The URL is required on mainnet |
 
 ### Timeouts & Caching
 
-| Variable | Default | Production | Description |
+| Variable | Default | `prod.mtaext.example` | Description |
 |----------|---------|-----------|-------------|
-| `PRIMARY_TIMEOUT_MS` | `30000` | `8000` | Primary backend timeout |
-| `FALLBACK_TIMEOUT_MS` | `60000` | `10000` | Fallback backend timeout |
-| `INDEX_TTL_MS` | `3600000` | `600000` | Cache TTL for temporal entities (addresses, accounts) |
+| `PRIMARY_TIMEOUT_MS` | `30000` | `8000` | Time limit of one call to Ogmios or Blockfrost, and of one HTTP request to Koios |
+| `FALLBACK_TIMEOUT_MS` | `60000` | `10000` | Time limit of one call to Koios or to another ODATANO |
+| `INDEX_TTL_MS` | `3600000` | `600000` | How long a stored temporal row, such as an address or an account, is served before a backend is asked again |
 
-### Production .env Template
+### Optional Features
+
+All three are off by default. The [Crawler Guide](CRAWLER_GUIDE.md) describes the crawler, the
+[User Guide](USER_GUIDE.md) the wallet worker and agent grants; the [Security Guide](SECURITY_GUIDE.md#hsm-pkcs11-integration) describes the HSM.
 
 ```.env
-NETWORK=mainnet
-NODE_ENV=production
-PORT=4004
-BACKENDS=ogmios,koios
-OGMIOS_URL=ws://ogmios:1337
-KOIOS_API_KEY=yourKoiosTokenHere        # optional
-# BLOCKFROST_API_KEY=mainnetYourApiKeyHere  # only with blockfrost in BACKENDS
-PRIMARY_TIMEOUT_MS=30000
-FALLBACK_TIMEOUT_MS=60000
-INDEX_TTL_MS=3600000
-
-# --- HSM signing (optional) -------------------------------------------------
+# HSM signing
 HSM_ENABLED=false
-# MANDATORY when HSM_ENABLED=true — startup throws ConfigError without it.
-# Names the role required for SignWithHsm / SignAndSubmitWithHsm and for
-# SubmitWalletJob against an HSM-backed wallet (403 ODATANO_FORBIDDEN otherwise).
-HSM_REQUIRES_ROLE=
+HSM_PKCS11_MODULE=                # required when enabled
+HSM_PIN=                          # required when enabled; from a credential store, never in a file
+HSM_REQUIRES_ROLE=                # required when enabled; the role a caller needs for the HSM actions
 HSM_SLOT=0
-HSM_PIN=                          # supply via the credential store, never in the file
-HSM_KEY_LABEL=cardano-signing-key
+HSM_KEY_LABEL=                    # label of the key, or HSM_KEY_ID
 
-# --- Chain crawler / pre-sync (off by default) ------------------------
+# Chain crawler
 CRAWLER_ENABLED=false
 CRAWLER_START_SLOT=               # required when enabled
 CRAWLER_START_HASH=               # required when enabled
+CRAWLER_START_HEIGHT=
 CRAWLER_SOURCE=auto               # ogmios | pagination | auto
 CRAWLER_CONFIRMATION_DEPTH=3
 CRAWLER_BATCH_SIZE=20
 CRAWLER_POLL_INTERVAL_MS=20000
 
-# --- Wallet worker (off by default) -----------------------------------
+# Wallet worker
 WALLET_WORKER_ENABLED=false
-WALLET_WORKER_WALLETS=            # [{"walletId":"treasury","signerType":"hsm"}]
+ENCRYPTION_KEY=                   # required in production when a software key is given as iv:authTag:ciphertext
+WALLET_WORKER_WALLETS=            # [{"walletId":"treasury","signerType":"hsm","requiresRole":"Treasurer"}]
 WALLET_WORKER_MAX_CONCURRENT=4
 WALLET_WORKER_CONFIRMATION_DEPTH=3
 WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000
@@ -115,224 +110,130 @@ WALLET_WORKER_MAX_ATTEMPTS=3
 WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
 ```
 
-Both subsystems run continuously once enabled and consume backend requests on their own
-schedule — factor that into rate-limit and cost planning, and prefer Ogmios for the crawler.
+The crawler and the wallet worker run all the time once enabled and call the backends on their own
+schedule. Count that into the rate limit and the cost of a provider. Chain-sync needs `ogmios` in
+`BACKENDS`; a reachable Ogmios alone is not enough.
 
 ---
+
 ## SAP BTP Cloud Foundry Deployment
 
 ### Prerequisites
 
 - SAP BTP account with Cloud Foundry enabled
-- SAP HANA Cloud instance provisioned
-- CLI tools: `cf`, `mbt` (MTA Build Tool)
+- SAP HANA Cloud instance
+- CLI tools: `cf` and `mbt` (MTA Build Tool)
 
 ### BTP Architecture
 
 ```
 BTP Cloud Foundry
-├── odatano-srv (CAP Node.js Backend)
-│   ├── CardanoODataService        (/odata/v4/cardano/)
-│   ├── CardanoTransactionService  (/odata/v4/cardano-transaction/)
-│   ├── CardanoSignService         (/odata/v4/cardano-sign/)
-│   ├── CardanoIndexerService      (/odata/v4/cardano-indexer/  — crawler control, Admin)
-│   └── CardanoWorkerService       (/odata/v4/cardano-worker/   — wallet jobs, Admin for pause/resume)
-│
-├── odatano-db-deployer (HDI Container Deployment)
-│   └── Deploys schema to HANA Cloud
-│
-├── odatano (Approuter)
-│   ├── Authentication (XSUAA)
-│   ├── Routing to srv-api
-│   └── Routing to HTML5 Apps
-│
-├── odatano-html5-repo-host
-│   └── wallet.zip
-│
+├── odatano-srv             CAP service with the seven OData services under /odata/v4/
+├── odatano                 AppRouter: XSUAA login, routes to the service and to the wallet app
+├── odatano-db-deployer     deploys the schema into the HDI container
+├── odatano-app-deployer    uploads the wallet app (odatanoviewwallet.zip) to the HTML5 repository
 └── Services
-    ├── odatano-db (HANA Cloud HDI)
-    ├── odatano-auth (XSUAA)
-    ├── odatano-destination-service
-    └── odatano-html5-repo-runtime
+    ├── odatano-auth             XSUAA, created from xs-security.json
+    ├── odatano-db               HANA HDI container
+    ├── odatano-html5-repo-host  HTML5 repository, plan app-host
+    └── odatano-html5-runtime    HTML5 repository, plan app-runtime
 ```
 
-### mta.yaml (Key Modules)
+### mta.yaml
 
-```yaml
-_schema-version: 3.3.0
-ID: odatano
-version: 2.0.0
-
-build-parameters:
-  before-all:
-    - builder: custom
-      commands:
-        - npm ci
-        - npx cds-typer "*" --outputDirectory @cds-models
-        - npx tsc -p tsconfig.build.json
-        - npx cds build --production
-        - node scripts/build/gen-srv-package.js
-
-modules:
-  - name: odatano-srv
-    type: nodejs
-    path: gen/srv
-    parameters:
-      instances: 1
-      memory: 512M
-      buildpack: nodejs_buildpack
-    requires:
-      - name: odatano-auth
-      - name: odatano-db
-
-  - name: odatano-db-deployer
-    type: hdb
-    path: gen/db
-    parameters:
-      buildpack: nodejs_buildpack
-    requires:
-      - name: odatano-db
-
-resources:
-  - name: odatano-auth
-    type: org.cloudfoundry.managed-service
-    parameters:
-      service: xsuaa
-      service-plan: application
-      path: ./xs-security.json
-
-  - name: odatano-db
-    type: com.sap.xs.hdi-container
-    parameters:
-      service: hana
-      service-plan: hdi-shared
-```
+- The build runs `npm ci`, `cds-typer`, `tsc -p tsconfig.build.json`, `cds build --production` and
+  `scripts/build/gen-srv-package.js`, in this order. `tsc` must come first: the module runs compiled
+  JavaScript, and `gen-srv-package.js` refuses a build whose sources have no compiled twin.
+- `gen-srv-package.js` writes the module's `package.json` with `@sap/cds`, the HANA adapter and
+  `@sap/xssec` at the versions of the root `package-lock.json`, the root `overrides`, the optional
+  `pkcs11js` and Node.js `^22.5.0 || ^24.0.0`. It writes a lockfile, and the module installs with
+  `npm ci --omit=dev`.
+- The build task (`.cdsrc.json`) is `nodejs`. It copies neither the root lockfile nor `.cdsrc.json` into
+  `gen/srv`.
+- `odatano-srv` runs one instance with the properties `NETWORK: preview`, `BACKENDS: koios` and
+  `HSM_ENABLED: false`. It sets no memory and no disk size, so the defaults of the platform apply.
+- The AppRouter gets 256M memory and 256M disk.
 
 ### xs-security.json
 
-```json
-{
-  "scopes": [
-    { "name": "$XSAPPNAME.Read", "description": "Read Cardano blockchain data" },
-    { "name": "$XSAPPNAME.Transact", "description": "Build and submit Cardano transactions" },
-    { "name": "$XSAPPNAME.Sign", "description": "Sign transactions and manage HSM" }
-  ],
-  "role-templates": [
-    { "name": "CardanoReader", "description": "Read Cardano blockchain data", "scope-references": ["$XSAPPNAME.Read"] },
-    { "name": "CardanoUser", "description": "Read, build/submit and sign Cardano transactions (no operational admin)", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"] },
-    { "name": "CardanoAdmin", "description": "Everything a CardanoUser may, and operate the chain crawler, the wallet worker and agent grants", "scope-references": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign", "$XSAPPNAME.Admin"] }
-  ],
-  "authorities": ["$XSAPPNAME.Read", "$XSAPPNAME.Transact", "$XSAPPNAME.Sign"]
-}
-```
+Scopes and role templates are shown under [xs-security.json](SECURITY_GUIDE.md#xs-securityjson) in the
+Security Guide.
 
 ### Approuter Configuration (xs-app.json)
 
-```json
-{
-  "welcomeFile": "/odatanoviewwallet/index.html",
-  "authenticationMethod": "route",
-  "routes": [
-    {
-      "source": "^/odata/(.*)$",
-      "target": "/odata/$1",
-      "destination": "srv-api",
-      "authenticationType": "xsuaa",
-      "csrfProtection": true
-    },
-    {
-      "source": "^/odatanoviewwallet/(.*)$",
-      "target": "/odatanoviewwallet/$1",
-      "service": "html5-apps-repo-rt",
-      "authenticationType": "xsuaa"
-    },
-    {
-      "source": "^/(.*)$",
-      "target": "$1",
-      "destination": "srv-api",
-      "authenticationType": "xsuaa",
-      "csrfProtection": true
-    }
-  ]
-}
-```
+`app/router/xs-app.json` has three routes. All of them require an XSUAA login. The two routes to the
+service set `csrfProtection: true`. The welcome page is `/odatanoviewwallet/index.html`.
 
-> **HTML5 Repo naming:** The HTML5 Application Repository removes dots from app names. The wallet app's `sap.app.id` (`manifest.json`) is `odatanoview.wallet`, so it is served under `odatanoviewwallet` in routes and `welcomeFile`. The dotted name must NOT appear in `app/router/xs-app.json` — a mismatch makes the welcome redirect 503.
+| Path | Goes to |
+|------|---------|
+| `/odata/...` | the service (`srv-api`) |
+| `/odatanoviewwallet/...` | the HTML5 repository |
+| everything else | the service (`srv-api`) |
+
+> **HTML5 repository names.** The repository removes dots from application names. The wallet app has the id
+> `odatanoview.wallet` (`app/wallet/webapp/manifest.json`) and is served as `odatanoviewwallet`. The
+> routes and the welcome page have to use the name without the dot, or the welcome page answers 503.
 
 ### Build & Deploy
 
 ```bash
-# Build from the repo root. On Windows, run mbt build in WSL — it does not
-# work on native Windows/MSYS. The repo lives on the C: drive, mounted at /mnt/c:
-cd /mnt/c/Users/<you>/ODATANO/ODATANO && npm ci && mbt build
-```
+# from the repository root; on Windows inside WSL, mbt does not build on native Windows or MSYS
+npm ci && mbt build
 
-> The mtar version comes from `version:` in `mta.yaml` — keep it in sync with `package.json` on each release (`npm version` does NOT update `mta.yaml`).
-
-**Deploy:**
-
-```bash
-# Login
 cf login -a https://api.cf.<region>.hana.ondemand.com
-
-# Deploy MTA (filename matches the version in mta.yaml)
-cf deploy mta_archives/odatano_2.0.0.mtar -e prod.mtaext
+cf deploy mta_archives/odatano_<version>.mtar -e prod.mtaext
 ```
+
+`<version>` is `version:` of `mta.yaml`. Keep it equal to `package.json`; `npm version` does not change
+`mta.yaml`.
 
 ### Environment Variables (`odatano-srv`)
 
-`mta.yaml` declares the blockchain env vars as module `properties:` (`NETWORK`,
-`BACKENDS` = `koios`, `HSM_ENABLED`). API keys are not in `mta.yaml` and
-never belong there, since it is committed to git. `KOIOS_API_KEY` is optional; with
-`blockfrost` in `BACKENDS`, `BLOCKFROST_API_KEY` is required. There are two ways to supply values:
+`mta.yaml` sets `NETWORK`, `BACKENDS` and `HSM_ENABLED` as properties of the module. It holds no keys,
+because it is committed. There are two ways to supply values.
 
-**Recommended — MTA extension descriptor (`.mtaext`):** durable across redeploys
-and keeps secrets out of git.
+**Extension descriptor (`prod.mtaext`).** It survives a redeploy and keeps secrets out of git.
 
-1. Copy the template and fill in real values:
+1. Copy the template and fill in the values:
    ```bash
    cp prod.mtaext.example prod.mtaext   # prod.mtaext is git-ignored
-   # edit prod.mtaext → set NETWORK, BACKENDS, the optional KOIOS_API_KEY, etc.
    ```
-2. Deploy with `-e` (see above). Values in `prod.mtaext` override the
-   placeholders in `mta.yaml` at deploy time.
+2. Deploy with `-e prod.mtaext`. Its values replace the properties of `mta.yaml`.
 
-The extension descriptor's `extends:` must match the top-level `ID:` in
-`mta.yaml` (`odatano`), and the module name must match (`odatano-srv`).
+`extends:` in the descriptor has to be the `ID:` of `mta.yaml` (`odatano`), and the module name has to be
+`odatano-srv`.
 
-**Quick alternative — `cf set-env` (not durable):** good for a one-off patch, but
-⚠️ **overwritten on the next `cf deploy`** by the `mta.yaml` properties.
+**`cf set-env`.** For a single change. The next `cf deploy` overwrites it with the properties of `mta.yaml`.
 
 ```bash
 cf set-env odatano-srv KOIOS_API_KEY "yourKoiosTokenHere"
 cf set-env odatano-srv NETWORK "mainnet"
-# ...other vars...
-cf restage odatano-srv   # restage to apply
+cf restage odatano-srv
 ```
 
 ### Important BTP Files
 
 | File | Purpose |
 |------|---------|
-| `mta.yaml` | Multi-Target Application descriptor |
-| `prod.mtaext.example` | Template for deploy-time env/secret overrides (copy to `prod.mtaext`) |
-| `prod.mtaext` | Real deploy-time overrides — **git-ignored**, holds the real API key |
-| `xs-security.json` | XSUAA security configuration |
-| `app/router/xs-app.json` | Approuter routing rules |
-| `app/wallet/xs-app.json` | HTML5 app routing (included in ZIP) |
-| `app/wallet/ui5.yaml` | UI5 build config (must include `xs-app.json` in `additionalFiles`) |
+| `mta.yaml` | Multi-target application descriptor |
+| `prod.mtaext.example` | Template for the values set at deploy time |
+| `prod.mtaext` | Your copy with the real values, git-ignored |
+| `xs-security.json` | XSUAA scopes and role templates |
+| `app/router/xs-app.json` | Routes of the AppRouter |
+| `app/wallet/xs-app.json` | Routes of the wallet app, part of its ZIP |
+| `app/wallet/ui5.yaml` | UI5 build; `additionalFiles` has to list `xs-app.json` |
 
 ### Useful CF Commands
 
 ```bash
-cf apps                          # App status
-cf logs odatano-srv --recent     # Recent logs
-cf logs odatano-srv              # Live logs
-cf services                      # List services
-cf set-env <app> <VAR> "<val>"   # Set env var
-cf restart <app>                 # Restart (no restage)
-cf restage <app>                 # Restage with new env
-cf html5-list -di odatano-destination-service -u  # List HTML5 apps
+cf apps                          # state of the applications
+cf logs odatano-srv --recent     # recent log
+cf logs odatano-srv              # live log
+cf services                      # service instances
+cf set-env <app> <VAR> "<val>"   # set a variable
+cf restart <app>                 # restart without restaging
+cf restage <app>                 # restage with the new environment
+cf html5-list                    # applications in the HTML5 repository (HTML5 plugin)
 ```
 
 ---
@@ -353,9 +254,15 @@ cf html5-list -di odatano-destination-service -u  # List HTML5 apps
 { "cds": { "requires": { "db": { "kind": "sqlite", "credentials": { "url": "db.sqlite" } } } } }
 ```
 
+### PostgreSQL
+
+The Docker image connects with `ODATANO_DB_URL`; see [Database](DOCKER_DEPLOYMENT.md#database) in the
+Docker guide. A CAP project that uses the plugin configures `@cap-js/postgres` as its `db`.
+
 ### SAP HANA (Production / BTP)
 
-Automatically activated when `NODE_ENV=production`:
+Selected by `NODE_ENV=production` through `.cdsrc.json` of this repository. The npm package carries no
+database or login configuration; a project that uses the plugin sets its own.
 
 ```json
 {
@@ -373,80 +280,66 @@ Automatically activated when `NODE_ENV=production`:
 }
 ```
 
-For high-throughput, increase pool: `"min": 2, "max": 20`.
-
-The `odatano-db-deployer` module in `mta.yaml` handles HDI container schema deployment. If you get `SqlError: Could not find table or view`, verify this module deployed successfully (`cf logs odatano-db-deployer --recent`).
+The module `odatano-db-deployer` of `mta.yaml` deploys the schema into the HDI container. A container
+created by 1.x is not migrated; [Upgrading to 2.0](UPGRADE_2.0.md#database) has the steps for a new one.
 
 ---
 
 ## Performance Tuning
 
-### Timeout Strategy
+### Timeouts
 
-| Scenario | `PRIMARY_TIMEOUT_MS` | `FALLBACK_TIMEOUT_MS` |
-|----------|---------------------|----------------------|
-| Ogmios as primary (local) | `5000` | `8000` |
-| External provider as primary (Koios, Blockfrost) | `8000` | `10000` |
-
-**Max request latency** = `PRIMARY_TIMEOUT_MS + (N-1) * FALLBACK_TIMEOUT_MS` where N = number of backends.
+A request that fails over waits for each backend in turn. Its worst case is the sum of the time limits of
+the backends it tries. Lower `PRIMARY_TIMEOUT_MS` and `FALLBACK_TIMEOUT_MS` for a faster failover;
+`prod.mtaext.example` uses 8 and 10 seconds.
 
 ### Cache TTL
 
+`INDEX_TTL_MS` is the time a stored temporal row is served before a backend is asked again:
+
 ```env
-INDEX_TTL_MS=600000     # 10 min (recommended production)
-INDEX_TTL_MS=3600000    # 1 hour (low-change data)
-INDEX_TTL_MS=60000      # 1 min (near-real-time)
+INDEX_TTL_MS=60000      # 1 minute, close to live
+INDEX_TTL_MS=600000     # 10 minutes, the value of prod.mtaext.example
+INDEX_TTL_MS=3600000    # 1 hour, the default
 ```
 
-Non-temporal entities (transactions, blocks) are cached permanently — blockchain data is immutable.
+Blocks and transactions do not change on chain. They are stored once and do not expire.
 
 ### Resource Limits
 
-**Docker:**
-```yaml
-deploy:
-  resources:
-    limits:   { memory: 512M, cpus: '1.0' }
-    reservations: { memory: 256M, cpus: '0.5' }
-```
-
-**BTP Cloud Foundry:**
-```yaml
-parameters:
-  memory: 512M
-  disk-quota: 1G
-  instances: 1    # Use instances: 2+ with HANA for horizontal scaling
-```
-
-> SQLite limits to single-instance. Multi-instance scaling requires HANA.
+- `mta.yaml` runs one instance of `odatano-srv` and sets no memory size.
+- SQLite serves one instance. Several instances need PostgreSQL; see the table above for what is tested
+  on HANA.
 
 ---
 
 ## Health Monitoring
 
-### Endpoints
+Both probes answer without credentials and carry no secrets. Point a load balancer or an upstream gateway
+at them, not at a service document: that one needs a login.
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/odata/v4/cardano/$metadata` | GET | Service health (200 + XML) |
-| `/odata/v4/cardano-transaction/$metadata` | GET | Transaction service health (200 + XML) |
-| `/odata/v4/cardano-sign/$metadata` | GET | Signing service health (200 + XML) |
+| Endpoint | Method | Answer |
+|----------|--------|--------|
+| `/odata/v4/cardano-indexer/getLiveness()` | GET | 200 `{ status: "alive", timestamp, uptime, version, network }` while the process runs. No backend and no database is asked |
+| `/odata/v4/cardano-indexer/getReadiness()` | GET | 200 `{ status: "ready", timestamp, context, database, hsm }`, or 503 with `status: "not_ready"` while the app context, the database or a configured HSM is missing. `hsm` is `null` without an HSM |
 
+The state of crawler, worker and backends needs a login: `getStatus()`, `GetWorkerStatus()`,
+`GetNetworkInformation`.
+
+---
 
 ## Mainnet Considerations
 
-Setting `NETWORK=mainnet` affects:
-- Provider endpoints: Koios `api.koios.rest`, Blockfrost `cardano-mainnet.blockfrost.io`
-- Address validation: expects `addr1...` / `stake1...` prefixes
-- Ogmios must connect to a mainnet-synced node
+With `NETWORK=mainnet`:
 
-### Security Best Practices
+- Addresses have to start with `addr1` and stake addresses with `stake1`.
+- Koios is asked at `api.koios.rest`. A Blockfrost key needs the prefix `mainnet`.
+- Ogmios has to be connected to a mainnet node.
+- The `odatano` backend needs `ODATANO_URL`.
 
-1. **Private key isolation** — ODATANO never handles private keys. All signing is external.
-2. **XSUAA authentication** — Enable `auth: "xsuaa"` in the production profile.
-3. **Rate limiting** — Use a reverse proxy in front of ODATANO.
-4. **Audit trail** — TransactionBuilds, TransactionSubmissions, SigningRequests entities log all operations.
-5. **Network isolation** — Expose only through a reverse proxy or API gateway.
+The [Security Guide](SECURITY_GUIDE.md) covers logins, roles and signing keys. The
+[Docker guide](DOCKER_DEPLOYMENT.md#schema-changes-at-start) says what a schema change costs on a large
+database.
 
 ---
 
@@ -454,33 +347,31 @@ Setting `NETWORK=mainnet` affects:
 
 ### Service Fails to Start
 
-**"Failed to initialize blockchain components"** — Invalid API key or unreachable backend.
+The log line `Failed to initialize blockchain components` names the cause: a setting that is refused, an
+invalid key or a backend that cannot be reached. The process keeps running and its requests answer 503.
 
 ```bash
-# Docker
-docker-compose logs -f odatano
+docker compose logs -f odatano          # Docker
+cf logs odatano-srv --recent            # BTP
 
-# BTP
-cf logs odatano-srv --recent
-
-# Verify the providers
+# are the providers reachable?
 curl -s https://api.koios.rest/api/v1/tip
 curl -s -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/api/v0/health   # only with Blockfrost
 ```
 
 ### "SqlError: Could not find table or view"
 
-Database schema not deployed. On BTP, ensure the `odatano-db-deployer` module succeeded:
+The schema is not deployed.
 
-```bash
-cf logs odatano-db-deployer --recent
-```
-
-For Docker, the schema deploys during image build — rebuild with `docker-compose build --no-cache`.
+- **BTP:** check the deployer with `cf logs odatano-db-deployer --recent`.
+- **Docker:** the image deploys the schema at every start. Look for `schema deploy failed` in the log of
+  the container, and check that `ODATANO_DB_DEPLOY` is not `never`.
+- **Plugin:** run `node node_modules/@odatano/core/scripts/deploy-schema.mjs`. A plain `cds deploy` drops
+  and recreates every table of a SQLite database.
 
 ### "All backends failed" (503)
 
-All configured backends are unreachable. Check each individually:
+No configured backend answered. Check each one:
 
 ```bash
 curl https://api.koios.rest/api/v1/tip
@@ -488,24 +379,24 @@ curl -H "project_id: $BLOCKFROST_API_KEY" https://cardano-mainnet.blockfrost.io/
 curl http://localhost:1337/health
 ```
 
-Verify outbound HTTPS (port 443) from the container:
+Check outbound HTTPS from inside the container:
+
 ```bash
-docker exec odatano-production wget -q -O- https://api.koios.rest/api/v1/tip
+docker exec odatano-service wget -q -O- https://api.koios.rest/api/v1/tip
 ```
 
 ### Blockfrost 403 / "Invalid project"
 
-API key prefix doesn't match `NETWORK`. `mainnet` requires `mainnetXXX`, `preview` requires `previewXXX`.
+The prefix of the key does not match `NETWORK`: `mainnet` needs `mainnetXXX`, `preview` needs `previewXXX`.
 
-### BTP: 503 for Wallet Viewer
+### BTP: 503 for the Wallet App
 
-HTML5 Application Repository removes dots from app names. App ID `odatanoview.walletviewer` → route must use `odatanoviewwalletviewer`.
-
-Diagnose: `cf html5-list -di odatano-destination-service -u`
+A route uses the application id with its dot. See "HTML5 repository names" above. `cf html5-list` shows
+the names the repository serves.
 
 ### BTP: 500 "Application does not have xs-app.json"
 
-`xs-app.json` not included in the wallet ZIP. Add to `additionalFiles` in `app/wallet/ui5.yaml`:
+`xs-app.json` is missing from the ZIP of the wallet app. `app/wallet/ui5.yaml` has to list it:
 
 ```yaml
 builder:
@@ -513,43 +404,35 @@ builder:
     - name: ui5-task-zipper
       afterTask: generateVersionInfo
       configuration:
-        archiveName: wallet
+        archiveName: odatanoviewwallet
         additionalFiles:
           - xs-app.json
 ```
 
 ### MTA Build Fails on Windows
 
-Use WSL — `mbt build` doesn't work on Windows/MSYS. See [Build & Deploy](#build--deploy) above.
+`mbt build` does not work on native Windows or MSYS. Build inside WSL; see [Build & Deploy](#build--deploy).
 
 ### Slow Responses
 
-1. First request for an entity: 1-5s (blockchain fetch). Subsequent: near-instant (cache).
-2. Lower timeouts for faster failover: `PRIMARY_TIMEOUT_MS=5000`
-3. Increase `INDEX_TTL_MS` to reduce re-fetches.
-4. Check the status of the configured providers (Koios, or [status.blockfrost.io](https://status.blockfrost.io) with Blockfrost)
+1. The first read of an entity asks a backend. Later reads come from the database.
+2. A slow backend delays the failover: lower `PRIMARY_TIMEOUT_MS`.
+3. A higher `INDEX_TTL_MS` asks the backends less often.
+4. Check the state of the providers, for Blockfrost at [status.blockfrost.io](https://status.blockfrost.io).
 
 ### Port 4004 Already in Use
 
-```bash
-# Find the process
-lsof -i :4004        # Linux/Mac
-netstat -ano | findstr :4004  # Windows
-
-# Or change port
-PORT=4005 npm start
-```
+Set another port with `PORT`, for example `PORT=4005 npm start`.
 
 ---
 
 ## Additional Resources
 
-- [Quick Start Guide](../QUICK_START.md) — 5-minute setup
-- [User Guide](USER_GUIDE.md) — API reference and OData queries
-- [Developer Guide](DEVELOPER_GUIDE.md) — Architecture and coding patterns
-- [Backend Configuration](BACKEND_CONFIGURATION.md) — Multi-backend details
-- [Transaction Workflow](TRANSACTION_WORKFLOW.md) — Build, sign, submit
-- [Docker Deployment](DOCKER_DEPLOYMENT.md) — Basic Docker setup
-- [SAP Integration Examples](SAP_INTEGRATION_EXAMPLES.md) — Enterprise integration patterns
-
----
+- [Quick Start](../QUICK_START.md): first setup
+- [User Guide](USER_GUIDE.md): API, wallet worker, agent grants
+- [Crawler Guide](CRAWLER_GUIDE.md): the chain crawler and its backfills
+- [Backend Configuration](BACKEND_CONFIGURATION.md): which backend answers what
+- [Transaction Workflow](TRANSACTION_WORKFLOW.md): build, sign, submit
+- [Security Guide](SECURITY_GUIDE.md): logins, roles, signing keys
+- [Docker Deployment](DOCKER_DEPLOYMENT.md): image, compose stack, schema changes
+- [SAP Integration Examples](SAP_INTEGRATION_EXAMPLES.md): calling the services from SAP systems

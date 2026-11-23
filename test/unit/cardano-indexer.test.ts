@@ -93,6 +93,7 @@ vi.mock('#cds-models/CardanoODataService', () => ({
 
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
 vi.mock('#cds-models/odatano/cardano', () => ({
+  Accounts: 'Accounts',
   Assets: 'AssetsTable',
   LedgerUTxOs: 'LedgerUTxOs',
   LedgerUTxOAssets: 'LedgerUTxOAssets',
@@ -401,6 +402,24 @@ describe('CardanoIndexer', () => {
     });
   });
 
+  describe('epoch rows', () => {
+    // preview: k = 432 and f = 0.05, so an ended epoch settles 3k/f = 25920 slots of 1 s after its end
+    it('marks a row final only once the epoch ended and its last blocks are past the rollback horizon', () => {
+      const end = 1_000_000;
+      const at = (seconds: number) => indexer.withFinal({ epoch: 5, endTime: end } as never, seconds * 1000).final;
+      expect(at(end - 1)).toBe(false);
+      expect(at(end + 25919)).toBe(false);
+      expect(at(end + 25920)).toBe(true);
+      expect(indexer.withFinal({ epoch: 5, endTime: null } as never).final).toBe(false);
+    });
+
+    it('keeps a row with crawled totals open until the crawl passed its epoch', () => {
+      const late = (1_000_000 + 30_000) * 1000;
+      expect(indexer.withFinal({ epoch: 5, endTime: 1_000_000 } as never, late, false).final).toBe(false);
+      expect(indexer.withFinal({ epoch: 5, endTime: 1_000_000 } as never, late, true).final).toBe(true);
+    });
+  });
+
   describe('provider calls come before the first write', () => {
     // Call order of the last provider or builder call and of the first write of one operation.
     const callOrder = async () => {
@@ -426,18 +445,16 @@ describe('CardanoIndexer', () => {
       expect(lastCall).toBeLessThan(firstWrite);
     });
 
-    it('stores an account after every address of it was read', async () => {
+    it('stores an account after it was read, and reads none of its addresses', async () => {
       mockClient.getAccount.mockResolvedValue({
-        stakeaddress: 'stake_test1u', withdrawalsSum: '5', addresses: [{ address: 'addr_a' }, { address: 'addr_b' }],
+        stakeaddress: 'stake_test1u', withdrawalsSum: '5', addresses: ['addr_a', 'addr_b'],
       });
-      mockClient.getAddress.mockResolvedValue({ amount: [], utxos: [] });
-      mockClient.getAddressTransactionHashes.mockResolvedValue([]);
 
       await indexer.indexAccount(mockTx as any, 'stake_test1u');
 
       const { lastCall, firstWrite, writes } = await callOrder();
-      expect(mockClient.getAddress).toHaveBeenCalledTimes(2);
-      expect(writes).toBeGreaterThan(0);
+      expect(mockClient.getAddress).not.toHaveBeenCalled();
+      expect(writes).toBe(1);
       expect(lastCall).toBeLessThan(firstWrite);
     });
 
@@ -462,19 +479,6 @@ describe('CardanoIndexer', () => {
       expect(mockTxBuilder.buildSimpleAdaTransaction).toHaveBeenCalledTimes(1);
       expect(writes).toBeGreaterThan(0);
       expect(lastCall).toBeLessThan(firstWrite);
-    });
-  });
-
-  describe('findIndexedTransaction', () => {
-    it('returns the block position of an indexed transaction without a backend call', async () => {
-      mockRun.mockResolvedValue({ slot: 100, blockHeight: 42 });
-      expect(await indexer.findIndexedTransaction(mockTx as any, 'tx1')).toEqual({ slot: 100, blockHeight: 42 });
-      expect(mockClient.getTransaction).not.toHaveBeenCalled();
-    });
-
-    it('returns null when the transaction is not in the local index', async () => {
-      mockRun.mockResolvedValue(undefined);
-      expect(await indexer.findIndexedTransaction(mockTx as any, 'tx1')).toBeNull();
     });
   });
 

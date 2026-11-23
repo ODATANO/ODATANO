@@ -133,7 +133,7 @@ module.exports = (srv: cds.Service) => {
     const n = count == null ? 1 : Number(count);
     const { anchor, next, canonical } = await readOutside(db, async (d) => {
       const anchor = await readBlock(d, String(afterHash));
-      const next = anchor?.height != null ? await readNextBlocks(d, anchor.height, n) : [];
+      const next = anchor?.height != null ? await readNextBlocks(d, anchor.height, n, anchor.hash) : [];
       const orphaned = !next.length && !anchor && afterHeight != null;
       return { anchor, next, canonical: orphaned ? await readBlockByHeight(d, Number(afterHeight)) : null };
     });
@@ -161,15 +161,21 @@ module.exports = (srv: cds.Service) => {
     }
     // Nothing indexed past the cursor yet: the caller is at this instance's tip.
     if (anchor) return [];
-    throw new ChainPointMismatchError(`CHAIN_POINT_MISMATCH: cursor block ${afterHash} is unknown to this instance`, 'odatano');
+    // A cursor outside the stored range is not proof of a reorg; only another block at its height is.
+    throw new ProviderUnavailableError(`Block ${afterHash} is not stored here and no paging backend can follow it`, 'odatano');
   }, need(isBlockHash, 'afterHash', 'block hash'));
 
-  op('GetBlockTransactions', async ({ blockHash }, db) => {
-    const stored = await readOutside(db, (d) => readBlockTransactions(d, String(blockHash)));
+  op('GetBlockTransactions', async ({ blockHash, txCount }, db) => {
+    const hash = String(blockHash);
+    const { stored, block } = await readOutside(db, async (d) => ({
+      stored: await readBlockTransactions(d, hash),
+      block: txCount == null ? await readBlock(d, hash) : null,
+    }));
     if (stored) return stored;
     const paging = client().getPaginatingBackend();
     if (!paging) throw new ProviderUnavailableError(`Transactions of block ${blockHash} are not indexed here`, 'odatano');
-    return paging.getBlockTransactions(String(blockHash));
+    // the count lets the backend refuse a short list instead of answering part of the block
+    return paging.getBlockTransactions(hash, txCount == null ? block?.txCount : Number(txCount));
   }, need(isBlockHash, 'blockHash', 'block hash'));
 
   op('GetLatestBlock', async () => client().getLatestBlock());
@@ -201,7 +207,13 @@ module.exports = (srv: cds.Service) => {
   }, jsonList('refs', isRef, 'output references'));
 
   // --- stake, governance, assets, network ------------------------------------------------------
-  op('GetAccount', async ({ stakeAddress }, db) => indexer().resolveAccount(db, String(stakeAddress)),
+  // Addresses go out as { address } objects, the shape every consumer version reads.
+  op('GetAccount', async ({ stakeAddress }, db) => {
+    const account = await indexer().resolveAccount(db, String(stakeAddress));
+    return { ...account, addresses: account.addresses.map(address => ({ address })) };
+  }, need(isValidBech32StakeAddress, 'stakeAddress', 'stake address'));
+  // the account read answers 404 for a registered account the node does not list; this does not
+  op('IsRewardAccountRegistered', async ({ stakeAddress }) => client().isRewardAccountRegistered(String(stakeAddress)),
     need(isValidBech32StakeAddress, 'stakeAddress', 'stake address'));
   op('GetPool', async ({ poolId }, db) => indexer().resolvePool(db, String(poolId)), need(isValidPoolId, 'poolId', 'pool id'));
   op('GetDrep', async ({ drepId }) => client().getDrep(String(drepId)), need(isValidDrepId, 'drepId', 'DRep id'));
@@ -231,10 +243,15 @@ module.exports = (srv: cds.Service) => {
   }, cbor);
 
   // The full pool and DRep set, from Koios when configured, else from the Ogmios ledger.
-  // Cached for a minute. Details are read in batches of ids.
+  // Cached for a minute, and one run is shared by the callers that arrive while it runs.
   let enumerated: { at: number; pools: PoolData[]; dreps: DrepData[] } | null = null;
-  async function enumeration(): Promise<{ pools: PoolData[]; dreps: DrepData[] }> {
-    if (enumerated && Date.now() - enumerated.at < 60_000) return enumerated;
+  let enumerating: Promise<{ pools: PoolData[]; dreps: DrepData[] }> | null = null;
+  function enumeration(): Promise<{ pools: PoolData[]; dreps: DrepData[] }> {
+    if (enumerated && Date.now() - enumerated.at < 60_000) return Promise.resolve(enumerated);
+    enumerating ??= enumerate().finally(() => { enumerating = null; });
+    return enumerating;
+  }
+  async function enumerate(): Promise<{ pools: PoolData[]; dreps: DrepData[] }> {
     const koios = client().getEnumeratingBackend();
     if (koios) {
       const [pools, dreps] = await Promise.all([

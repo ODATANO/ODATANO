@@ -9,7 +9,7 @@ import { BackendError } from './errors';
 import { ERROR_CODES } from './error-codes';
 import type { CardanoAgentGrant } from '#cds-models/odatano/cardano';
 import { loadGrantAdminRateLimit, loadGrantUsageRetentionDays, loadTokenCacheMs } from '../config';
-import { agentAccessOf, agentGrantableActions } from './agent-access';
+import { agentAccessOf, agentGrantableActions, qualifyGrantName, storedGrantNames } from './agent-access';
 
 const { SELECT, INSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('AgentGrants');
@@ -89,10 +89,9 @@ export function parseGrantList(raw: string | null | undefined): string[] {
   }
 }
 
-/** The stored allow list without names that are no longer grantable. */
+/** The stored allow list as `Service.operation`, without names that are no longer grantable. */
 export function grantedActions(grant: Pick<AgentGrantRow, 'allowedActions'>): string[] {
-  const grantable = agentGrantableActions();
-  return parseGrantList(grant.allowedActions).filter((a) => grantable.includes(a));
+  return [...new Set(parseGrantList(grant.allowedActions).flatMap((a) => storedGrantNames(a)))];
 }
 
 function utcDay(now: Date = new Date()): string {
@@ -251,15 +250,15 @@ export function validateGrantInput(input: IssueAgentGrantInput, now: Date = new 
   if (!Array.isArray(actions) || actions.length === 0) {
     throw fail('allowedActions must be a non-empty array', 'allowedActions');
   }
-  const grantable = agentGrantableActions();
-  const unknown = actions.filter((a) => !grantable.includes(a));
+  const qualified = actions.map((a) => (typeof a === 'string' ? qualifyGrantName(a.trim()) : null));
+  const unknown = actions.filter((_, i) => qualified[i] === null);
   if (unknown.length > 0) {
     throw fail(
-      `allowedActions contains non-grantable entries: ${unknown.join(', ')}. Grantable: ${grantable.join(', ')}`,
+      `allowedActions contains non-grantable entries: ${unknown.join(', ')}. Grantable: ${agentGrantableActions().join(', ')}`,
       'allowedActions'
     );
   }
-  const uniqueActions = [...new Set(actions)];
+  const uniqueActions = [...new Set(qualified as string[])];
 
   let maxJobsPerDay: number | null = null;
   if (input.maxJobsPerDay !== undefined && input.maxJobsPerDay !== null) {
@@ -737,7 +736,7 @@ export async function enforceAgentGrant(
     return;
   }
 
-  if (access !== 'grant' || !grantedActions(grant).includes(event)) {
+  if (access !== 'grant' || !grantedActions(grant).includes(`${serviceName}.${event}`)) {
     return req.reject(403, `action '${event}' is not allowed for this agent grant`);
   }
 

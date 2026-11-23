@@ -19,11 +19,24 @@ vi.mock('@sap/cds', () => {
   tx: (fn: (db: typeof fakeDb) => unknown) => fn(fakeDb),
   ql: {
     SELECT: {
-      one: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }) },
+      one: {
+        from: (entity: string) => ({
+          where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }),
+          columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }) }),
+        }),
+      },
       from: (entity: string) => ({
-        columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }) }),
+        columns: () => ({
+          where: (where: unknown) => {
+            const q = { _op: 'SELECT.many', entity, where };
+            return { ...q, limit: (limit: number) => ({ ...q, limit }) };
+          },
+        }),
         where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }),
       }),
+      distinct: {
+        from: (entity: string) => ({ columns: () => ({ where: (where: unknown) => ({ _op: 'SELECT.many', entity, where }) }) }),
+      },
     },
     DELETE: { from: (entity: string) => ({ where: (where: unknown) => ({ _op: 'DELETE', entity, where }) }) },
     INSERT: { into: (entity: string) => ({ entries: (entries: unknown) => ({ _op: 'INSERT', entity, entries }) }) },
@@ -96,7 +109,7 @@ function cursorExists() {
   });
 }
 
-function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn() }) {
+function makeCrawler(client: unknown, config: CrawlerConfig = CONFIG, indexer: unknown = { indexBlockFull: vi.fn(), prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn(), forgetCrawlEpochs: vi.fn(), reconcileRolledBackAssets: vi.fn() }) {
   const crawler = new CardanoCrawler(client as never, indexer as never, 'preview', config);
   // collapse retry/poll sleeps so loops run instantly
   vi.spyOn(crawler as unknown as { sleep: (ms: number) => Promise<void> }, 'sleep').mockResolvedValue(undefined);
@@ -219,7 +232,7 @@ describe('CardanoCrawler chain-sync path', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
 
-    await cbs().rollForward(block({ slot: 9000 }), [], { slot: 9000, hash: 't', height: 90 });
+    await cbs().rollForward(block({ slot: 9000, height: 90 }), [], { slot: 9000, hash: 't', height: 90 });
 
     expect(updatesWith(s => s.syncStatus === 'synced')).toHaveLength(1);
     await crawler.stop();
@@ -240,9 +253,26 @@ describe('CardanoCrawler chain-sync path', () => {
     await crawler.stop();
   });
 
-  it('treats a rollBackward to a DIFFERENT point as a real reorg', async () => {
+  it("counts a block within confirmationDepth of the tip as synced, one further behind as syncing", async () => {
+    cursorExists();
+    const { client, openChainSync, cbs } = chainSyncClient();
+    const crawler = makeCrawler(client);
+    await crawler.start();
+    await settle(() => openChainSync.mock.calls.length > 0);
+
+    await cbs().rollForward(block({ slot: 8700, height: 87 }), [], { slot: 9000, hash: 't', height: 90 });
+    await cbs().rollForward(block({ slot: 8600, height: 86, hash: 'blk86'.padEnd(64, '1') }), [], { slot: 9000, hash: 't', height: 90 });
+
+    expect(updatesWith(s => s.syncStatus === 'synced')).toHaveLength(1);
+    expect(updatesWith(s => s.syncStatus === 'syncing').length).toBeGreaterThan(0);
+    await crawler.stop();
+  });
+
+  it('treats a rollBackward to a DIFFERENT stored point as a real reorg', async () => {
     dbRun.mockImplementation(async (q) => {
       if (q._op === 'SELECT.one' && q.entity.endsWith('CardanoSyncState')) return { ...CURSOR_ROW };
+      // the fork point is a block the crawl stored
+      if (q._op === 'SELECT.one' && q.entity.endsWith('Blocks')) return { hash: 'fork'.padEnd(64, '9') };
       if (q._op === 'SELECT.many') return [];
       return undefined;
     });
@@ -256,6 +286,27 @@ describe('CardanoCrawler chain-sync path', () => {
     const reorgLog = opsFor('INSERT').filter(q => q.entity.endsWith('CardanoReorgLog'));
     expect(reorgLog).toHaveLength(1);
     await crawler.stop();
+  });
+
+  it("with source 'auto', crawls on pagination when chain-sync cannot be opened", async () => {
+    cursorExists();
+    const openChainSync = vi.fn(async (): Promise<ChainSyncHandle> => { throw new Error('node is replaying'); });
+    const backend = { getBlockByHeight: vi.fn(), getNextBlocks: vi.fn().mockResolvedValue([]), getBlockTransactions: vi.fn().mockResolvedValue([]) };
+    const client = {
+      getChainSyncBackend: () => ({ openChainSync }),
+      getPaginatingBackend: () => backend,
+      recoverChainSyncBackend: vi.fn(async () => null),
+      getLatestBlock: vi.fn().mockResolvedValue(block({ height: 100, slot: 10000, hash: 'tip'.padEnd(64, '3') })),
+    };
+    const crawler = makeCrawler(client);
+    (crawler as unknown as { sleep: Mock }).sleep = vi.fn(async () => { void crawler.stop(); });
+
+    await crawler.start();
+    await settle(() => !crawler.isRunning(), 1000);
+
+    expect(openChainSync).toHaveBeenCalledTimes(1);
+    expect(backend.getNextBlocks).toHaveBeenCalled();
+    expect(updatesWith(s => s.syncStatus === 'error')).toHaveLength(0);
   });
 
   it("records and halts with 'error' when the stream cannot resume (pipeline crash is not silent)", async () => {
@@ -458,6 +509,45 @@ describe('CardanoCrawler pagination path', () => {
     await settle(() => !crawler.isRunning(), 1000);
 
     expect(recovery).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs fork recovery and stores nothing when a listed block names another parent than the cursor', async () => {
+    cursorExists();
+    const indexBlockFull = vi.fn();
+    const { client } = paginationSetup({
+      getNextBlocks: vi.fn().mockResolvedValue([
+        block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100, previousHash: 'other'.padEnd(64, '0') }),
+      ]),
+    });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn() });
+    const recovery = vi.spyOn(
+      crawler as unknown as { tryReorgRecovery: (backend: unknown) => Promise<boolean> },
+      'tryReorgRecovery',
+    ).mockResolvedValue(false);
+    (crawler as unknown as { sleep: Mock }).sleep.mockImplementation(async () => { void crawler.stop(); });
+
+    await crawler.start();
+    await settle(() => !crawler.isRunning(), 1000);
+
+    expect(recovery).toHaveBeenCalledTimes(1);
+    expect(indexBlockFull).not.toHaveBeenCalled();
+  });
+
+  it('stores a listed block whose parent is the cursor', async () => {
+    cursorExists();
+    const indexBlockFull = vi.fn();
+    const { client } = paginationSetup({
+      getNextBlocks: vi.fn()
+        .mockResolvedValueOnce([block({ height: 41, hash: 'b41'.padEnd(64, '0'), slot: 4100, previousHash: CURSOR_ROW.lastBlockHash })])
+        .mockResolvedValue([]),
+    });
+    const crawler = makeCrawler(client, CONFIG, { indexBlockFull, prefetchCrawlEpoch: vi.fn(), configureCrawlCoverage: vi.fn(), stopAssetEnrichment: vi.fn(), setUtxoAnchor: vi.fn(), getUtxoAnchor: vi.fn(() => null), takeLedgerInvalidation: vi.fn(() => null), confirmBlockCommit: vi.fn() });
+    (crawler as unknown as { sleep: Mock }).sleep.mockImplementation(async () => { void crawler.stop(); });
+
+    await crawler.start();
+    await settle(() => !crawler.isRunning(), 1000);
+
+    expect(indexBlockFull).toHaveBeenCalledTimes(1);
   });
 });
 

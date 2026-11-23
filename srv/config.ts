@@ -98,6 +98,16 @@ export function configuredNetworkName(): string {
   return String(coreCdsConfig().network || env.NETWORK || 'preview');
 }
 
+/** NODE_ENV=production, read per call like every other setting here. */
+export function isProduction(): boolean {
+  return env.NODE_ENV === 'production';
+}
+
+/** ENCRYPTION_KEY: the secret that encrypts worker signing keys given as `iv:authTag:ciphertext`. */
+export function encryptionSecret(): string | undefined {
+  return env.ENCRYPTION_KEY || undefined;
+}
+
 /** SKIP_AUTO_INIT=true: tests mount the services without starting backends, crawler or worker. */
 export function autoInitSkipped(): boolean {
   return env.SKIP_AUTO_INIT === 'true';

@@ -2,6 +2,7 @@
 // Unknown tokens get 401, expired ones 410. Failed attempts are throttled per client address.
 
 import cds from '@sap/cds';
+import * as capAuth from '@odatano/cap-auth';
 import { inLaneOf, requestPath, respondError, type TransportLane } from '@odatano/cap-auth';
 import {
   AGENT_SERVICE_NAMES,
@@ -48,9 +49,16 @@ export function inAgentLane(path: string, servicePaths: string[] = agentServiceP
   return servicePaths.some((p) => inLaneOf(bare, p));
 }
 
-function clientKey(req: { ip?: string; socket?: { remoteAddress?: string } }): string {
-  const ip = req.ip ?? req.socket?.remoteAddress ?? 'unknown';
-  return `ip=${String(ip).replace(/:/g, '.')}:agent-token`;
+type LaneRequest = Parameters<TransportLane['authenticate']>[0];
+
+// The login package's own reading of the client address and of `trustProxy`, so a token and a
+// password are throttled per the same client. A release without `trustedProxyCount` has no proxy setting.
+const clientAddressOf = capAuth.clientAddress as (req: LaneRequest, trustedProxies?: number) => string;
+const proxyCountOf = (capAuth as { trustedProxyCount?: (value: unknown) => number }).trustedProxyCount;
+
+function clientKey(req: LaneRequest): string {
+  const trustProxy = (cds.env.requires as { auth?: { trustProxy?: unknown } }).auth?.trustProxy;
+  return `ip=${clientAddressOf(req, proxyCountOf ? proxyCountOf(trustProxy) : 0)}:agent-token`;
 }
 
 export const agentTokenLane: TransportLane = {
@@ -60,11 +68,12 @@ export const agentTokenLane: TransportLane = {
     const token = req.headers[AGENT_TOKEN_HEADER] as string;
     if (!inAgentLane(requestPath(req))) return { next: true };
     const key = clientKey(req);
-    const locked = tokenFailures.peek(key);
-    if (!locked.allowed) return respondError(res, 429, 'Too many failed agent token attempts', locked.retryAfterMs);
-
+    // A token is 32 random bytes, so a valid one cannot be guessed: it passes even while its client
+    // is locked, and other clients' failures never shut it out. A locked client gets 429 for any other.
     const resolution = await resolveAgentToken(token);
     if (!resolution.ok) {
+      const locked = tokenFailures.peek(key);
+      if (!locked.allowed) return respondError(res, 429, 'Too many failed agent token attempts', locked.retryAfterMs);
       const failed = tokenFailures.check(key);
       if (!failed.allowed) return respondError(res, 429, 'Too many failed agent token attempts', failed.retryAfterMs);
       return respondError(res, resolution.status, resolution.message);

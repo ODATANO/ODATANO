@@ -14,7 +14,7 @@ vi.mock('@sap/cds', () => {
 
 import { KoiosBackend, mapKoiosCertificates } from '../../srv/blockchain/backends/koios-backend';
 import { CARDANO_DEFAULTS } from '../../srv/utils/const';
-import { ProviderUnavailableError } from '../../srv/utils/errors';
+import { NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
 describe('KoiosBackend', () => {
   let backend: KoiosBackend;
@@ -61,13 +61,14 @@ describe('KoiosBackend', () => {
           max: CARDANO_DEFAULTS.MAX_LOVELACE_SUPPLY,
           total: '38388567212743111',
           circulating: '36035240284477897',
-          locked: '0',
+          // /totals has no locked supply and no stake
+          locked: null,
           treasury: '1614459422162537',
           reserves: '6611432787256889',
         },
         stake: {
-          live: '0',
-          active: '0',
+          live: null,
+          active: null,
         },
       });
     });
@@ -102,19 +103,19 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getNetworkInformation();
 
-      // Fallback uses genesis max supply for all supply fields
+      // only the maximum supply is known; the rest is null, not a made-up figure
       expect(result).toEqual({
         supply: {
           max: '45000000000000000',
-          total: '45000000000000000',
-          circulating: '45000000000000000',
-          locked: '0',
-          treasury: '0',
-          reserves: '0',
+          total: null,
+          circulating: null,
+          locked: null,
+          treasury: null,
+          reserves: null,
         },
         stake: {
-          live: '0',
-          active: '0',
+          live: null,
+          active: null,
         },
       });
     });
@@ -241,12 +242,11 @@ describe('KoiosBackend', () => {
   });
 
   describe('getAddressTransactions', () => {
-    it('should sort newest-first, apply the limit, and fetch via batch', async () => {
-      // Koios gives NO ordering guarantee — rows arrive out of order here
+    it('asks Koios for the newest rows first, so the limit cuts the oldest', async () => {
       nock(KOIOS_BASE_URL)
         .post('/api/v1/address_txs')
+        .query({ order: 'block_height.desc,tx_hash.asc', limit: '2' })
         .reply(200, [
-          { tx_hash: 'a'.repeat(64), block_height: 100 },
           { tx_hash: 'c'.repeat(64), block_height: 300 },
           { tx_hash: 'b'.repeat(64), block_height: 200 },
         ]);
@@ -265,11 +265,11 @@ describe('KoiosBackend', () => {
   });
 
   describe('getAddressTransactionHashes', () => {
-    it('should return the newest hashes first regardless of response order', async () => {
+    it('returns the newest hashes in the order Koios sorted them', async () => {
       nock(KOIOS_BASE_URL)
         .post('/api/v1/address_txs')
+        .query({ order: 'block_height.desc,tx_hash.asc', limit: '2' })
         .reply(200, [
-          { tx_hash: 'a'.repeat(64), block_height: 100 },
           { tx_hash: 'c'.repeat(64), block_height: 300 },
           { tx_hash: 'b'.repeat(64), block_height: 200 },
         ]);
@@ -337,7 +337,7 @@ describe('KoiosBackend', () => {
       };
 
       const epochSpy = vi.spyOn(backend, 'getEpoch')
-        .mockRejectedValueOnce(new Error('current epoch not indexed yet'))
+        .mockRejectedValueOnce(new NotFoundError('Epoch', 'koios'))
         .mockResolvedValueOnce(epoch99 as any);
 
       const result = await backend.getLatestEpoch();
@@ -345,6 +345,16 @@ describe('KoiosBackend', () => {
       expect(result.epoch).toBe(99);
       expect(epochSpy).toHaveBeenNthCalledWith(1, 100);
       expect(epochSpy).toHaveBeenNthCalledWith(2, 99);
+    });
+
+    it('does not answer with the previous epoch when the current one fails for another reason', async () => {
+      nock(KOIOS_BASE_URL)
+        .get('/api/v1/tip')
+        .reply(200, [{ hash: 'tiphash', epoch_no: 100 }]);
+      const epochSpy = vi.spyOn(backend, 'getEpoch').mockRejectedValueOnce(new ProviderUnavailableError('koios down', 'koios'));
+
+      await expect(backend.getLatestEpoch()).rejects.toBeInstanceOf(ProviderUnavailableError);
+      expect(epochSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -355,7 +365,7 @@ describe('KoiosBackend', () => {
         .post('/api/v1/address_info', { _addresses: [TEST_ADDR] })
         .reply(200, [{ address: TEST_ADDR, balance: '0', stake_address: null, script_address: false, utxo_set: [] }]);
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos', { _addresses: [TEST_ADDR], _extended: true })
+        .post('/api/v1/address_utxos', { _addresses: [TEST_ADDR], _extended: true }).query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, []);
 
       const result = await backend.getAddress(TEST_ADDR);
@@ -385,7 +395,7 @@ describe('KoiosBackend', () => {
     });
     const reply = (status: string) => {
       nock(KOIOS_BASE_URL).post('/api/v1/account_info', { _stake_addresses: [STAKE] }).reply(200, [row(status)]);
-      nock(KOIOS_BASE_URL).post('/api/v1/account_addresses', { _stake_addresses: [STAKE] }).reply(200, [{ stake_address: STAKE, addresses: [] }]);
+      nock(KOIOS_BASE_URL).post('/api/v1/account_addresses', { _stake_addresses: [STAKE], _empty: true }).reply(200, [{ stake_address: STAKE, addresses: [] }]);
     };
 
     it('maps a registered account from the Koios schema', async () => {
@@ -438,7 +448,7 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getDrep(DREP_ID);
 
-      expect(result).toEqual({
+      expect(result).toMatchObject({
         drepId: DREP_ID,
         hex: DREP_HEX,
         amount: '9653730',
@@ -449,10 +459,20 @@ describe('KoiosBackend', () => {
       });
     });
 
-    it('should derive retired from drep_status in the new schema', async () => {
+    it('maps deposit, expiry epoch and delegator count of the spec', async () => {
       nock(KOIOS_BASE_URL)
         .post('/api/v1/drep_info')
-        .reply(200, [{ ...newSchemaRow, drep_status: 'retired', active: false }]);
+        .reply(200, [{ ...newSchemaRow, deposit: '500000000', expires_epoch_no: 612, live_delegator_count: 17 }]);
+
+      const result = await backend.getDrep(DREP_ID);
+
+      expect(result).toMatchObject({ deposit: '500000000', expiresEpoch: 612, delegatorCount: 17 });
+    });
+
+    it('should derive retired from drep_status deregistered', async () => {
+      nock(KOIOS_BASE_URL)
+        .post('/api/v1/drep_info')
+        .reply(200, [{ ...newSchemaRow, drep_status: 'deregistered', active: false }]);
 
       const result = await backend.getDrep(DREP_ID);
 
@@ -926,7 +946,7 @@ describe('KoiosBackend', () => {
     it('extracts hex CBOR from Koios _extended inline_datum wrapper', async () => {
       const txHash = 'a'.repeat(64);
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos')
+        .post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: txHash,
@@ -948,7 +968,7 @@ describe('KoiosBackend', () => {
     it('returns null inlineDatum for empty Koios wrapper', async () => {
       const txHash = 'a'.repeat(64);
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos')
+        .post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: txHash,
@@ -970,7 +990,7 @@ describe('KoiosBackend', () => {
     it('returns null inlineDatum when field is null', async () => {
       const txHash = 'a'.repeat(64);
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos')
+        .post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: txHash,
@@ -992,7 +1012,7 @@ describe('KoiosBackend', () => {
     it('extracts script CBOR bytes from the extended reference_script OBJECT', async () => {
       const scriptBytes = '5876010100' + 'ab'.repeat(40); // full CBOR-wrapped script hex (>56 chars)
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos')
+        .post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: 'a'.repeat(64),
@@ -1015,12 +1035,14 @@ describe('KoiosBackend', () => {
 
       const result = await backend.getAddressUtxos(TEST_ADDR);
       expect(result).toHaveLength(1);
-      expect(result[0].scriptRef).toBe(scriptBytes);
+      // the hash goes into scriptRef, the bytes into scriptRefCbor
+      expect(result[0].scriptRef).toBe('d'.repeat(56));
+      expect(result[0].scriptRefCbor).toBe(scriptBytes);
     });
 
     it('falls back to the script hash when the extended object carries no bytes', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/address_utxos')
+        .post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: 'a'.repeat(64),
@@ -1051,6 +1073,7 @@ describe('KoiosBackend', () => {
           capturedBody = body;
           return true;
         })
+        .query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: 'a'.repeat(64),
@@ -1091,7 +1114,7 @@ describe('KoiosBackend', () => {
 
     it('returns empty array when credential has no UTxOs', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/credential_utxos')
+        .post('/api/v1/credential_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, []);
 
       const result = await backend.getCredentialUtxos(CRED_HASH);
@@ -1100,7 +1123,7 @@ describe('KoiosBackend', () => {
 
     it('throws on Koios 5xx error', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/credential_utxos')
+        .post('/api/v1/credential_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(500, { error: 'Internal server error' });
 
       await expect(backend.getCredentialUtxos(CRED_HASH)).rejects.toThrow();
@@ -1108,7 +1131,7 @@ describe('KoiosBackend', () => {
 
     it('hydrates native assets per UTxO', async () => {
       nock(KOIOS_BASE_URL)
-        .post('/api/v1/credential_utxos')
+        .post('/api/v1/credential_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
         .reply(200, [
           {
             tx_hash: 'a'.repeat(64),
@@ -1467,11 +1490,11 @@ describe('KoiosBackend', () => {
       const full = Array.from({ length: 1000 }, (_, i) => ({ pool_id_bech32: `pool1${i}` }));
       nock(KOIOS_BASE_URL)
         .get('/api/v1/pool_list')
-        .query({ select: 'pool_id_bech32', limit: '1000', offset: '0' })
+        .query({ select: 'pool_id_bech32', order: 'pool_id_bech32.asc', limit: '1000', offset: '0' })
         .reply(200, full);
       nock(KOIOS_BASE_URL)
         .get('/api/v1/pool_list')
-        .query({ select: 'pool_id_bech32', limit: '1000', offset: '1000' })
+        .query({ select: 'pool_id_bech32', order: 'pool_id_bech32.asc', limit: '1000', offset: '1000' })
         .reply(200, [{ pool_id_bech32: 'pool1last' }]);
 
       const ids = await backend.getPoolIds();
@@ -1504,11 +1527,11 @@ describe('KoiosBackend', () => {
     it('pages /drep_list and resolves DReps through the shared drep mapper', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/drep_list')
-        .query({ select: 'drep_id', limit: '1000', offset: '0' })
+        .query({ select: 'drep_id', order: 'drep_id.asc', limit: '1000', offset: '0' })
         .reply(200, [{ drep_id: 'drep1a' }, { drep_id: 'drep1b' }]);
       nock(KOIOS_BASE_URL).post('/api/v1/drep_info').reply(200, [
         { drep_id: 'drep1a', hex: 'aa', amount: '100', has_script: false, drep_status: 'registered', active: true },
-        { drep_id: 'drep1b', hex: 'bb', amount: '200', has_script: true, drep_status: 'retired', active: false },
+        { drep_id: 'drep1b', hex: 'bb', amount: '200', has_script: true, drep_status: 'deregistered', active: false, deposit: null, expires_epoch_no: null, live_delegator_count: 0 },
       ]);
 
       const ids = await backend.getDrepIds();
@@ -1516,15 +1539,15 @@ describe('KoiosBackend', () => {
 
       expect(ids).toEqual(['drep1a', 'drep1b']);
       expect(dreps).toEqual([
-        { drepId: 'drep1a', hex: 'aa', amount: '100', hasScript: false, lastActiveEpoch: 0, expired: false, retired: false },
-        { drepId: 'drep1b', hex: 'bb', amount: '200', hasScript: true, lastActiveEpoch: 0, expired: false, retired: true },
+        { drepId: 'drep1a', hex: 'aa', amount: '100', hasScript: false, lastActiveEpoch: 0, expired: false, retired: false, deposit: null, expiresEpoch: null, delegatorCount: null },
+        { drepId: 'drep1b', hex: 'bb', amount: '200', hasScript: true, lastActiveEpoch: 0, expired: false, retired: true, deposit: null, expiresEpoch: null, delegatorCount: 0 },
       ]);
     });
 
     it('returns an empty set rather than throwing when a list endpoint is empty', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/pool_list')
-        .query({ select: 'pool_id_bech32', limit: '1000', offset: '0' })
+        .query({ select: 'pool_id_bech32', order: 'pool_id_bech32.asc', limit: '1000', offset: '0' })
         .reply(200, []);
 
       expect(await backend.getPoolIds()).toEqual([]);
@@ -1536,11 +1559,11 @@ describe('KoiosBackend', () => {
       const full = Array.from({ length: 1000 }, (_, i) => ({ policy_id: 'a'.repeat(56), asset_name: i.toString(16).padStart(4, '0') }));
       nock(KOIOS_BASE_URL)
         .get('/api/v1/asset_token_registry')
-        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '0' })
+        .query({ select: 'policy_id,asset_name', order: 'policy_id.asc,asset_name.asc', limit: '1000', offset: '0' })
         .reply(200, full);
       nock(KOIOS_BASE_URL)
         .get('/api/v1/asset_token_registry')
-        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '1000' })
+        .query({ select: 'policy_id,asset_name', order: 'policy_id.asc,asset_name.asc', limit: '1000', offset: '1000' })
         .reply(200, [
           { policy_id: 'B'.repeat(56), asset_name: null },
           { policy_id: 'not-a-policy', asset_name: '00' },
@@ -1557,10 +1580,69 @@ describe('KoiosBackend', () => {
     it('returns an empty list when the registry endpoint is empty', async () => {
       nock(KOIOS_BASE_URL)
         .get('/api/v1/asset_token_registry')
-        .query({ select: 'policy_id,asset_name', limit: '1000', offset: '0' })
+        .query({ select: 'policy_id,asset_name', order: 'policy_id.asc,asset_name.asc', limit: '1000', offset: '0' })
         .reply(200, []);
 
       expect(await backend.getTokenRegistryUnits()).toEqual([]);
     });
+  });
+
+  describe('paging, retries and empty answers', () => {
+    const utxoRow = (i: number) => ({ tx_hash: i.toString(16).padStart(64, '0'), tx_index: 0, value: '1000000', asset_list: [] });
+
+    it('pages /address_utxos past the 1000-row cap of a Koios answer', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '0' })
+        .reply(200, Array.from({ length: 1000 }, (_, i) => utxoRow(i)));
+      nock(KOIOS_BASE_URL).post('/api/v1/address_utxos').query({ order: 'tx_hash.asc,tx_index.asc', limit: '1000', offset: '1000' })
+        .reply(200, [utxoRow(1000)]);
+
+      const utxos = await backend.getAddressUtxos(TEST_ADDR);
+
+      expect(utxos).toHaveLength(1001);
+      expect(nock.isDone()).toBe(true);
+    });
+
+    it('lists the addresses of an account without reading each address', async () => {
+      const STAKE = 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrh8z8j6p5y0x3m5qcz0gqtq';
+      nock(KOIOS_BASE_URL).post('/api/v1/account_info').reply(200, [{ stake_address: STAKE, status: 'registered', total_balance: '1', rewards: '0', withdrawals: '0', rewards_available: '0', reserves: '0', treasury: '0' }]);
+      nock(KOIOS_BASE_URL).post('/api/v1/account_addresses', { _stake_addresses: [STAKE], _empty: true })
+        .reply(200, [{ stake_address: STAKE, addresses: ['addr1a', 'addr1b'] }]);
+
+      const account = await backend.getAccount(STAKE);
+
+      expect(account.addresses).toEqual(['addr1a', 'addr1b']);
+      expect(nock.isDone()).toBe(true);
+    });
+
+    it('answers an empty block without a request', async () => {
+      expect(await backend.getBlockTransactions('e'.repeat(64), 0)).toEqual([]);
+      expect(nock.pendingMocks()).toEqual([]);
+    });
+
+    it('refuses a transaction list shorter than the block holds, instead of storing the block without them', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/block_txs').times(4).reply(200, []);
+      await expect(backend.getBlockTransactions('e'.repeat(64), 2)).rejects.toMatchObject({ statusCode: 503 });
+      nock(KOIOS_BASE_URL).post('/api/v1/block_txs').reply(200, [{ tx_hashes: ['c'.repeat(64)] }]);
+      await expect(backend.getBlockTransactions('e'.repeat(64), 2)).rejects.toThrow('1/2 transaction(s)');
+    });
+
+    it('asks again when an empty list comes back for a block whose count is unknown', async () => {
+      nock(KOIOS_BASE_URL).post('/api/v1/block_txs').reply(200, []);
+      nock(KOIOS_BASE_URL).post('/api/v1/block_txs').reply(200, [{ tx_hashes: ['c'.repeat(64)] }]);
+      nock(KOIOS_BASE_URL).post('/api/v1/tx_info').reply(200, [{ tx_hash: 'c'.repeat(64), block_hash: 'e'.repeat(64), block_height: 1, tx_timestamp: 1700000000, absolute_slot: 5, tx_block_index: 0, fee: '1', deposit: '0', tx_size: 1, inputs: [], outputs: [] }]);
+      expect((await backend.getBlockTransactions('e'.repeat(64))).map(t => t.hash)).toEqual(['c'.repeat(64)]);
+    }, 15_000);
+
+    it('retries a version-skew 42804 in one layer only', async () => {
+      const skew = { code: '42804', message: 'structure of query does not match function result type' };
+      let requests = 0;
+      nock(KOIOS_BASE_URL).get('/api/v1/epoch_info').query(true).times(20).reply(400, () => { requests++; return skew; });
+
+      await expect(backend.getEpoch(5)).rejects.toBeDefined();
+
+      // one request plus eight retries, not nested retries
+      expect(requests).toBe(9);
+      nock.cleanAll();
+    }, 20000);
   });
 });

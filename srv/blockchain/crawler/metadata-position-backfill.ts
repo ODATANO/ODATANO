@@ -1,7 +1,8 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
-import { TX_SEQ_SLOT_FACTOR } from '../../utils/mappers';
 import { Transactions, TransactionMetadata } from '#cds-models/odatano/cardano';
+import { slotRangeOf, walkSlotWindows } from './window-plan';
+import { bulkSqlKind, connectedDbKind } from '../../utils/db-kind';
 
 const { SELECT, UPDATE } = cds.ql;
 const logger = cds.log('MetadataPositionBackfill');
@@ -19,25 +20,33 @@ export interface MetadataPositionProgress {
 }
 
 export interface MetadataPositionOptions {
+  /** First slot to walk; default the first stored transaction. */
+  fromSlot?: number | null;
+  /** Last slot to walk; default the last stored transaction. */
+  toSlot?: number | null;
   /** Slots per statement. */
   slotWindow?: number;
   onProgress?: (p: MetadataPositionProgress) => void;
+  /** Stops the walk before the next window. */
+  shouldStop?: () => boolean;
 }
 
 const METADATA_TABLE = 'odatano_cardano_TransactionMetadata';
 const TRANSACTIONS_TABLE = 'odatano_cardano_Transactions';
 
 // One UPDATE per window that takes the position from the transaction row. Null for databases
-// other than Postgres and SQLite, which update transaction by transaction.
+// other than Postgres and SQLite, which update transaction by transaction. The only way into the
+// metadata table is the join on tx_hash: a filter on txSeq would let the planner scan for it.
 export function metadataPositionStatement(kind: string): string | null {
-  if (kind !== 'postgres' && kind !== 'sqlite' && kind !== 'better-sqlite') return null;
-  const [lo, hi] = kind === 'postgres' ? ['$1', '$2'] : ['?', '?'];
+  const bulk = bulkSqlKind(kind);
+  if (!bulk) return null;
+  const [lo, hi] = bulk === 'postgres' ? ['$1', '$2'] : ['?', '?'];
   return `UPDATE ${METADATA_TABLE} AS m SET txSeq = t.txSeq FROM ${TRANSACTIONS_TABLE} AS t ` +
-    `WHERE t.hash = m.tx_hash AND m.txSeq IS NULL AND t.txSeq >= ${lo} AND t.txSeq < ${hi}`;
+    `WHERE t.hash = m.tx_hash AND t.txSeq >= ${lo} AND t.txSeq < ${hi} AND m.txSeq IS DISTINCT FROM t.txSeq`;
 }
 
 async function fillWindow(tx: CapTransaction, lo: number, hi: number): Promise<number> {
-  const sql = metadataPositionStatement((cds.db as { kind?: string } | undefined)?.kind ?? '');
+  const sql = metadataPositionStatement(connectedDbKind());
   if (sql) {
     // a plain statement answers with the driver's result object
     const result = await tx.run(sql, [lo, hi]) as { changes?: number } | undefined;
@@ -48,27 +57,25 @@ async function fillWindow(tx: CapTransaction, lo: number, hi: number): Promise<n
   )) as Array<{ hash: string; txSeq: number | string }> ?? [];
   let rows = 0;
   for (const t of txs) {
-    rows += Number(await tx.run(UPDATE.entity(TransactionMetadata).set({ txSeq: Number(t.txSeq) }).where({ tx_hash: t.hash, txSeq: null }))) || 0;
+    // the same rule as the bulk statement: a row without its transaction's position, or with another one
+    const seq = Number(t.txSeq);
+    rows += Number(await tx.run(UPDATE.entity(TransactionMetadata).set({ txSeq: seq }).where({ tx_hash: t.hash, txSeq: null }))) || 0;
+    rows += Number(await tx.run(UPDATE.entity(TransactionMetadata).set({ txSeq: seq }).where({ tx_hash: t.hash, txSeq: { '!=': seq } }))) || 0;
   }
   return rows;
 }
 
 export async function backfillMetadataPositions(opts: MetadataPositionOptions = {}): Promise<MetadataPositionProgress> {
-  const slotWindow = opts.slotWindow ?? 20_000;
-  const bounds = (await cds.tx((tx: CapTransaction) => tx.run(
-    SELECT.one.from(Transactions).columns('min(txSeq) as lo', 'max(txSeq) as hi')
-  ))) as { lo?: number | string | null; hi?: number | string | null } | undefined;
   const progress: MetadataPositionProgress = { atSlot: 0, toSlot: 0, rows: 0 };
-  if (bounds?.lo == null || bounds.hi == null) return progress;
-
-  const firstSlot = Math.floor(Number(bounds.lo) / TX_SEQ_SLOT_FACTOR);
-  progress.toSlot = Math.floor(Number(bounds.hi) / TX_SEQ_SLOT_FACTOR);
-  for (let slot = firstSlot; slot <= progress.toSlot; slot += slotWindow) {
-    const next = slot + slotWindow;
-    progress.rows += await cds.tx((tx: CapTransaction) => fillWindow(tx, slot * TX_SEQ_SLOT_FACTOR, next * TX_SEQ_SLOT_FACTOR));
-    progress.atSlot = Math.min(next - 1, progress.toSlot);
-    opts.onProgress?.({ ...progress });
-  }
-  logger.info(`metadata positions: ${progress.rows} rows filled up to slot ${progress.toSlot}`);
+  const range = await slotRangeOf(Transactions, opts);
+  if (!range) return progress;
+  progress.atSlot = range.from;
+  progress.toSlot = range.to;
+  await walkSlotWindows(range, {
+    slotWindow: opts.slotWindow,
+    shouldStop: opts.shouldStop,
+    afterWindow: (atSlot) => { progress.atSlot = atSlot; opts.onProgress?.({ ...progress }); },
+  }, async (tx, [lo, hi]) => { progress.rows += await fillWindow(tx, lo, hi); });
+  logger.info(`metadata positions: ${progress.rows} rows filled, slots ${range.from} to ${progress.atSlot}`);
   return progress;
 }

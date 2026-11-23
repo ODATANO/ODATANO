@@ -13,7 +13,6 @@ import {
   TransactionWithdrawals,
   TransactionRedeemers,
   TransactionDatums,
-  AssetHistory_ as AssetHistory,
 } from '#cds-models/odatano/cardano';
 import type {
   Amount,
@@ -29,6 +28,7 @@ import type {
   TxWithdrawal,
 } from '../utils/types';
 import { chunk, IN_CHUNK } from '../utils/collections';
+import { ProviderUnavailableError } from '../utils/errors';
 
 const { SELECT } = cds.ql;
 
@@ -54,6 +54,7 @@ export function blockRowToData(row: Row): BlockData {
     size: num(row.size),
     txCount: num(row.txCount),
     fees: row.fees == null ? null : String(row.fees),
+    previousHash: row.previousHash == null ? null : String(row.previousHash),
   };
 }
 
@@ -69,18 +70,40 @@ export async function readBlockByHeight(db: CapTransaction, height: number): Pro
   return row ? blockRowToData(row) : null;
 }
 
-/** Up to `count` stored blocks after `afterHeight`. Stops at the first gap, so callers never skip one. */
-export async function readNextBlocks(db: CapTransaction, afterHeight: number, count: number): Promise<BlockData[]> {
+// The one row of `candidates` that follows `parent`: its stored parent hash names it, or it is the
+// only row at that height and its parent is unknown. Of two rows that both may follow, the one a
+// stored block at the next height names wins. Null when no row follows or it stays ambiguous.
+function successor(candidates: Row[], parent: string | null, next: Row[]): Row | null {
+  const fits = candidates.filter((r) => r.previousHash == null || parent == null || r.previousHash === parent);
+  if (fits.length <= 1) return fits[0] ?? null;
+  const named = fits.filter((r) => r.previousHash === parent && parent != null);
+  if (named.length === 1) return named[0];
+  const continued = fits.filter((r) => next.some((n) => n.previousHash === r.hash));
+  return continued.length === 1 ? continued[0] : null;
+}
+
+// Up to `count` stored blocks after `afterHeight`, following the stored parent hashes from `afterHash`.
+// Stops at a gap, at a block that names another parent, and where two rows at one height stay
+// ambiguous; nothing is served past a point the store cannot decide. `previousHash` is the stored one.
+export async function readNextBlocks(db: CapTransaction, afterHeight: number, count: number, afterHash: string | null = null): Promise<BlockData[]> {
   const rows = await db.run(
     // one operator per column object: `{ '>': a, '<=': b }` renders as `height > a <= b`
-    SELECT.from(Blocks).where({ height: { between: afterHeight + 1, and: afterHeight + count } }).orderBy('height asc')
-  ) as Row[];
+    SELECT.from(Blocks).where({ height: { between: afterHeight + 1, and: afterHeight + count + 1 } }).orderBy('height asc')
+  ) as Row[] ?? [];
+  const byHeight = new Map<number, Row[]>();
+  for (const row of rows) byHeight.set(num(row.height), [...(byHeight.get(num(row.height)) ?? []), row]);
   const out: BlockData[] = [];
-  let expected = afterHeight + 1;
-  for (const row of rows ?? []) {
-    if (num(row.height) !== expected) break;
+  let parent = afterHash;
+  for (let height = afterHeight + 1; height <= afterHeight + count; height++) {
+    const row = successor(byHeight.get(height) ?? [], parent, byHeight.get(height + 1) ?? []);
+    if (!row) {
+      if (out.length === 0 && (byHeight.get(height)?.length ?? 0) > 1) {
+        throw new ProviderUnavailableError(`two stored blocks at height ${height} may follow ${parent ?? 'the cursor'}; the stored chain cannot tell which one`, 'odatano');
+      }
+      break;
+    }
     out.push(blockRowToData(row));
-    expected++;
+    parent = str(row.hash);
   }
   return out;
 }
@@ -154,7 +177,7 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     }
     return out;
   };
-  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, mints, redeemers, datums] = await Promise.all([
+  const [inputs, inputAssets, outputs, outputAssets, metadata, certificates, withdrawals, redeemers, datums] = await Promise.all([
     fetchIn(TransactionInputs, 'txSeq', seqs),
     fetchIn(TransactionInputAssets, 'input_txSeq', seqs),
     fetchIn(TransactionOutputs, 'txSeq', seqs),
@@ -162,7 +185,6 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
     fetchIn(TransactionMetadata, 'tx_hash', hashes),
     fetchIn(TransactionCertificates, 'tx_hash', hashes),
     fetchIn(TransactionWithdrawals, 'tx_hash', hashes),
-    fetchIn(AssetHistory, 'txHash', hashes),
     fetchIn(TransactionRedeemers, 'tx_hash', hashes),
     fetchIn(TransactionDatums, 'tx_hash', hashes),
   ]);
@@ -174,7 +196,6 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
   const metadataByHash = groupBy(metadata, r => str(r.tx_hash));
   const certsByHash = groupBy(certificates, r => str(r.tx_hash));
   const withdrawalsByHash = groupBy(withdrawals, r => str(r.tx_hash));
-  const mintsByHash = groupBy(mints, r => str(r.txHash));
   const redeemersByHash = groupBy(redeemers, r => str(r.tx_hash));
   const datumsByHash = groupBy(datums, r => str(r.tx_hash));
 
@@ -215,7 +236,6 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
       }));
     const certs = certsByHash.get(hash);
     const withdrawn = withdrawalsByHash.get(hash);
-    const minted = mintsByHash.get(hash);
     const redeemed = redeemersByHash.get(hash);
     const witnessDatums = datumsByHash.get(hash);
     return {
@@ -229,10 +249,9 @@ async function assembleTransactions(db: CapTransaction, rows: Row[]): Promise<Pr
       size: numOrNull(t.size),
       blockTime: num(t.blockTime),
       spendsCollaterals,
-      mint: minted?.map(m => ({
-        unit: str(m.unit),
-        quantity: (m.action === 'burn' ? '-' : '') + str(m.quantity),
-      })),
+      // AssetHistory may hold only some mint rows of a transaction, read on demand for single units.
+      // Without a complete mint the reader derives it from inputs and outputs.
+      mint: undefined,
       inputs: txInputs,
       outputs: txOutputs,
       metadata: (metadataByHash.get(hash) ?? []).map(metadataRow),

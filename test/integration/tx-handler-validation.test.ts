@@ -732,7 +732,7 @@ describe('CardanoTransactionService Handler Validations', () => {
       setupTxInfoMock([]);
       nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
-        .reply(400, { error: 'Transaction validation failed: signature verification failed' });
+        .reply(400, { error: 'ShelleyTxValidationError ShelleyBasedEraConway (ApplyTxError [ConwayUtxowFailure (InvalidWitnessesUTXOW [VKey (VKeyHash "…")])])' });
 
       const { status } = await test.post('/odata/v4/cardano-transaction/SubmitTransaction', {
         buildId,
@@ -914,8 +914,8 @@ describe('CardanoTransactionService Handler Validations', () => {
           id: buildId,
           network: 'preview',
           // SubmitVerifiedTransaction binds the fee-payer key: senderAddress' payment
-          // credential must match the signedTxCbor1 witness key (addressWithFunds).
-          senderAddress: TEST_FIXTURES.addressWithFunds,
+          // credential must match the signedTxCbor1 witness key (signerAddress).
+          senderAddress: TEST_FIXTURES.signerAddress,
           unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
           txBodyHash: TEST_FIXTURES.txBodyHash,
           status: 'built',
@@ -1599,6 +1599,16 @@ describe('CardanoTransactionService Handler Validations', () => {
     it('rejects stake address (validator rejects non-payment bech32)', async () => {
       const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
         address: TEST_FIXTURES.validStakeAddress,
+      }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
+      expect(status).toBe(400);
+    });
+
+    it('rejects an address with a script payment credential', async () => {
+      // enterprise script address on a testnet: header 0x70, then a 28-byte script hash
+      const { bech32 } = await import('bech32');
+      const scriptAddress = bech32.encode('addr_test', bech32.toWords(Buffer.concat([Buffer.from([0x70]), Buffer.alloc(28, 0xcd)])), 2000);
+      const { status } = await test.post('/odata/v4/cardano-transaction/ExtractPaymentKeyHash', {
+        address: scriptAddress,
       }).catch((err: any) => err.response ?? { status: err.status ?? 500 });
       expect(status).toBe(400);
     });

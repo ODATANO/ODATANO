@@ -54,19 +54,32 @@ describe('Transaction Submission Tests [MOCKED]', () => {
     it('SubmitSignedTransaction - successful submission without prior build', async () => {
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
-        .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
+        .reply(200, TEST_FIXTURES.expectedTxHashWithTtl);
 
       const submitResponse = await test.post(
         '/odata/v4/cardano-transaction/SubmitSignedTransaction',
         {
-          signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+          signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
           network: TEST_FIXTURES.network,
         }
       );
 
       expect(submitResponse.status).to.equal(200);
-      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashCbor2);
+      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashWithTtl);
       expect(scope.isDone()).to.be.true;
+    });
+
+    it('SubmitSignedTransaction - refuses a transaction without an expiry and sends nothing', async () => {
+      const scope = nock('https://preview.koios.rest').post('/api/v1/submittx').reply(200, TEST_FIXTURES.expectedTxHashCbor2);
+
+      const { status, data } = await test.post(
+        '/odata/v4/cardano-transaction/SubmitSignedTransaction',
+        { signedTxCbor: TEST_FIXTURES.signedTxCbor2, network: TEST_FIXTURES.network },
+      ).catch(err => err.response);
+
+      expect(status).to.equal(400);
+      expect(data.error.message).to.match(/no expiry/);
+      expect(scope.isDone()).to.be.false;
     });
 
     it('SubmitTransaction - successful submission with prior build', async () => {
@@ -84,7 +97,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
           changeAddress: TEST_FIXTURES.addressWithFunds,
           status: 'BUILT',
           unsignedTxCbor: 'mock_unsigned_tx_cbor',
-          txBodyHash: TEST_FIXTURES.expectedTxHashCbor2,
+          txBodyHash: TEST_FIXTURES.expectedTxHashWithTtl,
           createdAt: now,
           validFrom: new Date(now).toISOString(),
           validTo: new Date(now + 300000).toISOString(),
@@ -93,19 +106,19 @@ describe('Transaction Submission Tests [MOCKED]', () => {
 
       const scope = nock('https://preview.koios.rest')
         .post('/api/v1/submittx')
-        .reply(200, TEST_FIXTURES.expectedTxHashCbor2);
+        .reply(200, TEST_FIXTURES.expectedTxHashWithTtl);
 
       const submitResponse = await test.post(
         '/odata/v4/cardano-transaction/SubmitTransaction',
         {
           buildId: mockBuildId,
-          signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+          signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
         }
       );
 
       expect(submitResponse.status).to.equal(200);
       expect(submitResponse.data).to.exist;
-      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashCbor2);
+      expect(submitResponse.data.txHash).to.equal(TEST_FIXTURES.expectedTxHashWithTtl);
       expect(submitResponse.data.build_id).to.equal(mockBuildId);
       expect(scope.isDone()).to.be.true;
     });
@@ -160,14 +173,13 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         setupTxInfoMock([]);
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
-          .reply(400, {
-            error: 'Transaction validation failed: signature verification failed for input 0'
-          });
+          // the node's ledger failure for a bad signature, final for these bytes in any ledger state
+          .reply(400, { error: 'ShelleyTxValidationError ShelleyBasedEraConway (ApplyTxError [ConwayUtxowFailure (InvalidWitnessesUTXOW [VKey (VKeyHash "…")])])' });
 
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
             network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
@@ -175,7 +187,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         expect(status).to.equal(400);
         expect(data).to.have.property('error');
         expect(data.error).to.have.property('message');
-        expect(data.error.message).to.match(/validation failed|signature/i);
+        expect(data.error.message).to.match(/InvalidWitnessesUTXOW/);
         expect(scope.isDone()).to.be.true;
       });
 
@@ -189,7 +201,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
             network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
@@ -206,13 +218,13 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
           .reply(400, {
-            error: `Transaction ${TEST_FIXTURES.expectedTxHashCbor2} already exists in mempool`
+            error: `Transaction ${TEST_FIXTURES.expectedTxHashWithTtl} already exists in mempool`
           });
 
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
             network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
@@ -234,7 +246,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
             network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
@@ -245,7 +257,7 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         expect(scope.isDone()).to.be.true;
       });
 
-      it('SubmitSignedTransaction - should return 400 for malformed CBOR', async () => {
+      it('SubmitSignedTransaction - a decoding refusal of the node is no verdict: 503, the outcome stays open', async () => {
         setupTxInfoMock([]);
         const scope = nock('https://preview.koios.rest')
           .post('/api/v1/submittx')
@@ -256,15 +268,14 @@ describe('Transaction Submission Tests [MOCKED]', () => {
         const { status, data } = await test.post(
           '/odata/v4/cardano-transaction/SubmitSignedTransaction',
           {
-            signedTxCbor: TEST_FIXTURES.signedTxCbor2,
+            signedTxCbor: TEST_FIXTURES.signedTxCborWithTtl,
             network: TEST_FIXTURES.network,
           }
         ).catch(err => err.response);
 
-        expect(status).to.equal(400);
-        expect(data).to.have.property('error');
-        expect(data.error).to.have.property('message');
-        expect(data.error.message).to.match(/validation|deserialize|malformed/i);
+        // ODATANO decoded the bytes itself before the send; the node's refusal depends on its era, not the bytes
+        expect(status).to.equal(503);
+        expect(data.error.code).to.equal('ODATANO_SUBMIT_OUTCOME_UNKNOWN');
         expect(scope.isDone()).to.be.true;
       });
     });

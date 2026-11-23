@@ -9,9 +9,9 @@ export const CARDANO_DEFAULTS = {
 // Epoch layout per network, counted from the first Shelley epoch and slot.
 // securityParam is k, the number of recent blocks whose ledger state the node can still acquire.
 export const EPOCH_CONFIG_BY_NETWORK = {
-  mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000, securityParam: 2160 },
-  preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000, securityParam: 2160 },
-  preview: { shelleyStartEpoch: 0, shelleyStartSlot: 0, slotsPerEpoch: 86_400, securityParam: 432 },
+  mainnet: { shelleyStartEpoch: 208, shelleyStartSlot: 4_492_800, slotsPerEpoch: 432_000, securityParam: 2160, activeSlotsCoeff: 0.05 },
+  preprod: { shelleyStartEpoch: 4, shelleyStartSlot: 86_400, slotsPerEpoch: 432_000, securityParam: 2160, activeSlotsCoeff: 0.05 },
+  preview: { shelleyStartEpoch: 0, shelleyStartSlot: 0, slotsPerEpoch: 86_400, securityParam: 432, activeSlotsCoeff: 0.05 },
 } as const;
 
 /** Default Plutus execution units when dynamic evaluation is not available */
@@ -63,8 +63,9 @@ export const MAX_ARRAY_LENGTH = 1000;
 export const MAX_STRING_LENGTH = 65536;
 /** Maximum ech32 string length to prevent DoS */
 export const BECH32_MAX_LENGTH = 2000;
-/** Max tx CBOR hex accepted by ParseTransactionCbor: 64 KiB raw, well above mainnet maxTxSize (16 KiB). */
-export const MAX_TX_CBOR_HEX_LENGTH = 65536 * 2;
+// Max CBOR hex of ParseTransactionCbor and DecodePlutusData: 32 KiB raw, twice the protocol's
+// maxTxSize of 16 KiB. With its JSON wrapper it fits the 100 kB request body CAP accepts.
+export const MAX_TX_CBOR_HEX_LENGTH = 65536;
 /** Maximum reasonable epoch number */
 export const MAX_EPOCH = 100_000;
 /** Standard pool ID payload length */
@@ -97,6 +98,9 @@ export const DEFAULT_VALIDITY_START_OFFSET_MS = 120_000;
 /** Default validity-window end offset: `now + 1 h`, enough for human-latency sign+submit flows. */
 export const DEFAULT_VALIDITY_END_OFFSET_MS = 60 * 60 * 1000;
 
+/** Latest expiry ODATANO builds or sends, from now. It bounds how long a sent transaction stays undecided. */
+export const MAX_VALIDITY_MS = 24 * 60 * 60 * 1000;
+
 /** Max accepted digits in a Posix-ms string (13 digits covers Unix ms timestamps through ~Nov 2286). */
 export const MAX_POSIX_MS_DIGITS = 13;
 
@@ -123,3 +127,8 @@ export const POOL_ID_REGEX = /^pool1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{51}$/;
 
 /** DRep ID: bech32 with HRP "drep" and 50-60 chars payload */
 export const DREP_ID_REGEX = /^drep1[qpzry9x8gf2tvdw0s3jn54khce6mua7l]{50,60}$/;
+
+/** Ogmios submit refusal for inputs the ledger does not hold as unspent (schema: UnknownOutputReferences). */
+export const OGMIOS_UNKNOWN_OUTPUT_REFERENCES = 3117;
+/** Ogmios submit refusal by the mempool; its data.error is the node's own text (schema: UnexpectedMempoolError). */
+export const OGMIOS_UNEXPECTED_MEMPOOL_ERROR = 3997;

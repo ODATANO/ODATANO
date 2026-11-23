@@ -23,7 +23,7 @@ vi.mock('../../srv/utils/tx-utils', () => ({
   runWithoutAmbientTx: (fn: () => unknown) => fn(),
 }));
 vi.mock('../../srv/blockchain/signing/external-signer', () => ({ getExternalSignerModule: vi.fn() }));
-vi.mock('../../srv/blockchain/transaction-presence', () => ({ isTransactionOnChain: onChain }));
+vi.mock('../../srv/blockchain/transaction-presence', () => ({ findOnChain: onChain }));
 vi.mock('#cds-models/CardanoTransactionService', () => ({
   AddressTransactionBuilds: 'AddressTransactionBuilds', TransactionSubmissions: 'TransactionSubmissions',
 }));
@@ -40,18 +40,18 @@ function makeIndexer() {
     updateSubmissionStatus: vi.fn(async () => undefined),
     dropDuplicateSubmission: vi.fn(async () => false),
     invalidateUtxoCacheForTx: vi.fn(async () => undefined),
-    findIndexedTransaction: vi.fn(async () => null),
+    findCrawledTransaction: vi.fn(async () => null),
   };
 }
 function makeClient(submit: () => Promise<string>) {
-  return { submitTransaction: vi.fn(submit), getTransaction: vi.fn(), supports: vi.fn(() => true) };
+  return { network: 'preview' as const, submitTransaction: vi.fn(submit), getTransaction: vi.fn(), supports: vi.fn(() => true) };
 }
 const params = { signedTxCbor: 'beef', txHash: 'h', buildId: 'b1' };
 
 beforeEach(() => {
   commits.length = 0;
   onChain.mockReset();
-  onChain.mockResolvedValue(false);
+  onChain.mockResolvedValue(null);
 });
 
 describe('submitRecorded', () => {
@@ -62,7 +62,7 @@ describe('submitRecorded', () => {
     const result = await submitRecorded(params, indexer as never, client as never);
 
     expect(result.status).toBe('submitted');
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted');
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted', undefined, 'pending');
     expect(indexer.invalidateUtxoCacheForTx).toHaveBeenCalledWith(expect.anything(), expect.anything(), ['addr_test1_sender']);
     expect(onChain).not.toHaveBeenCalled();
     expect(commits).toHaveLength(2);
@@ -70,12 +70,12 @@ describe('submitRecorded', () => {
 
   it('commits failed with the message and rethrows when the node refused a transaction that is not on chain', async () => {
     const indexer = makeIndexer();
-    const err = new TransactionValidationError('ValueNotConserved', undefined);
+    const err = new TransactionValidationError('ConwayUtxowFailure (InvalidWitnessesUTXOW [...])', undefined);
     const client = makeClient(async () => { throw err; });
 
     await expect(submitRecorded(params, indexer as never, client as never)).rejects.toBe(err);
 
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'failed', expect.stringContaining('ValueNotConserved'), 'pending');
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'failed', expect.stringContaining('InvalidWitnessesUTXOW'), 'pending');
     expect(commits).toEqual(['record transaction submission', 'record submission outcome']);
   });
 
@@ -87,7 +87,7 @@ describe('submitRecorded', () => {
 
     expect(thrown).toBeInstanceOf(SubmitOutcomeUnknownError);
     expect(thrown).toMatchObject({ statusCode: 503, code: 'ODATANO_SUBMIT_OUTCOME_UNKNOWN', txHash: 'h' });
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'pending', expect.stringContaining('node down'));
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'pending', expect.stringContaining('node down'), 'pending');
     expect(indexer.updateSubmissionStatus).not.toHaveBeenCalledWith(expect.anything(), 's1', 'failed', expect.anything(), expect.anything());
   });
 
@@ -98,25 +98,25 @@ describe('submitRecorded', () => {
 
     await expect(submitRecorded(params, indexer as never, client as never)).rejects.toBeInstanceOf(SubmitOutcomeUnknownError);
 
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'pending', expect.stringContaining('BadInputsUTxO'));
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'pending', expect.stringContaining('BadInputsUTxO'), 'pending');
   });
 
   it('records a refused transaction that is on chain as submitted and answers 409', async () => {
     const indexer = makeIndexer();
-    onChain.mockResolvedValue(true);
+    onChain.mockResolvedValue({ slot: 1, height: 1, scriptFailed: false });
     const client = makeClient(async () => { throw new TransactionValidationError('BadInputsUTxO', undefined); });
 
     const thrown = await submitRecorded(params, indexer as never, client as never).catch((e: unknown) => e);
 
     expect(thrown).toBeInstanceOf(TransactionAlreadySubmittedError);
     expect(indexer.dropDuplicateSubmission).toHaveBeenCalledWith(expect.anything(), 's1', 'h');
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted');
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted', undefined, 'pending');
   });
 
   it('takes the refusal as final when no backend can look transactions up', async () => {
     const indexer = makeIndexer();
-    onChain.mockResolvedValue(null);
-    const err = new TransactionValidationError('ValueNotConserved', undefined);
+    onChain.mockResolvedValue(undefined);
+    const err = new TransactionValidationError('ConwayUtxowFailure (InvalidWitnessesUTXOW [...])', undefined);
     const client = makeClient(async () => { throw err; });
 
     await expect(submitRecorded(params, indexer as never, client as never)).rejects.toBe(err);
@@ -133,7 +133,7 @@ describe('submitRecorded', () => {
 
     expect(onChain).not.toHaveBeenCalled();
     expect(indexer.dropDuplicateSubmission).toHaveBeenCalledWith(expect.anything(), 's1', 'h');
-    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted');
+    expect(indexer.updateSubmissionStatus).toHaveBeenCalledWith(expect.anything(), 's1', 'submitted', undefined, 'pending');
   });
 
   it('drops its own row on a resubmit when the transaction already has one, and still answers 409', async () => {

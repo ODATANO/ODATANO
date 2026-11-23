@@ -1,7 +1,9 @@
 import { CardanoBackend, PaginatingBackend } from './cardano-backend';
 import { BlockFrostAPI } from '@blockfrost/blockfrost-js';
 import { handleBackendRequest } from '../../utils/backend-request-handler';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError } from '../../utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, normalizeBackendError, submitRejection, nodeRejectionReason, getErrorStatus } from '../../utils/errors';
+import { settleInBatches } from '../../utils/collections';
+import { callSignal } from './call-signal';
 import { normalizeCostModels, decodeAssetName, ledgerView, decodeShelleyAddress } from '../../utils/mappers';
 import { validPoolMetadata } from '../pool-metadata';
 import { inlineDatumToHex } from '../../utils/tx-build-helper';
@@ -23,12 +25,23 @@ import {
 } from '../../utils/types';
 import { Network } from '../cardano-client';
 
+type BlockfrostOptions = ConstructorParameters<typeof BlockFrostAPI>[0];
+
+// The client fails over to the next backend itself, so the SDK does not retry. A retry would run
+// past the client's timeout and repeat a request the client has given up.
+const NO_RETRY: NonNullable<NonNullable<BlockfrostOptions>['retrySettings']> = {
+  limit: 0,
+  methods: [],
+  statusCodes: [],
+  errorCodes: [],
+  calculateDelay: () => 0,
+};
+
 /** CardanoBackend + PaginatingBackend implementation on the Blockfrost API SDK. */
 export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   public readonly name = 'blockfrost';
   private api: BlockFrostAPI;
   private network: Network;
-  private timeoutMs: number;
 
   constructor(network: Network, timeoutMs: number, projectId: string, customBackend?: string) {
     if (!projectId && !customBackend) {
@@ -40,17 +53,18 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     // Self-hosted Blockfrost-compatible servers reject an empty project_id header,
     // even without authentication, so a placeholder is sent.
     const effectiveProjectId = projectId || 'self-hosted';
+    // the SDK builds its HTTP client in the constructor, so timeout and retries are set here
     this.api = new BlockFrostAPI({
       projectId: effectiveProjectId,
       network,
+      requestTimeout: timeoutMs,
+      retrySettings: NO_RETRY,
       ...(customBackend ? { customBackend } : {}),
     });
     this.network = network;
-    this.timeoutMs = timeoutMs;
   }
 
   async init(): Promise<boolean> {
-    this.api.options.requestTimeout = this.timeoutMs;
     // Test connection by fetching latest block
     try {
       await this.api.blocksLatest();
@@ -278,7 +292,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
           liveSaturation: poolData.live_saturation,
           activeStake: poolData.active_stake || '0',
           activeSize: poolData.active_size,
-          pledge: poolData.live_pledge || '0',
+          // the pledge of the certificate, as Koios and Ogmios report it; live_pledge is the owners' stake
+          pledge: poolData.declared_pledge || '0',
           margin: poolData.margin_cost,
           fixedCost: poolData.fixed_cost || '0',
           rewardAccount: poolData.reward_account,
@@ -340,26 +355,17 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         const count = Math.min(Math.max(1, limit), 100);
         const data = await this.api.assetsHistory(unit, { order: 'desc', count });
 
-        // Backfill block metadata via concurrent tx fetches
-        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
         const blockMetaByTx = new Map<string, { blockTime: number | null; blockHeight: number | null }>();
-        for (let i = 0; i < data.length; i += concurrent) {
-          const chunk = data.slice(i, i + concurrent);
-          const chunkResults = await Promise.allSettled(
-            chunk.map(entry => this.api.txs(entry.tx_hash))
-          );
-          chunk.forEach((entry, idx) => {
-            const r = chunkResults[idx];
-            if (r.status === 'fulfilled') {
-              blockMetaByTx.set(entry.tx_hash, {
-                blockTime: typeof r.value.block_time === 'number' ? r.value.block_time : null,
-                blockHeight: typeof r.value.block_height === 'number' ? r.value.block_height : null,
-              });
-            } else {
-              blockMetaByTx.set(entry.tx_hash, { blockTime: null, blockHeight: null });
+        const results = await settleInBatches(data, BlockfrostBackend.MAX_CONCURRENT, entry => this.api.txs(entry.tx_hash), callSignal());
+        data.forEach((entry, idx) => {
+          const r = results[idx];
+          blockMetaByTx.set(entry.tx_hash, r.status === 'fulfilled'
+            ? {
+              blockTime: typeof r.value.block_time === 'number' ? r.value.block_time : null,
+              blockHeight: typeof r.value.block_height === 'number' ? r.value.block_height : null,
             }
-          });
-        }
+            : { blockTime: null, blockHeight: null });
+        });
 
         return data.map(entry => {
           const meta = blockMetaByTx.get(entry.tx_hash) ?? { blockTime: null, blockHeight: null };
@@ -397,20 +403,13 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** Account by stake address (bech32), with all its addresses and their UTxOs. */
+  /** Account by stake address (bech32) with the addresses under it, not their UTxOs. */
   async getAccount(stakeAddress: string): Promise<AccountData> {
     return handleBackendRequest(
       async () => {
         const accountData = await this.api.accounts(stakeAddress);
         // *All variant paginates internally (plain accountsAddresses caps at 100 entries)
-        const addressData = await this.api.accountsAddressesAll(stakeAddress);
-        const addresses: Address[] = [];
-        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
-        for (let i = 0; i < addressData.length; i += concurrent) {
-          const chunk = addressData.slice(i, i + concurrent);
-          const chunkResults = await Promise.all(chunk.map(a => this.getAddress(a.address)));
-          addresses.push(...chunkResults);
-        }
+        const addresses = (await this.api.accountsAddressesAll(stakeAddress)).map(a => a.address);
         return {
           stakeaddress: accountData.stake_address,
           // `active` is the delegation state; registration lives in `registered`
@@ -436,8 +435,16 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     const txBytes = Buffer.from(signedTxCbor, "hex");
     return handleBackendRequest(
       async () => {
-        const txHash = await this.api.txSubmit(txBytes);
-        return txHash;
+        try {
+          return await this.api.txSubmit(txBytes);
+        } catch (err: unknown) {
+          // a 400 carries the node's rejection; the submit API forwards it in the body
+          if (getErrorStatus(err) === 400) {
+            const e = err as { body?: unknown; message?: string };
+            throw submitRejection(nodeRejectionReason(e.body ?? e.message ?? ''), this.name, err);
+          }
+          throw err;
+        }
       },
       this.name
     );
@@ -557,7 +564,8 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
         async () => {
           const utxos = await this.api.txsUtxos(txHash);
           const out = utxos?.outputs?.find(o => o.output_index === outputIndex);
-          if (!out) return false;
+          // consumed_by_tx is always null on a collateral output, so its state is unknown here
+          if (!out || (out as { collateral?: boolean }).collateral === true) return false;
           // Blockfrost servers before 0.1.59 omit consumed_by_tx. Without it unspent cannot be
           // proven, so the router must fall through to another backend.
           const consumed = (out as { consumed_by_tx?: string | null }).consumed_by_tx;
@@ -597,19 +605,16 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
     );
   }
 
-  /** Transactions by hash (map hash -> Transaction); no batch endpoint, so concurrency-limited parallel calls. */
+  // Transactions by hash, at most MAX_CONCURRENT calls at once. A hash Blockfrost does not know is
+  // left out, as Koios does; any other failure fails the batch.
   async getTransactionsBatch(txHashes: string[]): Promise<Map<string, Transaction>> {
     return handleBackendRequest(
       async () => {
         const result = new Map<string, Transaction>();
-        const concurrent = BlockfrostBackend.MAX_CONCURRENT;
-
-        for (let i = 0; i < txHashes.length; i += concurrent) {
-          const chunk = txHashes.slice(i, i + concurrent);
-          const txs = await Promise.all(chunk.map(h => this.getTransaction(h)));
-          for (const tx of txs) {
-            result.set(tx.hash, tx);
-          }
+        const settled = await settleInBatches(txHashes, BlockfrostBackend.MAX_CONCURRENT, h => this.getTransaction(h), callSignal());
+        for (const r of settled) {
+          if (r.status === 'fulfilled') result.set(r.value.hash, r.value);
+          else if (!(r.reason instanceof NotFoundError)) throw r.reason;
         }
         return result;
       },
@@ -625,7 +630,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   private toBlockData(b: {
     time: number; height: number | null; hash: string; slot: number | null;
     slot_leader: string; epoch: number | null; epoch_slot: number | null;
-    size: number; tx_count: number; fees?: string | null;
+    size: number; tx_count: number; fees?: string | null; previous_block?: string | null;
   }): BlockData {
     return {
       time: b.time,
@@ -638,6 +643,7 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
       size: b.size,
       txCount: b.tx_count,
       fees: b.fees,
+      previousHash: b.previous_block,
     };
   }
 
@@ -676,15 +682,22 @@ export class BlockfrostBackend implements CardanoBackend, PaginatingBackend {
   }
 
   /** Full transaction list of a block in block order (hashes from blocksTxsAll, details batched). */
-  async getBlockTransactions(blockHash: string): Promise<Transaction[]> {
+  async getBlockTransactions(blockHash: string, txCount?: number): Promise<Transaction[]> {
     return handleBackendRequest(
       async () => {
+        if (txCount === 0) return [];
         const hashes = await this.api.blocksTxsAll(blockHash);
+        // A short list, or a transaction the batch did not find, would store the block incomplete.
+        if (txCount !== undefined && hashes.length !== txCount) {
+          throw new ProviderUnavailableError(`Incomplete transaction list for block ${blockHash}: ${hashes.length}/${txCount} transaction(s)`, this.name);
+        }
         if (!hashes.length) return [];
         const byHash = await this.getTransactionsBatch(hashes);
-        return hashes
-          .map(h => byHash.get(h))
-          .filter((t): t is Transaction => t !== undefined);
+        const missing = hashes.filter(h => !byHash.has(h));
+        if (missing.length > 0) {
+          throw new ProviderUnavailableError(`Incomplete transaction data for block ${blockHash}: ${missing.length}/${hashes.length} transaction(s) missing`, this.name);
+        }
+        return hashes.map(h => byHash.get(h)!);
       },
       this.name
     );

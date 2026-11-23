@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { convertValue, convertRow } from '../../scripts/migrate-values.mjs';
+import { authConfig, loginPackage } from '../../docker/cds-config.mjs';
 
 const SCRIPT = path.resolve(__dirname, '../../docker/cds-config.mjs');
 
@@ -18,14 +19,14 @@ describe('docker/cds-config.mjs', () => {
     const r = run({ ODATANO_HTTP_PASSWORD: 'pw' });
     expect(r.code).toBe(0);
     const cfg = JSON.parse(r.out);
-    expect(cfg.requires.db).toEqual({ kind: 'sqlite', credentials: { url: '/data/db.sqlite' }, client: { timeout: 5000 } });
-    expect(cfg.requires.auth).toEqual({ kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { odatano: { password: 'pw', roles: ['Read', 'Transact', 'Sign', 'Admin'] } } });
+    expect(cfg.requires.db).toEqual({ kind: 'sqlite', credentials: { url: '/data/db.sqlite' }, pool: { min: 1, max: 1, evictionRunIntervalMillis: 0 }, client: { timeout: 5000 } });
+    expect(cfg.requires.auth).toEqual({ kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { odatano: { password: 'pw', roles: ['Read', 'Transact', 'Sign', 'Admin'] } }, trustProxy: 0 });
     expect(cfg.requires.kinds).toBeUndefined();
   });
 
   it('honours the SQLite path and timeout, user and roles', () => {
     const cfg = JSON.parse(run({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_DB_PATH: '/x/y.db', ODATANO_SQLITE_TIMEOUT_MS: '9000', ODATANO_HTTP_USER: 'ops', ODATANO_HTTP_ROLES: 'Admin, viewer' }).out);
-    expect(cfg.requires.db).toEqual({ kind: 'sqlite', credentials: { url: '/x/y.db' }, client: { timeout: 9000 } });
+    expect(cfg.requires.db).toEqual({ kind: 'sqlite', credentials: { url: '/x/y.db' }, pool: { min: 1, max: 1, evictionRunIntervalMillis: 0 }, client: { timeout: 9000 } });
     expect(cfg.requires.auth.users).toEqual({ ops: { password: 'pw', roles: ['Admin', 'viewer'] } });
   });
 
@@ -68,9 +69,38 @@ describe('docker/cds-config.mjs', () => {
     expect(unknown.err).not.toContain('s3cret');
   });
 
-  it('dummy auth needs no password', () => {
-    const cfg = JSON.parse(run({ ODATANO_AUTH: 'dummy' }).out);
+  it('dummy auth starts only with the written confirmation, and needs no password then', () => {
+    const refused = run({ ODATANO_AUTH: 'dummy' });
+    expect(refused.code).toBe(2);
+    expect(refused.err).toMatch(/ODATANO_ALLOW_UNAUTHENTICATED=yes-anyone-who-reaches-the-port-is-admin/);
+    expect(run({ ODATANO_AUTH: 'dummy', ODATANO_ALLOW_UNAUTHENTICATED: 'true' }).code).toBe(2);
+    const cfg = JSON.parse(run({ ODATANO_AUTH: 'dummy', ODATANO_ALLOW_UNAUTHENTICATED: 'yes-anyone-who-reaches-the-port-is-admin' }).out);
     expect(cfg.requires.auth).toEqual({ kind: 'dummy' });
+  });
+
+  it('ODATANO_TRUST_PROXY is the number of reverse proxies, handed to the basic lane', () => {
+    const reader = { trustedProxyCount: () => 0 };
+    expect(authConfig({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_TRUST_PROXY: '1' }, reader).trustProxy).toBe(1);
+    for (const value of ['-1', 'yes', '1.5', '11']) expect(run({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_TRUST_PROXY: value }).code, value).toBe(2);
+  });
+
+  it('refuses ODATANO_TRUST_PROXY when the login package cannot read it, instead of dropping it', () => {
+    expect(() => authConfig({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_TRUST_PROXY: '1' }, {})).toThrow(/needs @odatano\/cap-auth 0\.2\.0/);
+    expect(authConfig({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_TRUST_PROXY: '0' }, {}).trustProxy).toBe(0);
+    // the real installed package decides at start
+    const installed = typeof loginPackage().trustedProxyCount === 'function';
+    const r = run({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_TRUST_PROXY: '1' });
+    if (installed) expect(r.code).toBe(0);
+    else expect({ code: r.code, fatal: /FATAL: ODATANO_TRUST_PROXY needs @odatano\/cap-auth/.test(r.err) }).toEqual({ code: 2, fatal: true });
+  });
+
+  it('--db-label names the database without its password, also when the password holds an @', () => {
+    const r = run({ ODATANO_DB_URL: 'postgres://odatano:sup3r@secret@db:5432/odatano' }, '--db-label');
+    expect(r.out).toBe('postgres (odatano@db:5432/odatano)');
+    expect(r.out + r.err).not.toMatch(/sup3r|secret/);
+    expect(run({}, '--db-label').out).toBe('sqlite (/data/db.sqlite)');
+    const bad = run({ ODATANO_HTTP_PASSWORD: 'pw', ODATANO_DB_URL: 'mysql://u:p4ss@db/x' });
+    expect(bad.err).not.toContain('p4ss');
   });
 });
 

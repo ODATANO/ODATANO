@@ -183,8 +183,8 @@ export function aggregateStatements(): string[] {
     `SELECT address, MIN(stakeAddress), MIN(addressType), ` +
     `CASE WHEN MAX(CASE WHEN isScript THEN 1 ELSE 0 END) = 1 THEN TRUE ELSE FALSE END, ` +
     `SUM(lovelace), COUNT(*), NULL, NULL FROM ${T.utxos} WHERE spentTxHash IS NULL GROUP BY address`,
-    `INSERT INTO ${T.addressAssets} (address_address, unit, asset_quantity, asset_policyId, asset_assetNameHex, asset_assetName) ` +
-    `SELECT u.address, a.unit, SUM(a.asset_quantity), MIN(a.asset_policyId), MIN(a.asset_assetNameHex), MIN(a.asset_assetName) ` +
+    `INSERT INTO ${T.addressAssets} (address_address, unit, asset_quantity, asset_policyId, asset_assetNameHex, asset_assetName, asset_fingerprint) ` +
+    `SELECT u.address, a.unit, SUM(a.asset_quantity), MIN(a.asset_policyId), MIN(a.asset_assetNameHex), MIN(a.asset_assetName), MIN(a.asset_fingerprint) ` +
     `FROM ${T.utxoAssets} a JOIN ${T.utxos} u ON a.utxo_txHash = u.txHash AND a.utxo_outputIndex = u.outputIndex ` +
     `WHERE u.spentTxHash IS NULL GROUP BY u.address, a.unit`,
     `INSERT INTO ${T.accounts} (stakeAddress, controlledAmount, addressCount, utxoCount, lastActiveSlot) ` +

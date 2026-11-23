@@ -20,12 +20,14 @@ interface AccessTable {
   closed: Set<string>;
   /** Access by `Service.operation`. */
   operations: Map<string, AgentAccess>;
+  /** The grantable `Service.operation` names, in model order. */
+  grantable: readonly string[];
 }
 
 const tables = new WeakMap<object, AccessTable>();
 
 function buildTable(model: Model): AccessTable {
-  const table: AccessTable = { closed: new Set(), operations: new Map() };
+  const table: { closed: Set<string>; operations: Map<string, AgentAccess> } = { closed: new Set(), operations: new Map() };
   const definitions = Object.entries((model.definitions ?? {}) as Record<string, Annotated>);
   const services = definitions.filter(([, def]) => def.kind === 'service').map(([name]) => name);
   const serviceOf = (name: string) => services.find((service) => name.startsWith(`${service}.`));
@@ -46,7 +48,8 @@ function buildTable(model: Model): AccessTable {
     if (def.kind === 'action' || def.kind === 'function') add(service, name.slice(service.length + 1), def);
     for (const [bound, action] of Object.entries(def.actions ?? {})) add(service, bound, action);
   }
-  return table;
+  const grantable = Object.freeze([...table.operations].filter(([, access]) => access === 'grant').map(([key]) => key));
+  return { ...table, grantable };
 }
 
 function tableOf(model: Model | null | undefined): AccessTable | undefined {
@@ -66,10 +69,29 @@ export function agentAccessOf(service: string, event: string, model: Model | nul
   return table.operations.get(`${service}.${event}`) ?? 'operator';
 }
 
-/** Names of the operations a grant may list, in model order. */
-export function agentGrantableActions(model: Model | null | undefined = cds.model): string[] {
-  const table = tableOf(model);
-  if (!table) return [];
-  const names = [...table.operations].filter(([, access]) => access === 'grant').map(([key]) => key.slice(key.indexOf('.') + 1));
-  return [...new Set(names)];
+/** The operations a grant may list, as `Service.operation`, in model order. */
+export function agentGrantableActions(model: Model | null | undefined = cds.model): readonly string[] {
+  return tableOf(model)?.grantable ?? [];
+}
+
+/** The service whose operations a new unqualified grant name never means: it takes raw provider calls. */
+const BACKEND_SERVICE = 'CardanoBackendService';
+
+const named = (grantable: readonly string[], name: string) => grantable.filter((key) => key.endsWith(`.${name}`));
+
+// The grantable `Service.operation` a new grant entry names, or null. A name without a service means
+// the operation of that name in the transaction or the sign service.
+export function qualifyGrantName(name: string, model: Model | null | undefined = cds.model): string | null {
+  const grantable = agentGrantableActions(model);
+  if (name.includes('.')) return grantable.includes(name) ? name : null;
+  const matches = named(grantable, name).filter((key) => !key.startsWith(`${BACKEND_SERVICE}.`));
+  return matches.length === 1 ? matches[0] : null;
+}
+
+// What a stored grant entry allows. A name without a service was stored before allow lists were
+// qualified, and it allowed the operation of that name in every service.
+export function storedGrantNames(name: string, model: Model | null | undefined = cds.model): readonly string[] {
+  const grantable = agentGrantableActions(model);
+  if (name.includes('.')) return grantable.includes(name) ? [name] : [];
+  return named(grantable, name);
 }

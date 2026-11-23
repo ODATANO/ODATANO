@@ -60,7 +60,7 @@ describe('First read of an unindexed address', () => {
     setupNocks();
     setupKoiosMocks();
     // indexAddress also pulls recent txs (best-effort) — keep it quiet and empty
-    nock('https://preview.koios.rest').post('/api/v1/address_txs').reply(200, []).persist();
+    nock('https://preview.koios.rest').post('/api/v1/address_txs').query(true).reply(200, []).persist();
   });
 
   afterEach(() => {

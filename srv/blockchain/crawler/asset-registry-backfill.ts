@@ -33,6 +33,8 @@ export interface RegistryBackfillOptions {
   /** Backend calls per second; one unit is one call. */
   unitsPerSecond?: number;
   onProgress?: (p: RegistryBackfillProgress) => void;
+  /** Stops the run before the next unit. */
+  shouldStop?: () => boolean;
 }
 
 /** The run stops when this many units in a row fail: the backend is down, not the units. */
@@ -50,6 +52,7 @@ export async function backfillAssetRegistry(opts: RegistryBackfillOptions): Prom
   let consecutiveFailures = 0;
 
   for (const unit of units) {
+    if (opts.shouldStop?.()) break;
     const started = Date.now();
     try {
       await cds.tx(async (tx: CapTransaction) => {
@@ -129,6 +132,7 @@ export function parseRegistryEntry(json: string): RegistryEntry | null {
 export interface RegistryFileOptions {
   directory: string; // folder with one <subject>.json per registry entry
   onProgress?: (p: RegistryBackfillProgress) => void;
+  shouldStop?: () => boolean; // stops the run before the next batch of files
 }
 
 /** The entry files of `directory`; refuses a path that holds none. */
@@ -152,6 +156,7 @@ export async function backfillAssetRegistryFromFiles(opts: RegistryFileOptions):
   const files = await registryEntryFiles(opts.directory);
   const progress: RegistryBackfillProgress = { units: files.length, processed: 0, filled: 0, failed: 0, absent: 0, skipped: 0 };
   for (const batch of chunk(files, 200)) {
+    if (opts.shouldStop?.()) break;
     const entries: RegistryEntry[] = [];
     for (const name of batch) {
       try {

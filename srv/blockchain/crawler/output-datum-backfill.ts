@@ -3,6 +3,7 @@ import type { Transaction as CapTransaction } from '@sap/cds';
 import type { CardanoClient } from '../cardano-client';
 import type { TxOutputLine } from '../../utils/types';
 import { chunk, IN_CHUNK } from '../../utils/collections';
+import { pageByKey } from './key-pages';
 import { Transactions, TransactionInputs, TransactionOutputs, LedgerUTxOs, type TransactionOutput } from '#cds-models/odatano/cardano';
 
 const { SELECT, UPDATE } = cds.ql;
@@ -94,11 +95,13 @@ export interface OutputDatumBackfillProgress extends OutputFillCounts {
 
 export interface OutputDatumBackfillOptions {
   client: Pick<CardanoClient, 'getTransactionsBatch' | 'supports'>;
-  /** Stored outputs per page. Must exceed the outputs one transaction can hold. */
+  /** Stored outputs per page. */
   chunkSize?: number;
   /** Transactions per backend read. */
   batchSize?: number;
   onProgress?: (p: OutputDatumBackfillProgress) => void;
+  /** Stops the walk before the next page. */
+  shouldStop?: () => boolean;
 }
 
 type PageRow = Pick<TransactionOutput, 'txSeq' | 'outputIndex' | 'utxo_dataHash' | 'utxo_inlineDatum'>;
@@ -112,21 +115,12 @@ export async function backfillOutputDatums(opts: OutputDatumBackfillOptions): Pr
   const chunkSize = opts.chunkSize ?? 5000;
   const batchSize = Math.min(opts.batchSize ?? 100, IN_CHUNK);
   const progress: OutputDatumBackfillProgress = { scanned: 0, candidates: 0, transactions: 0, missing: 0, outputs: 0, inputs: 0, ledgerUtxos: 0 };
-  let cursor: number | null = null;
-  for (;;) {
-    const after: number | null = cursor;
-    const rows: PageRow[] = ((await cds.tx((tx: CapTransaction) => tx.run(
-      SELECT.from(TransactionOutputs).columns('txSeq', 'outputIndex', 'utxo_dataHash', 'utxo_inlineDatum')
-        .where(after == null ? {} : { txSeq: { '>': after } }).orderBy('txSeq', 'outputIndex').limit(chunkSize)
-    ))) as PageRow[] | undefined) ?? [];
-    if (!rows.length) break;
-    const full = rows.length === chunkSize;
-    const lastSeq = Number(rows[rows.length - 1].txSeq);
-    // The last transaction of a full page may continue on the next one, so its rows wait there.
-    const whole = rows.filter((r) => Number(r.txSeq) !== lastSeq);
-    const complete = full && whole.length ? whole : rows;
-    const candidates = complete.filter((r) => r.utxo_dataHash != null && r.utxo_inlineDatum == null);
-    progress.scanned += complete.length;
+  await pageByKey<PageRow>({
+    entity: TransactionOutputs, keys: ['txSeq', 'outputIndex'], columns: ['utxo_dataHash', 'utxo_inlineDatum'], chunkSize,
+    shouldStop: opts.shouldStop,
+  }, async (rows) => {
+    const candidates = rows.filter((r) => r.utxo_dataHash != null && r.utxo_inlineDatum == null);
+    progress.scanned += rows.length;
     progress.candidates += candidates.length;
 
     for (const seqs of chunk([...new Set(candidates.map((r) => Number(r.txSeq)))], batchSize)) {
@@ -145,11 +139,8 @@ export async function backfillOutputDatums(opts: OutputDatumBackfillOptions): Pr
       progress.inputs += counts.inputs;
       progress.ledgerUtxos += counts.ledgerUtxos;
     }
-
-    cursor = Number(complete[complete.length - 1].txSeq);
     opts.onProgress?.({ ...progress });
-    if (!full) break;
-  }
+  });
   logger.info(
     `output datums: ${progress.outputs} outputs, ${progress.inputs} inputs and ${progress.ledgerUtxos} UTxO set rows filled; ` +
     `${progress.candidates} candidates in ${progress.scanned} outputs, ${progress.transactions} transactions read, ${progress.missing} not returned`

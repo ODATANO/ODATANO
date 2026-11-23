@@ -1,247 +1,161 @@
 # Error Handling in ODATANO
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
-This documentation describes error handling in ODATANO, specifically how backend
-errors are normalized and propagated to the client.
+How a failure becomes a typed error and an HTTP answer. The classes are in `srv/utils/errors.ts`, the codes in
+`srv/utils/error-codes.ts`.
 
-## Error Classes Overview
+## Error Classes
 
-ODATANO uses **13 specialized error classes** for comprehensive error handling:
+`BackendError` is the base class. It carries:
 
-### Backend Communication Errors
+- `statusCode`: the HTTP status
+- `code`: the `ODATANO_*` code
+- `backendName`: the backend that failed, when one did
+- `originalError`: the error it was made from; stays on the server
+- `target`: the field or resource the error is about
 
-#### 1. `BackendError` (Base Class)
+| Class | Status | Meaning | Retry |
+|---|---|---|---|
+| `NotFoundError` | 404 | The resource is not on chain. Not a provider fault | No |
+| `TransactionValidationError` | 400 | Wrong signature, changed CBOR, invalid witnesses, or CBOR that cannot be decoded | No |
+| `ScriptValidationError` | 400 | The ledger refused a script in phase 2 | No |
+| `InsufficientFundsError` | 400 | The address lacks the funds or assets | After a top-up |
+| `MixedAssetsError` | 400 | A UTxO carries native assets where only ADA is allowed | With other inputs |
+| `TransactionAlreadySubmittedError` | 409 | The transaction is in the mempool or on chain | No, it is there |
+| `ChainPointMismatchError` | 409 | A crawler cursor block is not on this instance's chain | From the fork point |
+| `RateLimitError` | 429 | A provider throttled the request. `retryAfter` in seconds when the provider named it | After waiting |
+| `ProviderUnavailableError` | 503 | A provider did not answer, timed out or failed | Yes |
+| `SubmitOutcomeUnknownError` | 503 | A submit ended without a verdict. The transaction may still reach the chain | Read the status first |
+| `HsmError` | 503 | An HSM session, key access or signing failed | Depends on the cause |
+| `BackendInitError` | 500 | One backend failed to initialize | |
+| `AllBackendsFailedError` | 404 when every backend answered 404, otherwise the status of the last other error | Every backend failed. Carries each error. 503 when no backend was called | |
 
-Base class for all backend-related errors with:
-- `statusCode`: HTTP status code (400-599)
-- `code`: Error code from ERROR_CODES
-- `backendName`: Which backend failed (e.g., "Blockfrost", "Koios")
-- `originalError`: Original error object for debugging
-- `target`: Affected resource/field
+Three classes report a chain-sync stream that closed or sent a frame the parser could not read:
+`ChainSyncClosedError`, `ChainSyncStalledError` and `ChainSyncFrameError`. The crawler handles them: it
+reopens the stream or fetches the block over pagination. A client does not see them.
 
-#### 2. `NotFoundError` (404)
+Two classes are not a `BackendError`:
 
-Resource does not exist on the blockchain. This is **not** a provider error.
-- **Not retry-able**: The resource genuinely doesn't exist
-- **Example**: Transaction hash not found, address never used
+- `ConfigError`: a setting is missing or invalid, for example an unknown `NETWORK`.
+- `AllBackendsInitFailedError`: every backend failed to initialize. It carries each `BackendInitError`.
 
-#### 3. `RateLimitError` (429)
+### Signing
 
-Provider has throttled the request due to usage limits.
-- **Retry-able**: After waiting (check `retry-after` hint)
-- **Example**: Blockfrost 10 req/sec exceeded
-- **Response**: May include `retry-after` seconds
+The sign service answers 400 `ODATANO_INVALID_INPUT` for a request it cannot work with:
 
-#### 4. `ProviderUnavailableError` (503)
-
-Transient provider, network, or timeout issues.
-- **Retry-able**: Temporary issue, may succeed on retry
-- **Example**: Network timeout (8s), provider 5xx errors, service down
-
-#### 5. `AllBackendsFailedError` (502/503)
-
-All configured backends failed for the operation.
-- **Contains**: Array of individual backend errors
-- **Status**: Inherits status of last failed backend
-- **Indicates**: Systemic issue beyond single resource
-
-### Configuration & Initialization Errors
-
-#### 6. `ConfigError` (500)
-
-Configuration error (missing API keys, invalid settings).
-- **Example**: BLOCKFROST_API_KEY not set, invalid network
-- **Fix**: Check environment variables and config.ts
-
-#### 7. `BackendInitError` (500)
-
-Single backend failed to initialize.
-- **Contains**: Backend name and original error
-- **Example**: Invalid Blockfrost API key, network mismatch
-
-#### 8. `AllBackendsInitFailedError` (500)
-
-All backends failed during initialization.
-- **Contains**: Array of BackendInitError instances
-- **Result**: Service startup fails (no backends available)
-
-### Transaction Errors (M2)
-
-#### 9. `InsufficientFundsError` (400)
-
-Sender address doesn't have enough UTxOs to cover amount + fees.
-- **Error Code**: `ODATANO_INSUFFICIENT_FUNDS`
-- **Example**: Address has 5 ADA but needs 10 ADA + fees
-- **Fix**: Top up sender address or reduce amount
-
-#### 10. `TransactionValidationError` (400)
-
-Transaction failed Cardano protocol validation.
-- **Error Code**: `ODATANO_TX_VALIDATION_FAILED`
-- **Example**: Invalid signature, malformed CBOR, wrong signing key
-- **Fix**: Verify signing key matches sender address
-
-#### 11. `TransactionAlreadySubmittedError` (409)
-
-Transaction with same hash already exists on chain or in mempool.
-- **Error Code**: `ODATANO_TX_ALREADY_SUBMITTED`
-- **Example**: Duplicate submission of same transaction
-- **Result**: Idempotent - transaction already processed
-
-#### 11a. `SubmitOutcomeUnknownError` (503)
-
-A submit failed without a verdict from the node: timeout, outage, rate limit, or a refusal whose chain lookup failed.
-- **Error Code**: `ODATANO_SUBMIT_OUTCOME_UNKNOWN`
-- **Result**: The transaction may still reach the chain. The signing request stays `submitting`, the submission `pending`, and the server resolves it
-- **Fix**: Read the status before sending a replacement
-
-#### 12. `MixedAssetsError` (400)
-
-UTxO contains non-ADA assets when ADA-only transaction was requested.
-- **Error Code**: `ODATANO_INVALID_INPUT`
-- **Example**: Simple ADA transfer includes UTxO with native tokens
-- **Fix**: Use multi-asset transaction or select different UTxOs
-
-### HSM Errors (M3)
-
-#### 13. `HsmError` (503)
-
-Hardware Security Module operation failed (signing, session, key access).
-- **Error Code**: `ODATANO_HSM_UNAVAILABLE`
-- **Retry-able**: Depends on root cause (session timeout vs misconfiguration)
-- **Example**: HSM device unavailable, signing session expired, key not accessible
-
-### External Signing Errors (M3)
-
-M3 reuses existing error classes for signing-specific scenarios:
-
-**Signing Request Not Found (404)**
-- Uses `NotFoundError`
-- Signing request ID doesn't exist or has been cleaned up
-
-**Signing Request Expired (400)**
-- Uses `rejectInvalid` with "Signing request expired" message
-- Request exceeded 30-minute TTL
-
-**Signature Verification Failed (400)**
-- Uses `TransactionValidationError`
-- Invalid signature, wrong signing key, or malformed CBOR
-- **Example**: Signed with wrong key, tampered transaction
-
-**Build Not Found (404)**
-- Uses `NotFoundError`
-- Transaction build ID doesn't exist or has expired
+| Case | Answer |
+|---|---|
+| Signing request or build not found | 400 `Signing request not found` or `Build not found` |
+| Signing request expired (30 minutes by default) | 400 `Signing request has expired`; the request ends as `expired` |
+| Signing request in another status than the action expects | 400 with the status in the message |
+| `VerifySignature` with a signature that does not verify | 200; the verification record has `isValid: false` |
+| `SubmitVerifiedTransaction` with a signature that does not verify | 400, `TransactionValidationError` |
 
 ## Error Codes
 
-All error codes are defined in `srv/utils/error-codes.ts` and follow the `ODATANO_*` prefix convention:
+An error from a handler carries its code in `error.code`.
 
-| Code | HTTP | Description |
-|------|------|-------------|
-| `ODATANO_INVALID_INPUT` | 400 | Malformed address, invalid transaction hash, missing fields |
-| `ODATANO_FORBIDDEN` | 403 | Authenticated, but missing the required role — HSM signing paths enforce `hsm.requiresRole`; `SubmitWalletJob` enforces the wallet's `requiresRole` and, on an HSM-backed wallet, `hsm.requiresRole` |
-| `ODATANO_NOT_FOUND` | 404 | Resource not found on blockchain |
-| `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds/assets for transaction |
-| `ODATANO_TX_VALIDATION_FAILED` | 400 | Transaction failed protocol validation |
-| `ODATANO_TX_ALREADY_SUBMITTED` | 409 | Duplicate transaction (already in mempool/on chain) |
-| `ODATANO_CHAIN_POINT_MISMATCH` | 409 | `GetNextBlocks`: the cursor block is not on this instance's chain (orphaned by a reorg); message starts with `CHAIN_POINT_MISMATCH:` |
-| `ODATANO_PROVIDER_RATE_LIMITED` | 429 | Backend rate limit exceeded |
-| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | Backend temporarily unavailable |
-| `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | A submit got no verdict from the node; the record stays open (`submitting` / `pending`) and the server resolves it |
-| `ODATANO_INTERNAL_ERROR` | 500 | Unexpected internal error (fallback) |
+| Code | HTTP | Meaning |
+|------|------|---------|
+| `ODATANO_INVALID_INPUT` | 400 | Malformed address or hash, missing field, value out of range |
+| `ODATANO_INSUFFICIENT_FUNDS` | 400 | Not enough funds or assets for the transaction |
+| `ODATANO_TX_VALIDATION_FAILED` | 400 | The transaction failed validation |
+| `ODATANO_TX_PARSE_FAILED` | 400 | The transaction CBOR could not be decoded |
+| `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | The ledger refused the transaction in phase-2 script evaluation |
+| `ODATANO_HSM_NOT_CONFIGURED` | 503 | `SignWithHsm` or `SignAndSubmitWithHsm` without a configured or connected HSM |
+| `ODATANO_FORBIDDEN` | 403 | Logged in, but without the role. The HSM actions need `hsm.requiresRole`. `SubmitWalletJob` needs the wallet's `requiresRole` and, for an HSM wallet, `hsm.requiresRole`. The message starts with `[ODATANO_FORBIDDEN] <Action>:` |
+| `ODATANO_NOT_FOUND` | 404 | The resource is not on chain |
+| `ODATANO_TX_ALREADY_SUBMITTED` | 409 | The transaction is already in the mempool or on chain |
+| `ODATANO_CHAIN_POINT_MISMATCH` | 409 | `GetNextBlocks`: the cursor block is not on this instance's chain. The message starts with `CHAIN_POINT_MISMATCH:` |
+| `ODATANO_IDEMPOTENCY_KEY_CONFLICT` | 409 | The idempotency key belongs to a wallet job with another request |
+| `ODATANO_PROVIDER_RATE_LIMITED` | 429 | A provider's rate limit was hit |
+| `ODATANO_INTERNAL_ERROR` | 500 | Unexpected error |
+| `ODATANO_HSM_SIGNING_FAILED` | 500 | The HSM signing operation failed |
+| `ODATANO_PROVIDER_UNAVAILABLE` | 503 | No provider answered |
+| `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | A submit got no verdict from the node. The record stays open (`submitting` or `pending`) and the server resolves it |
 | `ODATANO_HSM_UNAVAILABLE` | 503 | HSM device or session not available |
-| `ODATANO_HSM_SIGNING_FAILED` | 500 | HSM signing operation failed |
-| `ODATANO_HSM_NOT_CONFIGURED` | 400 | HSM signing requested but not configured |
-| `ODATANO_TX_PARSE_FAILED` | 400 | Transaction CBOR could not be decoded (malformed/truncated) |
-| `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | Ledger rejected the tx in phase-2 script evaluation |
-| `ODATANO_NESTED_TX_TIMEOUT` | 503 | A submit action called from a handler whose own transaction holds the database connection got none of its own within 10 seconds (see "From your own CAP handler: `deferSubmit`" in the User Guide) |
+| `ODATANO_NESTED_TX_TIMEOUT` | 503 | A submit action got no database connection within 10 seconds, because the caller's own transaction holds it. See "From your own CAP handler: `deferSubmit`" in the User Guide |
 
-### Failures that are deliberately NOT surfaced as errors
+## Failures That Are Not HTTP Errors
 
-The chain crawler and the wallet worker are background subsystems — their failures land on a row,
-not in an HTTP response:
+The crawler and the wallet worker run in the background. Their failures are written to a row.
 
-- **Wallet jobs** carry `errorCode` / `errorMessage` and a terminal `status`. The codes are job-level,
-  not `ODATANO_*`: `PROCESS_RESTART`, `TX_DROPPED`, `RETRIES_EXHAUSTED`, `CANCELLED`, `SUBMIT_REJECTED`.
-  A job whose submit outcome is unknown stays in `submitting` and is reconciled against the chain
-  rather than failed — failing it would release the idempotency key and invite a duplicate payment.
-- **The crawler** records `syncStatus` and `consecutiveErrors` on its cursor. Runtime failures leave
-  `desiredRunning: true` so a restart resumes; only unrecoverable configuration errors latch the
-  cluster (`desiredRunning: false`), which then requires an explicit `resumeCrawler`.
+- **Wallet jobs** carry `errorCode`, `errorMessage` and a final `status`. `errorCode` is the `ODATANO_*` code
+  of the error that ended the job, or one of `PROCESS_RESTART`, `TX_DROPPED`, `RETRIES_EXHAUSTED`,
+  `CANCELLED`, `SUBMIT_REJECTED`, `EXECUTION_FAILED`, `SCRIPT_FAILED` (it landed with failing scripts),
+  `OUTCOME_UNRESOLVED` (status `unresolved`), `RESOLVED_FAILED` (an Admin resolved it as failed) and
+  `INVALIDATED` (a self-transfer spent an input of a transaction without an expiry).
+- `SUBMIT_REJECTED` and `TX_DROPPED` are written only with proof that the transaction can never land; see
+  [What a failed submit means](../guides/TRANSACTION_WORKFLOW.md#what-a-failed-submit-means).
+- The Resolve actions answer 409 `ODATANO_OUTCOME_STILL_OPEN` for `failed` while the bytes can still land,
+  and 409 `ODATANO_RESOLVED_CONCURRENTLY` when another call resolved the record first.
+- A job whose submit outcome is unknown stays `submitting` and is checked against the chain. Failing it
+  would release the idempotency key and allow a second payment.
+- **The crawler** writes `syncStatus`, `lastError` and `consecutiveErrors` to its cursor row. After a
+  runtime failure a restart resumes at the cursor. A refused chain-sync rollback sets `nodeBehindSince`
+  (the node is behind the cursor) or `syncStatus = error` (an inconsistent rollback point).
+- A block that fails again and again, or a configuration the crawler cannot run with, switches it off for
+  all instances (`desiredRunning: false`). `resumeCrawler` switches it on again.
 
-## Normalization Rules
+## Normalization
 
-The `normalizeBackendError()` function converts any error into a typed `BackendError` using this priority:
+`normalizeBackendError()` turns any error of a backend call into one of the classes. The first rule that
+matches decides. Message hints are compared in lower case.
 
-### Priority Order
+| # | Condition | Result |
+|---|---|---|
+| 1 | Already a `BackendError` | Returned as it is |
+| 2 | `TypeError` from a call on a client that is `null` or `undefined` | 500 `BackendInitError` |
+| 3 | Ogmios JSON-RPC code 3010 | 400 `ScriptValidationError` |
+| 4 | Message: "already exists", "already submitted", "already known", "known transaction", "duplicate", "in mempool" | 409 `TransactionAlreadySubmittedError`, with the hash when the message holds one |
+| 5 | Message: "plutusfailure", "cekerror", "overspending the budget", "script failure", "script failed", "script evaluation", "ppviewhashesdontmatch", "scriptsnotpaidforall" and similar | 400 `ScriptValidationError` |
+| 6 | Message: "invalid address", "malformed address" | 404 `NotFoundError` |
+| 7 | Message: "signature", "witness", "verification failed", "deserialize", "malformed", "invalid cbor", "invalid transaction" | 400 `TransactionValidationError` |
+| 8 | Status 400 or 422 with a PostgreSQL code for a server-side fault | 503 `ProviderUnavailableError` |
+| 9 | Message: "not found", "has not been found", "does not exist", "no data found", "no records", "empty result", "no metadata" | 404 `NotFoundError` |
+| 10 | Status 429, or message: "rate limit", "too many requests", "quota exceeded" | 429 `RateLimitError`, with `retry-after` or `x-ratelimit-reset` when sent |
+| 11 | Status 404 | 404 `NotFoundError` |
+| 12 | Status 5xx | 503 `ProviderUnavailableError` |
+| 13 | Status 400 or 422 | 400 `TransactionValidationError` |
+| 14 | Status 401, 402 or 403 | 503 `ProviderUnavailableError`: the provider refused the key, so the next backend is asked |
+| 15 | Any other 4xx | 503 `ProviderUnavailableError` |
+| 16 | Anything else, such as a network error | 503 `ProviderUnavailableError` |
 
-1. **Already a `BackendError`** → return as-is (no re-normalization)
+Why the order matters:
 
-2. **TypeError (null/undefined access) → 500 (BackendInitError)**
-   - Detects uninitialized backend clients (`Cannot read properties of null`)
-   - **Why**: Catches `init()` not called before use
+- Submit errors are matched before the general rules, so a duplicate or a failed script is not read as a
+  provider outage.
+- The not-found messages are matched before the status. Some providers answer a missing resource with a
+  status other than 404.
+- Rule 8 comes before rule 9. Koios reports a database fault as status 400, and its message can contain
+  "does not exist".
+- "not available" and a bare "no data" are no not-found hints. They also appear in outage messages.
 
-3. **TX already submitted hints → 409 (TransactionAlreadySubmittedError)**
-   - Hints: "already exists", "already submitted", "already known", "known transaction", "duplicate", "in mempool"
-   - Extracts txHash from message if present (64 hex chars)
+A 4xx other than 429 is the verdict of a healthy backend. It is no failure for the circuit breaker, and in
+the half-open state it counts like a success. A 429 and an outage count as failures.
 
-4. **TX validation hints → 400 (TransactionValidationError)**
-   - Hints: "signature", "witness", "verification failed", "deserialize", "malformed", "invalid cbor", "invalid transaction", "script failure"
+## Utilities
 
-5. **Not-found message hints → 404 (NotFoundError)**
-   - Hints: "not found", "has not been found", "does not exist", "no data", "no records", "empty result", "not available", "no metadata", "invalid address", "malformed address"
-   - **Why**: Some providers return 5xx for missing resources (Koios)
+| Function | File | Purpose |
+|----------|------|---------|
+| `handleRequest(req, handler)` | `backend-request-handler.ts` | Runs a service handler on the request transaction and passes every error to `mapError()` |
+| `handleBackendRequest(fn, backendName)` | `backend-request-handler.ts` | Runs a backend call and normalizes its error |
+| `mapError(req, err, ctx)` | `mappers.ts` | Rejects the request with status, code and message of a `BackendError`. Any other error is logged and answered as 500 without its message |
+| `rejectMissing(req, ctx, field)` | `errors.ts` | Throws 400 for a missing parameter |
+| `rejectInvalid(req, ctx, message, target)` | `errors.ts` | Throws 400 for an invalid value |
+| `throwIfValidationErrors(req, ctx, errors)` | `errors.ts` | Throws for the first error of `validateTransactionInputs()` |
 
-6. **Status 429 or rate-limit messages → 429 (RateLimitError)**
-   - Patterns: "rate limit", "too many requests", "quota exceeded"
-   - Extracts `retry-after` / `x-ratelimit-reset` header if present
+## Rules
 
-7. **Status 404 → 404 (NotFoundError)**
-   - Direct mapping for well-behaved providers (Blockfrost)
+- Throw the typed classes, not a plain `Error`.
+- Wrap backend calls in `handleBackendRequest()`.
+- Wrap service handlers in `handleRequest()`.
+- Validate input before `handleRequest()`, not inside it.
+- Use `throwIfValidationErrors()` for several fields, `rejectMissing` and `rejectInvalid` for one.
 
-8. **Status 5xx → 503 (ProviderUnavailableError)**
-   - Provider server errors are retry-able
+## Tests
 
-9. **Status 4xx → 503 (ProviderUnavailableError)**
-   - Other client errors treated as provider issue
-
-10. **Unknown/network errors → 503 (ProviderUnavailableError)**
-    - Timeouts, connection refused, etc.
-
-### Why This Approach?
-**Transaction-specific detection first** ensures that TX submission errors are classified correctly before falling through to generic provider error handling.
-
-**Message-first detection** for not-found ensures consistent 404 responses even when providers return incorrect status codes (critical for Koios-Blockfrost compatibility).
-
-## Backend Notes
-
-- **Blockfrost**: Returns correct HTTP statuses; 404 maps directly to NotFoundError.
-- **Koios**: May return 5xx for "not found"; normalization converts to 404 for consistency.
-- **Ogmios**: WebSocket-based live backend for protocol parameters, UTxO queries, and transaction submission. Connection errors normalized to ProviderUnavailableError.
-
-## Error Handling Utilities
-
-| Function | Location | Purpose |
-|----------|----------|---------|
-| `handleRequest(req, handler)` | `backend-request-handler.ts` | Service-level wrapper — opens `cds.tx(req)`, catches errors, calls `mapError()` |
-| `handleBackendRequest(fn, backendName)` | `backend-request-handler.ts` | Backend-level wrapper — normalizes errors via `normalizeBackendError()` |
-| `mapError(req, err, ctx)` | `mappers.ts` | Converts `BackendError` → `req.reject()`, unknown errors → 500 |
-| `rejectMissing(req, ctx, field)` | `errors.ts` | Throws 400 for missing required parameter |
-| `rejectInvalid(req, ctx, message, target)` | `errors.ts` | Throws 400 for invalid input format |
-| `throwIfValidationErrors(req, ctx, errors)` | `errors.ts` | Batch validation — throws first error from `validateTransactionInputs()` |
-
-## Best Practices
-
-- Throw typed error classes (`NotFoundError`, `ProviderUnavailableError`, etc.) — avoid generic `Error`
-- Wrap backend calls with `handleBackendRequest()` for automatic normalization
-- Use `handleRequest()` in CDS service handlers (full request lifecycle)
-- Input validation MUST happen **before** `handleRequest()`, not inside it
-- Use `throwIfValidationErrors()` for multi-field validation, `rejectMissing`/`rejectInvalid` for single fields
-
-## Testing References
-
-- Error normalization unit tests: [test/unit/errors.test.ts](../../test/unit/errors.test.ts)
-- Blockfrost backend constructor tests: [test/unit/blockfrost-backend.test.ts](../../test/unit/blockfrost-backend.test.ts)
-- Error handling service integration tests: [test/integration/error-handling-service.test.ts](../../test/integration/error-handling-service.test.ts) (34 tests)
-
+- Classes and normalization: [test/unit/errors.test.ts](../../test/unit/errors.test.ts)
+- Error paths of the backends: [test/unit/error-paths.test.ts](../../test/unit/error-paths.test.ts)
+- Answers of the services: [test/integration/error-handling-service.test.ts](../../test/integration/error-handling-service.test.ts)

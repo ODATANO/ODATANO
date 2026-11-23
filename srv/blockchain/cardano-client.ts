@@ -1,10 +1,11 @@
 import cds from '@sap/cds';
 import { CardanoBackend, isEvaluatingBackend, ChainSyncBackend, PaginatingBackend, EnumeratingBackend, LedgerStateBackend, EpochStateBackend, isEpochStateBackend, isChainSyncBackend, isPaginatingBackend, isEnumeratingBackend, isLedgerStateBackend, TokenRegistryBackend, isTokenRegistryBackend, RewardAccountStateBackend, isRewardAccountStateBackend } from './backends/cardano-backend';
-import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError } from '../utils/errors';
+import { BackendError, ConfigError, AllBackendsFailedError, ProviderUnavailableError, AllBackendsInitFailedError, BackendInitError, normalizeBackendError, TransactionAlreadySubmittedError, isBackendVerdict, errorText } from '../utils/errors';
 import { PendingSpends } from './pending-spends';
 import { DEFAULT_INDEX_TTL_MS, PROTOCOL_PARAMS_TTL_MS } from '../utils/const';
 import { CircuitBreakerManager, type CircuitBreakerConfig } from './circuit-breaker';
 import { RequestCoalescer } from './request-coalescer';
+import { withCallSignal } from './backends/call-signal';
 
 import {
   Transaction,
@@ -60,6 +61,11 @@ const METHOD_ROUTING: Record<string, { preferLive: boolean; finalOnClientError?:
 };
 
 export type Network = 'mainnet' | 'preview' | 'preprod';
+
+/** A backend that reads unspent outputs by reference. */
+interface OutputLookupBackend {
+  getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]>;
+}
 export type BackendName = 'blockfrost' | 'koios' | 'ogmios' | 'odatano';
 
 export type CardanoClientConfig = {
@@ -90,6 +96,8 @@ export class CardanoClient {
   private circuitBreaker: CircuitBreakerManager;
   /** Backends whose init failed. They stay in rotation and init is retried per request. */
   private uninitializedBackends = new Set<CardanoBackend>();
+  /** Running init retry per backend, shared by concurrent callers. */
+  private initRetries = new Map<CardanoBackend, Promise<boolean>>();
   network: Network;
   max_age_ms: number = DEFAULT_INDEX_TTL_MS;
   /** Transactions submitted through this client that the ledger view does not show yet. */
@@ -126,10 +134,11 @@ export class CardanoClient {
     }
     if (backends.includes('koios')) {
       const { KoiosBackend } = backendModules.koios();
-      this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.primaryTimeoutMs, clientConfig.koiosApiKey));
+      // the same timeout the client allows a Koios call, see getTimeoutForBackend
+      this.historicalBackends.push(new KoiosBackend(clientConfig.network, clientConfig.fallbackTimeoutMs, clientConfig.koiosApiKey));
     }
     if (backends.includes('odatano')) {
-      // A remote ODATANO runs its own failover chain: allow its primary timeout plus the fallback.
+      // A remote ODATANO runs its own failover chain behind one call, so it gets the longer fallback timeout.
       const { OdatanoBackend } = backendModules.odatano();
       this.historicalBackends.push(new OdatanoBackend(
         clientConfig.network, clientConfig.fallbackTimeoutMs, clientConfig.odatanoUrl, clientConfig.odatanoApiKey,
@@ -233,39 +242,53 @@ export class CardanoClient {
     this.initialized = true;
   }
 
-  /** Retries a failed startup init. False records a breaker failure. */
+  // Retries a failed startup init. Concurrent callers share one attempt, so a backend that holds
+  // a connection (Ogmios) opens one. False records a breaker failure.
   private async ensureBackendInitialized(backend: CardanoBackend, errors?: BackendError[]): Promise<boolean> {
     if (!this.uninitializedBackends.has(backend)) return true;
+    let attempt = this.initRetries.get(backend);
+    if (!attempt) {
+      attempt = backend.init().then(() => {
+        this.uninitializedBackends.delete(backend);
+        logger.info(`Backend ${backend.name} recovered (lazy init succeeded)`);
+        return true;
+      }, (err: unknown) => {
+        const initError = new BackendInitError(backend.name, err);
+        this.circuitBreaker.recordFailure(backend.name);
+        logger.debug(`Lazy init retry for ${backend.name} failed: ${initError.message}`);
+        throw initError;
+      }).finally(() => this.initRetries.delete(backend));
+      this.initRetries.set(backend, attempt);
+    }
     try {
-      await backend.init();
-      this.uninitializedBackends.delete(backend);
-      logger.info(`Backend ${backend.name} recovered (lazy init succeeded)`);
-      return true;
+      return await attempt;
     } catch (err: unknown) {
-      const initError = new BackendInitError(backend.name, err);
-      errors?.push(initError);
-      this.circuitBreaker.recordFailure(backend.name);
-      logger.debug(`Lazy init retry for ${backend.name} failed: ${initError.message}`);
+      errors?.push(err instanceof BackendError ? err : new BackendInitError(backend.name, err));
       return false;
     }
   }
 
-  /** Wrap a promise with a timeout that rejects with ProviderUnavailableError. */
-  private withTimeout<T>(
-    promise: Promise<T>,
-    ms: number,
-    backendName: string
-  ): Promise<T> {
+  // Runs `call` with a deadline. On timeout it rejects with ProviderUnavailableError and aborts the
+  // call's signal, so the HTTP requests and batch loops the call started stop too.
+  private withTimeout<T>(call: () => Promise<T>, ms: number, backendName: string): Promise<T> {
+    const controller = new AbortController();
     let timeoutId: ReturnType<typeof setTimeout>;
-
     const timeoutPromise = new Promise<T>((_, reject) => {
-      timeoutId = setTimeout(
-        () => reject(new ProviderUnavailableError('Backend timeout', backendName, ms)),
-        ms
-      );
+      timeoutId = setTimeout(() => {
+        const timeout = new ProviderUnavailableError('Backend timeout', backendName, ms);
+        controller.abort(timeout);
+        reject(timeout);
+      }, ms);
     });
-
-    return Promise.race([promise, timeoutPromise]).finally(() => {
+    let run: Promise<T>;
+    try {
+      run = withCallSignal(controller.signal, call);
+    } catch (err: unknown) {
+      // a call that throws before it returns its promise leaves no timer behind
+      clearTimeout(timeoutId!);
+      return Promise.reject(err);
+    }
+    return Promise.race([run, timeoutPromise]).finally(() => {
       clearTimeout(timeoutId);
     });
   }
@@ -287,17 +310,21 @@ export class CardanoClient {
       throw new ProviderUnavailableError(`Backend ${backend.name} is not initialized (lazy retry failed)`, backend.name);
     }
     try {
-      const result = await this.withTimeout(fn(), this.getTimeoutForBackend(backend), backend.name);
+      const result = await this.withTimeout(fn, this.getTimeoutForBackend(backend), backend.name);
       this.circuitBreaker.recordSuccess(backend.name);
       return result;
     } catch (err: unknown) {
       const backendError = normalizeBackendError(err, backend.name);
-      const isClientError = backendError.statusCode >= 400 && backendError.statusCode < 500;
-      if (!isClientError) {
-        this.circuitBreaker.recordFailure(backend.name);
-      }
+      this.recordOutcome(backend, backendError);
       throw backendError;
     }
+  }
+
+  // A verdict about the request (404, 400) comes from a healthy backend: it releases a half-open
+  // probe and is no failure. Anything else, a rate limit included, counts as a failure.
+  private recordOutcome(backend: CardanoBackend, error: BackendError): void {
+    if (isBackendVerdict(error)) this.circuitBreaker.recordVerdict(backend.name);
+    else this.circuitBreaker.recordFailure(backend.name);
   }
 
   /** Execute on backends in preference order (live vs historical) with automatic fallback. */
@@ -344,29 +371,19 @@ export class CardanoClient {
         const backendType = backend === this.liveBackend ? 'live' : 'historical';
         logger.debug(`Calling backend: ${backend.name} (${backendType})`);
 
-        const result = await this.withTimeout(
-          fn(backend),
-          this.getTimeoutForBackend(backend),
-          backend.name
-        );
+        const result = await this.withTimeout(() => fn(backend), this.getTimeoutForBackend(backend), backend.name);
         this.circuitBreaker.recordSuccess(backend.name);
         return result;
       } catch (err: unknown) {
         const backendError = normalizeBackendError(err, backend.name);
         errors.push(backendError);
-
-        // 4xx are definitive verdicts from a healthy backend and must not open the circuit;
-        // only 5xx/timeouts/transport errors indicate backend health.
-        const isClientError = backendError.statusCode >= 400 && backendError.statusCode < 500;
-        if (!isClientError) {
-          this.circuitBreaker.recordFailure(backend.name);
-        }
+        this.recordOutcome(backend, backendError);
 
         const logLevel = backendError.statusCode === 404 ? 'debug' : 'warn';
         logger[logLevel](
           `Backend failed${backendError.statusCode === 404 ? ': resource not found' : ''}: ${backend.name} - ${backendError.message}`
         );
-        if (finalOnClientError && isClientError) throw backendError;
+        if (finalOnClientError && isBackendVerdict(backendError)) throw backendError;
       }
     }
 
@@ -400,19 +417,39 @@ export class CardanoClient {
     return this.route('getAddressUtxos', b => b.getAddressUtxos(address));
   }
 
-  // UTxOs of every address form that shares the payment credential.
-  // Needs Koios or another ODATANO, because Blockfrost has no credential lookup.
+  // UTxOs of every address form that shares the payment credential, Koios first, then another ODATANO.
+  // Blockfrost has no credential lookup.
   getCredentialUtxos(credHash: string): Promise<UTxO[]> {
-    const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
-    const capable = candidates.filter((b): b is CardanoBackend => typeof b?.getCredentialUtxos === 'function');
-    const backend = capable.find(b => b.name === 'koios') ?? capable[0];
-    if (!backend) {
+    const capable = this.capableBackends(b => typeof b.getCredentialUtxos === 'function', 'koios');
+    if (!capable.length) {
       throw new ProviderUnavailableError(
         "getCredentialUtxos requires a Koios or odatano backend. Configure one in cds.requires.odatano-core.backends.",
         'koios'
       );
     }
-    return this.credCoalescer.get(credHash, () => this.callWithResilience(backend, () => backend.getCredentialUtxos!(credHash)));
+    return this.credCoalescer.get(credHash, () => this.firstAnswer(capable, b => b.getCredentialUtxos!(credHash)));
+  }
+
+  /** Backends that pass `can`, the one named `preferred` first. */
+  private capableBackends(can: (b: CardanoBackend) => boolean, preferred: string): CardanoBackend[] {
+    const candidates = [this.liveBackend, ...this.historicalBackends].filter((b): b is CardanoBackend => !!b && can(b));
+    return [...candidates.filter(b => b.name === preferred), ...candidates.filter(b => b.name !== preferred)];
+  }
+
+  // Asks `backends` in order with the breaker and timeout rules and fails over to the next one.
+  // A verdict other than 404 ends the round, as on the routed paths.
+  private async firstAnswer<T>(backends: CardanoBackend[], fn: (b: CardanoBackend) => Promise<T>): Promise<T> {
+    const errors: BackendError[] = [];
+    for (const backend of backends) {
+      try {
+        return await this.callWithResilience(backend, () => fn(backend));
+      } catch (err: unknown) {
+        const backendError = normalizeBackendError(err, backend.name);
+        errors.push(backendError);
+        if (isBackendVerdict(backendError) && backendError.statusCode !== 404) throw backendError;
+      }
+    }
+    throw new AllBackendsFailedError(errors);
   }
 
   getAddressTransactions(address: string, limit: number): Promise<Transaction[]> {
@@ -452,25 +489,42 @@ export class CardanoClient {
       try {
         return await this.callWithResilience(provider, () => provider.getAccount(stakeAddress));
       } catch (err: unknown) {
-        logger.debug(`getAccount on ${provider.name} failed, trying the next provider: ${err instanceof Error ? err.message : String(err)}`);
+        logger.debug(`getAccount on ${provider.name} failed, trying the next provider: ${errorText(err)}`);
       }
     }
     return account;
   }
 
-  // The node lists only delegated credentials, so its absence proves nothing and providers decide.
-  // A provider 404 means not registered. Null when no source could tell.
+  // The node lists only delegated credentials, so its 404 proves nothing. A provider 404 means not
+  // registered. Another ODATANO gives its own verdict; its null, like the node's 404, is a healthy
+  // "cannot tell". Null when nobody could tell, and a failure only when nobody answered at all.
   async isRewardAccountRegistered(stakeAddress: string): Promise<boolean | null> {
-    try {
-      return await this.executeWithPriority(async b => (await b.getAccount(stakeAddress)).active, true, 'getAccount');
-    } catch (err: unknown) {
-      if (err instanceof AllBackendsFailedError) {
-        const providers = err.errors.filter(e => e.backendName !== this.liveBackend?.name);
-        if (providers.some(e => e.statusCode === 404)) return false;
-        if (err.errors.length > 0 && err.errors.every(e => e.statusCode === 404)) return null;
+    await this.ensureInitialized();
+    const backends = [this.liveBackend, ...this.historicalBackends].filter((b): b is CardanoBackend => !!b);
+    const errors: BackendError[] = [];
+    let answered = false;
+    let notRegistered = false;
+    for (const backend of backends) {
+      if (backend.unsupportedMethods?.has('getAccount') && !backend.isRewardAccountRegistered) continue;
+      try {
+        const verdict = backend.isRewardAccountRegistered
+          ? await this.callWithResilience(backend, () => backend.isRewardAccountRegistered!(stakeAddress))
+          : (await this.callWithResilience(backend, () => backend.getAccount(stakeAddress))).active;
+        answered = true;
+        if (verdict !== null) return verdict;
+      } catch (err: unknown) {
+        const backendError = normalizeBackendError(err, backend.name);
+        if (backendError.statusCode !== 404) {
+          errors.push(backendError);
+          continue;
+        }
+        answered = true;
+        if (backend !== this.liveBackend) notRegistered = true;
       }
-      throw err;
     }
+    if (notRegistered) return false;
+    if (answered) return null;
+    throw new AllBackendsFailedError(errors);
   }
 
   /** Asset info (supply, mint history, CIP-25/CIP-26 metadata); Blockfrost and Koios only. */
@@ -478,19 +532,16 @@ export class CardanoClient {
     return this.route('getAssetInfo', b => b.getAssetInfo(unit));
   }
 
-  /** Latest mint and burn events. Prefers Koios, because Blockfrost leaves timestamps null. */
+  /** Latest mint and burn events. Koios first, because Blockfrost leaves timestamps null. */
   getAssetHistory(unit: string, limit: number = 100): Promise<AssetHistoryEntry[]> {
-    const candidates: (CardanoBackend | undefined)[] = [...this.historicalBackends, this.liveBackend];
-    const koios = candidates.find(b => b?.name === 'koios' && typeof b.getAssetHistory === 'function');
-    if (koios) return this.callWithResilience(koios, () => koios.getAssetHistory!(unit, limit));
-    const anyImpl = candidates.find(b => typeof b?.getAssetHistory === 'function');
-    if (!anyImpl) {
+    const capable = this.capableBackends(b => typeof b.getAssetHistory === 'function', 'koios');
+    if (!capable.length) {
       throw new ProviderUnavailableError(
         "getAssetHistory requires Blockfrost or Koios backend.",
         'asset-history'
       );
     }
-    return this.callWithResilience(anyImpl, () => anyImpl.getAssetHistory!(unit, limit));
+    return this.firstAnswer(capable, b => b.getAssetHistory!(unit, limit));
   }
 
   //-----------------------------------------------------------------------------
@@ -505,7 +556,7 @@ export class CardanoClient {
         try {
           return await this.callWithResilience(backend, () => backend.getAddressTransactionHashes!(address, limit));
         } catch (err: unknown) {
-          logger.debug(`getAddressTransactionHashes failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)}, trying next backend`);
+          logger.debug(`getAddressTransactionHashes failed on ${backend.name}: ${errorText(err)}, trying next backend`);
         }
       }
     }
@@ -522,7 +573,7 @@ export class CardanoClient {
         try {
           return await this.callWithResilience(backend, () => backend.getTransactionsBatch!(txHashes));
         } catch (err: unknown) {
-          logger.debug(`getTransactionsBatch failed on ${backend.name}: ${err instanceof Error ? err.message : String(err)}, trying next backend`);
+          logger.debug(`getTransactionsBatch failed on ${backend.name}: ${errorText(err)}, trying next backend`);
         }
       }
     }
@@ -569,23 +620,30 @@ export class CardanoClient {
     return null;
   }
 
-  // Outputs among refs that are unspent at the tip, read from the node's ledger.
-  // Null when no backend can. The caller then reads the producing tx, which lacks reference-script bytes.
-  async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
-    const backend = this.getLedgerStateBackend() ?? this.outputLookupBackend();
-    return backend ? backend.getUnspentOutputs(refs) : null;
+  // The tip, then whether each reference is unspent, both from the same backend, the node first, so
+  // the answers are at least as new as the tip. `live` says it is the node's own ledger; an indexer
+  // may lag it. A reference the backend does not know is not unspent.
+  async readLedger(refs: Array<{ txHash: string; outputIndex: number }>): Promise<{ live: boolean; tip: number; unspent: boolean[] }> {
+    const backends = [this.liveBackend, ...this.historicalBackends].filter((b): b is CardanoBackend => !!b);
+    return this.firstAnswer(backends, async (b) => {
+      const tip = await b.getCurrentSlot();
+      const unspent: boolean[] = [];
+      for (const ref of refs) unspent.push(await b.isUtxoUnspent(ref.txHash, ref.outputIndex));
+      return { live: b === this.liveBackend, tip, unspent };
+    });
   }
 
-  /** A usable backend answering output-reference lookups without a whole-ledger dump (the odatano backend). */
-  private outputLookupBackend(): { getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> } | null {
+  // Outputs among refs that are unspent at the tip, read from the node's ledger.
+  // Null when no backend can. The caller then reads the producing tx, which lacks reference-script bytes.
+  // With timeout, breaker and failover: the node first, then another ODATANO.
+  async getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[] | null> {
     const candidates: (CardanoBackend | undefined)[] = [this.liveBackend, ...this.historicalBackends];
-    for (const b of candidates) {
-      const lookup = b as (CardanoBackend & { getUnspentOutputs?: (refs: Array<{ txHash: string; outputIndex: number }>) => Promise<UTxO[]> }) | undefined;
-      if (lookup && !this.uninitializedBackends.has(lookup) && typeof lookup.getUnspentOutputs === 'function') {
-        return lookup as { getUnspentOutputs(refs: Array<{ txHash: string; outputIndex: number }>): Promise<UTxO[]> };
-      }
-    }
-    return null;
+    const usable = candidates.filter((b): b is CardanoBackend & OutputLookupBackend =>
+      !!b && !this.uninitializedBackends.has(b) && typeof (b as Partial<OutputLookupBackend>).getUnspentOutputs === 'function');
+    // a backend with the whole ledger first
+    const backends = [...usable.filter(b => isLedgerStateBackend(b)), ...usable.filter(b => !isLedgerStateBackend(b))];
+    if (!backends.length) return null;
+    return this.firstAnswer(backends, b => (b as CardanoBackend & OutputLookupBackend).getUnspentOutputs(refs));
   }
 
   /** True when an initialized backend implements `method` and does not declare it unsupported. */

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Prints the image's CDS_CONFIG JSON, built from the environment. Exits 2 when the environment is unusable.
 // --db-only prints just the database binding, for migrate modes that need no credentials.
+// --db-label prints the database for the log: kind, host, port, database and user, never a password.
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 
@@ -10,7 +11,7 @@ export function postgresCredentials(url) {
     let u;
     try { u = new URL(url); } catch { throw new Error('ODATANO_DB_URL is not a valid URL'); }
     if (!/^postgres(ql)?:$/i.test(u.protocol)) {
-        throw new Error(`ODATANO_DB_URL must be a postgres:// URL (got '${url.replace(/:\/\/[^@]*@/, '://***@').slice(0, 40)}…'); for SQLite use ODATANO_DB_PATH`);
+        throw new Error(`ODATANO_DB_URL must be a postgres:// URL (got the scheme '${u.protocol}'); for SQLite use ODATANO_DB_PATH`);
     }
     const database = decodeURIComponent(u.pathname.replace(/^\//, ''));
     if (!u.hostname || !database) throw new Error('ODATANO_DB_URL needs a host and a database name (postgres://user:pw@host:5432/db)');
@@ -51,6 +52,9 @@ export const POSTGRES_POOL = Object.freeze({
 });
 export const POSTGRES_CLIENT = Object.freeze({ connectionTimeoutMillis: 10000 });
 
+// SQLite has one writer. Named in full, so no profile or plugin configuration can widen the pool.
+export const SQLITE_POOL = Object.freeze({ min: 1, max: 1, evictionRunIntervalMillis: 0 });
+
 export function databaseConfig(env = process.env) {
     const url = String(env.ODATANO_DB_URL ?? '').trim();
     if (url) {
@@ -58,12 +62,51 @@ export function databaseConfig(env = process.env) {
     }
     const path = String(env.ODATANO_DB_PATH ?? '/data/db.sqlite');
     const timeout = Number(env.ODATANO_SQLITE_TIMEOUT_MS) || 5000;
-    return { kind: 'sqlite', credentials: { url: path }, client: { timeout } };
+    return { kind: 'sqlite', credentials: { url: path }, pool: { ...SQLITE_POOL }, client: { timeout } };
 }
 
-export function authConfig(env = process.env) {
+/** The database as the log names it. */
+export function databaseLabel(env = process.env) {
+    const db = databaseConfig(env);
+    if (db.kind !== 'postgres') return `sqlite (${db.credentials.url})`;
+    const { user, host, port, database } = db.credentials;
+    return `postgres (${user ? `${user}@` : ''}${host}:${port}/${database})`;
+}
+
+/** Value of ODATANO_ALLOW_UNAUTHENTICATED that admits ODATANO_AUTH=dummy. */
+export const UNAUTHENTICATED_CONFIRMATION = 'yes-anyone-who-reaches-the-port-is-admin';
+
+/** ODATANO_TRUST_PROXY: reverse proxies in front of the container, 0 without one. */
+export function trustedProxies(env = process.env) {
+    const raw = String(env.ODATANO_TRUST_PROXY ?? '').trim();
+    if (!raw) return 0;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 10) throw new Error(`ODATANO_TRUST_PROXY must be the number of reverse proxies, 0 to 10 (got '${raw}')`);
+    return n;
+}
+
+/** The installed login package, read when a setting depends on its release. */
+export function loginPackage() {
+    return createRequire(import.meta.url)('@odatano/cap-auth');
+}
+
+// A proxy count the installed login package cannot read would be dropped without a word, and one
+// guessing client behind the proxy would lock out everyone. So the start refuses it.
+export function assertProxySupport(trustProxy, pkg = loginPackage()) {
+    if (trustProxy > 0 && typeof pkg?.trustedProxyCount !== 'function') {
+        throw new Error('ODATANO_TRUST_PROXY needs @odatano/cap-auth 0.2.0 or later; the installed release ignores it');
+    }
+}
+
+export function authConfig(env = process.env, pkg) {
     const kind = String(env.ODATANO_AUTH ?? 'basic');
-    if (kind === 'dummy') return { kind: 'dummy' };
+    if (kind === 'dummy') {
+        // A container cannot see whether its port is published, so the operator has to say it in words.
+        if (env.ODATANO_ALLOW_UNAUTHENTICATED !== UNAUTHENTICATED_CONFIRMATION) {
+            throw new Error(`ODATANO_AUTH=dummy switches every login and role check off. It starts only with ODATANO_ALLOW_UNAUTHENTICATED=${UNAUTHENTICATED_CONFIRMATION}`);
+        }
+        return { kind: 'dummy' };
+    }
     if (kind !== 'basic') throw new Error(`unsupported ODATANO_AUTH='${kind}' (use: basic | dummy)`);
     const password = String(env.ODATANO_HTTP_PASSWORD ?? '');
     if (!password) throw new Error('ODATANO_HTTP_PASSWORD is required with basic auth (local unauthenticated testing only: ODATANO_AUTH=dummy)');
@@ -71,7 +114,9 @@ export function authConfig(env = process.env) {
     // The single configured user IS the operator of this deployment, so it
     // carries every role unless ODATANO_HTTP_ROLES says otherwise.
     const roles = String(env.ODATANO_HTTP_ROLES ?? 'Read,Transact,Sign,Admin').split(',').map(r => r.trim()).filter(Boolean);
-    return { kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { [user]: { password, roles } } };
+    const trustProxy = trustedProxies(env);
+    assertProxySupport(trustProxy, pkg);
+    return { kind: 'basic', impl: '@odatano/cap-auth', realm: 'odatano', users: { [user]: { password, roles } }, trustProxy };
 }
 
 // CAP only discovers @cap-js/postgres among project dependencies, but the image installs it beside them.
@@ -94,7 +139,10 @@ export function cdsConfig(env = process.env, { dbOnly = false } = {}) {
 
 if (import.meta.url === `file://${process.argv[1]}` || import.meta.url === `file:///${String(process.argv[1]).replace(/\\/g, '/')}`) {
     try {
-        process.stdout.write(JSON.stringify(cdsConfig(process.env, { dbOnly: process.argv.includes('--db-only') })) + '\n');
+        const out = process.argv.includes('--db-label')
+            ? databaseLabel(process.env)
+            : JSON.stringify(cdsConfig(process.env, { dbOnly: process.argv.includes('--db-only') }));
+        process.stdout.write(out + '\n');
     } catch (e) {
         process.stderr.write(`FATAL: ${e.message}\n`);
         process.exit(2);

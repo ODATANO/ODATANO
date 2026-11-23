@@ -1,14 +1,12 @@
 # ODATANO Quick Start Guide
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
-This guide gets you running the OData V4 service in minutes — either as a **plugin in your existing CAP project** or as a **standalone application**.
+Two ways to run the OData V4 service: as a plugin in a CAP project, or from this repository.
 
 ---
 
 ## Option A: Use as CAP Plugin
-
-The fastest way to add Cardano blockchain access to any SAP CAP project.
 
 ### 1) Install
 
@@ -18,7 +16,7 @@ npm install @odatano/core @cap-js/sqlite
 
 ### 2) Configure
 
-Add the `odatano-core` section to your project's `package.json`:
+Add to your project's `package.json`:
 
 ```json
 {
@@ -35,46 +33,58 @@ Add the `odatano-core` section to your project's `package.json`:
 }
 ```
 
-The services ask for the roles `Read`, `Transact` and `Sign` (`Admin` for operator actions). The `auth`
-entry gives them to CAP's development user `alice`; in production your own authentication assigns them.
+- The services ask for the roles `Read`, `Transact` and `Sign`, and for `Admin` on operator actions. The
+  `auth` entry gives them to the development user `alice`. In production your own authentication assigns them.
+- Koios needs no account. A token from [koios.rest](https://koios.rest) is optional and raises the rate
+  limit. Set it as `KOIOS_API_KEY` in a `.env` file or as `koiosApiKey` in the config. A value in the config
+  wins over the environment variable.
 
-Koios needs no account on its public tier. A token from [koios.rest](https://koios.rest) is optional and raises the rate limit. Set it as `KOIOS_API_KEY` in a `.env` file, or as `koiosApiKey` in the config above.
-
-All config options:
+Options of `odatano-core`:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `network` | `preview` | `mainnet`, `preview`, or `preprod` |
-| `backends` | `["koios"]` | `koios`, `ogmios`, `blockfrost`, `odatano` (array) |
-| `koiosApiKey` | | Optional token for Koios, raises the rate limit |
-| `blockfrostApiKey` | | Required if using the blockfrost backend |
-| `ogmiosUrl` | | Required if using ogmios (e.g. `ws://localhost:1337`) |
-| `primaryTimeoutMs` | `30000` | Timeout for primary backend |
+| `network` | `preview` | `mainnet`, `preview` or `preprod` |
+| `backends` | `["koios"]` | Array of `koios`, `ogmios`, `blockfrost`, `odatano` |
+| `koiosApiKey` | | Optional Koios token, raises the rate limit |
+| `blockfrostApiKey` | | Needed with the `blockfrost` backend, unless `blockfrostCustomBackend` is set |
+| `blockfrostCustomBackend` | | URL of a self-hosted Blockfrost-compatible node |
+| `ogmiosUrl` | | Needed with the `ogmios` backend, for example `ws://localhost:1337` |
+| `odatanoUrl` | public API of the network | Remote ODATANO for the `odatano` backend. Required on mainnet |
+| `odatanoApiKey` | | Key for the remote ODATANO |
+| `primaryTimeoutMs` | `30000` | Timeout for the primary backend |
 | `fallbackTimeoutMs` | `60000` | Timeout for fallback backends |
 | `indexTtlMs` | `3600000` | Cache TTL (1 hour) |
-| `poolMetadataFetch` | `false` | Load pool names and tickers from the metadata URL a pool registered (needed with Ogmios alone) |
+| `poolMetadataFetch` | `false` | Load pool names and tickers from the URL a pool registered. Needed with Ogmios alone |
+
+The sections `crawler`, `walletWorker`, `hsm` and `agentGrants` are off by default. The
+[Crawler Guide](guides/CRAWLER_GUIDE.md), the [User Guide](guides/USER_GUIDE.md) and the
+[Security Guide](guides/SECURITY_GUIDE.md) describe them.
+[Backend Configuration](guides/BACKEND_CONFIGURATION.md) describes the backends.
 
 ### 3) Run
 
 ```bash
+cds deploy --to sqlite
 cds watch
 ```
 
-All seven services auto-register:
-- **CardanoODataService** at `/odata/v4/cardano/` — read blockchain data
-- **CardanoTransactionService** at `/odata/v4/cardano-transaction/` — build & submit transactions
-- **CardanoSignService** at `/odata/v4/cardano-sign/` — external signing workflow
-- **CardanoIndexerService** at `/odata/v4/cardano-indexer/` — chain crawler / pre-sync control (off by default)
-- **CardanoWorkerService** at `/odata/v4/cardano-worker/` — asynchronous wallet jobs (off by default)
-- **CardanoBackendService** at `/odata/v4/cardano-backend/` — chain data for another ODATANO that uses this one as its `odatano` backend
-- **CardanoAgentService** at `/odata/v4/cardano-agent/` — agent grants: scoped tokens for agents (off by default)
+`cds deploy` creates `db.sqlite`. The plugin registers seven services:
 
-> `getStatus`, `GetJobStatus` and `GetWorkerStatus` are OData **functions** — call them with
-> HTTP GET and the parameters in the URL, e.g. `GET .../cardano-worker/GetWorkerStatus()`.
-> POSTing to a function returns 405.
+| Service | Path | Purpose |
+|---|---|---|
+| CardanoODataService | `/odata/v4/cardano/` | Read chain data |
+| CardanoTransactionService | `/odata/v4/cardano-transaction/` | Build and submit transactions |
+| CardanoSignService | `/odata/v4/cardano-sign/` | External signing and HSM |
+| CardanoIndexerService | `/odata/v4/cardano-indexer/` | Chain crawler control, off by default |
+| CardanoWorkerService | `/odata/v4/cardano-worker/` | Asynchronous wallet jobs, off by default |
+| CardanoBackendService | `/odata/v4/cardano-backend/` | Chain data for another ODATANO that uses this one as its `odatano` backend |
+| CardanoAgentService | `/odata/v4/cardano-agent/` | Agent grants, off by default |
 
-Both services also publish **CAP events**, so a CAP consumer can subscribe rather than poll —
-in-process, so no message broker is involved:
+`getStatus`, `GetJobStatus` and `GetWorkerStatus` are OData functions. Call them with HTTP GET and the
+parameters in the URL, for example `GET .../cardano-worker/GetWorkerStatus()`. A POST returns 405.
+
+The indexer and the worker service publish CAP events. A CAP application subscribes in the same process,
+without a message broker:
 
 ```js
 (await cds.connect.to('CardanoWorkerService')).on('jobConfirmed', ({ data }) => …)  // jobId, txHash
@@ -84,8 +94,11 @@ in-process, so no message broker is involved:
 ### 4) Verify
 
 ```bash
-curl http://localhost:4004/odata/v4/cardano/NetworkInformation
+curl -u alice: http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
+
+`alice` is the development user from the config above and the password is not checked. Without a login
+the answer is 401.
 
 ### Programmatic Access (optional)
 
@@ -101,14 +114,13 @@ const indexer = getCardanoIndexer();
 
 ## Option B: Standalone Development
 
-Clone and run ODATANO as a full standalone application.
-
 ### 1) Clone & Install
 
 ```bash
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
 npm ci
+npm run clean     # npm ci compiles in place; without this, cds watch runs the compiled files
 ```
 
 ### 2) Configure Environment
@@ -117,169 +129,93 @@ npm ci
 # Linux/macOS (or Git Bash on Windows)
 cp .env.example .env
 
-# Windows PowerShell (alternative)
+# Windows PowerShell
 Copy-Item .env.example .env
 ```
 
-Open `.env` and adjust it. With the default `BACKENDS=koios` nothing is required. Supported variables:
+With the default `BACKENDS=koios` nothing else is needed. The main variables:
 
 ```env
-# Debug output for single modules (cds.log), e.g. DEBUG=CardanoService
-# DEBUG=
-
-# Network: mainnet | preview | preprod (default: preview)
-NETWORK=preview
-
-# Timeouts (milliseconds)
-PRIMARY_TIMEOUT_MS=30000
-FALLBACK_TIMEOUT_MS=60000
-
-# Enabled Backends (comma-separated): koios, ogmios, blockfrost, odatano
-BACKENDS=koios
-
-# Koios token (optional, https://koios.rest): raises the public-tier rate limit
-KOIOS_API_KEY=
-
-# Blockfrost API key, only with blockfrost in BACKENDS (https://blockfrost.io)
-# BLOCKFROST_API_KEY=
-
-# Ogmios WebSocket URL (optional, for live data)
-OGMIOS_URL=ws://localhost:1337
-
-# Lazy indexing TTL (milliseconds). Example: 60000 = 1 minute
-INDEX_TTL_MS=3600000
-
-# Load pool name, ticker, homepage and description from the URL a pool registered (default false)
-# POOL_METADATA_FETCH=true
-
-# --- HSM signing (optional; server-side keys) -------------------------------
-HSM_ENABLED=false
-# HSM_REQUIRES_ROLE is MANDATORY when HSM_ENABLED=true — startup throws ConfigError
-# without it. It names the role required for SignWithHsm / SignAndSubmitWithHsm and
-# for SubmitWalletJob against an HSM-backed wallet (403 ODATANO_FORBIDDEN otherwise).
-HSM_REQUIRES_ROLE=
-HSM_SLOT=0
-HSM_PIN=
-HSM_KEY_LABEL=cardano-signing-key
-
-# --- Chain crawler / pre-sync (off by default) ------------------------
-CRAWLER_ENABLED=false
-CRAWLER_START_SLOT=              # required when enabled
-CRAWLER_START_HASH=              # required when enabled
-CRAWLER_START_HEIGHT=
-CRAWLER_SOURCE=auto              # ogmios | pagination | auto
-CRAWLER_CONFIRMATION_DEPTH=3
-CRAWLER_BATCH_SIZE=20
-CRAWLER_POLL_INTERVAL_MS=20000
-# chain-sync needs `ogmios` listed in BACKENDS — a reachable Ogmios alone is not enough
-
-# --- Wallet worker (off by default) -----------------------------------
-WALLET_WORKER_ENABLED=false
-# JSON array: [{"walletId":"treasury","signerType":"software","keyEnv":"TREASURY_KEY"}]
-# signerType hsm | software; the software key is read from the env var named in keyEnv
-# (plain 64-hex or AES-256-GCM iv:tag:ciphertext) and never persisted.
-WALLET_WORKER_WALLETS=
-# Optional per wallet: "requiresRole":"<role>". Only callers with that role may queue jobs for it.
-WALLET_WORKER_MAX_CONCURRENT=4
-WALLET_WORKER_CONFIRMATION_DEPTH=3
-WALLET_WORKER_CONFIRMATION_TIMEOUT_MS=600000
-WALLET_WORKER_POLL_INTERVAL_MS=2000
-WALLET_WORKER_MAX_ATTEMPTS=3
-WALLET_WORKER_RESUBMIT_ON_ROLLBACK=true
-
+NETWORK=preview                  # mainnet | preview | preprod
+BACKENDS=koios                   # comma-separated: koios, ogmios, blockfrost, odatano
+# KOIOS_API_KEY=                 # optional, raises the rate limit
+# BLOCKFROST_API_KEY=            # only with blockfrost in BACKENDS
+OGMIOS_URL=ws://localhost:1337   # only with ogmios in BACKENDS
 ```
+
+The crawler, the wallet worker and HSM signing are off by default. Their variables are listed under
+[Environment Configuration](guides/PRODUCTION_DEPLOYMENT.md#environment-configuration) in the Production
+guide.
 
 ### 3) Initialize Database
 
 ```bash
-cds deploy --to sqlite
+npm run db:deploy
 ```
 
-This creates the SQLite database used for on-demand indexing and caching.
+This creates `db.sqlite`, the database for on-demand indexing and caching.
 
 ### 4) Start Server
-
-**Development mode (recommended):**
 
 ```bash
 npm run cds:watch
 ```
 
-- Runs TypeScript directly with live reload
-- No compiled files generated
-- Auto-restarts on changes
+The server runs at http://localhost:4004 and restarts when a source file changes. The read service is at
+http://localhost:4004/odata/v4/cardano.
 
-**Production mode:**
-
-```bash
-npm start
-```
-
-- Compiles TypeScript → JavaScript
-- Optimized for deployment
-
-Server runs at: http://localhost:4004
-
-Base service path: http://localhost:4004/odata/v4/cardano
+The repository defines four development users in `.cdsrc.json`: `alice` and `bob` hold `Read`, `Transact`
+and `Sign`, `carol` holds `Read`, `admin` holds all four roles.
 
 ## Local Ogmios + cardano-node (Docker)
 
-For live-data / Ogmios-backend development you can run a local Cardano node and
-Ogmios bridge. The repo ships a `docker-compose.yml` that mirrors the CI sync
-setup (same images, config, and node-11 topology).
-
-**Prerequisites:** Docker Desktop. Ogmios runs from the public `cardanosolutions/ogmios:v7.0.0` image.
+`docker-compose.yml` starts a Preview cardano-node, Ogmios and ODATANO. It needs Docker and a password for
+the ODATANO login: set `ODATANO_HTTP_PASSWORD` in `.env` or in the shell, the compose file refuses to
+start without it.
 
 ```bash
-# Bring up everything (cardano-node + Ogmios + ODATANO service)
-docker compose up -d
+docker compose up -d                      # cardano-node, Ogmios and ODATANO
+docker compose up -d cardano-node ogmios  # only the node and Ogmios
 
-# …or just the chain backend (e.g. to pre-sync), without building ODATANO:
-docker compose up -d cardano-node ogmios
-
-# Watch sync progress — /health returns 202 while syncing, 200 near tip
 docker compose logs -f ogmios
-curl http://localhost:1337/health        # look at "networkSynchronization"
+curl http://localhost:1337/health         # 202 while syncing, 200 near the tip; see "networkSynchronization"
+
+docker compose down                       # stop; keeps the volumes: the synced node database and the ODATANO SQLite file
+docker compose down -v                    # also deletes the volumes; the next start syncs from genesis
 ```
 
-Stop / reset:
+- The first sync of Preview from genesis takes hours. A restart continues where the node stopped.
+- The `odatano` container runs with `BACKENDS=ogmios,koios`. It waits until Ogmios answers `/health`, not
+  for the full sync. Until Ogmios has caught up, Koios answers.
+- The container asks for HTTP basic auth: user `odatano`, password `ODATANO_HTTP_PASSWORD`. Use
+  `curl -u "odatano:$ODATANO_HTTP_PASSWORD"` there.
+- To run ODATANO from the repository against the stack, start only `cardano-node ogmios`. Then set
+  `OGMIOS_URL=ws://localhost:1337` and `BACKENDS=ogmios,koios` in `.env` and run `npm run cds:watch`.
+- The node socket lives in the named volume `node-ipc`. Unix sockets do not work over a Windows host mount.
+- `GenesisHashMismatch` means the checkout wrote the genesis JSON with CRLF. Restore the LF files:
+  `rm config/preview/cardano-node/*.json && git checkout -- config/preview/cardano-node/`.
 
-```bash
-docker compose down        # stop; keeps the synced node DB (node-db volume)
-docker compose down -v     # also wipe the DB volume → full re-sync next time
-```
-
-**Notes**
-
-- **First sync takes hours** (Preview from genesis). The node DB persists in the
-  `node-db` volume, so restarts resume rather than re-syncing.
-- The `odatano` service is pre-wired to the local Ogmios
-  (`OGMIOS_URL=ws://ogmios:1337`, `BACKENDS=ogmios,koios`) and waits
-  until Ogmios answers `/health` (connected to the node) — **not** for a full
-  sync. Until Ogmios catches up, queries fall back to Koios. A `KOIOS_API_KEY`
-  is optional. To add Blockfrost, set `BACKENDS` and `BLOCKFROST_API_KEY`.
-- To point a **locally-run** (non-Docker) ODATANO at the stack, start only
-  `cardano-node ogmios` and set `OGMIOS_URL=ws://localhost:1337` +
-  `BACKENDS=ogmios,koios` before `npm run cds:watch`.
-- The node ↔ Ogmios IPC socket uses a named Docker volume (`node-ipc`) — required
-  on Windows, where Unix domain sockets don't work over a host bind mount.
-- `GenesisHashMismatch`? Your checkout converted the genesis JSON to CRLF. Fix:
-  `git add --renormalize config/preview/cardano-node/` (a `.gitattributes` rule
-  enforces LF for these files).
+[Docker Deployment](guides/DOCKER_DEPLOYMENT.md) describes the image, its database and the health probes.
 
 ## First Requests
+
+The requests below leave the credentials out. Add `-u alice:` in development; without a login the answer
+is 401.
 
 - Network information
 
 ```bash
-curl http://localhost:4004/odata/v4/cardano/NetworkInformation
+curl -u alice: http://localhost:4004/odata/v4/cardano/NetworkInformation
 ```
 
-- Latest block / epoch via OData queries:
+- Latest block and latest epoch
 
 ```bash
-curl "http://localhost:4004/odata/v4/cardano/Blocks?$orderby=height desc&$top=1"
-curl "http://localhost:4004/odata/v4/cardano/Epochs?$orderby=epoch desc&$top=1"
+curl -X POST http://localhost:4004/odata/v4/cardano/GetLatestBlock \
+  -H "Content-Type: application/json" -d '{}'
+
+curl -X POST http://localhost:4004/odata/v4/cardano/GetLatestEpoch \
+  -H "Content-Type: application/json" -d '{}'
 ```
 
 - Transaction by hash
@@ -298,7 +234,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano/GetAddressByBech32 \
   -d '{"address":"addr_test1..."}'
 ```
 
-- Pool / account / drep lookups
+- Pool, account and DRep
 
 ```bash
 curl -X POST http://localhost:4004/odata/v4/cardano/GetPoolById \
@@ -314,7 +250,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano/GetDrepById \
   -d '{"drepId":"drep1..."}'
 ```
 
-- Address UTxOs and Assets
+- UTxOs and assets of an address
 
 ```bash
 curl -X POST http://localhost:4004/odata/v4/cardano/GetUTxOsByAddress \
@@ -334,45 +270,29 @@ curl -X POST http://localhost:4004/odata/v4/cardano/GetMetadataByTxHash \
   -d '{"txHash":"<64-hex-hash>"}'
 ```
 
-Tip: You can also read by keys where applicable, e.g.:
+- Read by key
 
 ```bash
 curl "http://localhost:4004/odata/v4/cardano/Transactions('<64-hex-hash>')"
 curl "http://localhost:4004/odata/v4/cardano/Addresses('addr_test1...')"
 ```
 
+A read by key fetches a row the database does not hold yet. A read of an entity set, such as `Blocks`
+with `$filter` or `$orderby`, returns the rows the database holds.
+
 ## Testing All Endpoints
 
-For comprehensive API testing, ODATANO provides two convenient options:
+- **Script.** `npx tsx scripts/testing/request_examples.ts` calls the read service with test data from the
+  preview network and prints a summary. The server has to run. See
+  [request_examples.ts](../scripts/testing/request_examples.ts).
+- **Postman.** The collections in [scripts/postman](../scripts/postman/) hold requests with example data
+  for the read, transaction and signing services. Set Basic Auth in Postman, the collections carry no login.
 
-### Automated Test Script
+## Transaction Building
 
-```bash
-npx tsx scripts/testing/request_examples.ts
-```
-
-The [request_examples.ts](../scripts/testing/request_examples.ts) script automatically tests service endpoints with real test data from the preview network. It provides:
-
-- Automatic testing of all service endpoints
-- Real test data (block hashes, addresses, transaction hashes, etc.)
-- Summary statistics (successful/failed requests)
-- Detailed logging output
-
-### Postman Collection
-
-Import the [ODATANO M1 - Full Service Catalog](../scripts/ODATANO%20M1%20-%20Full%20Service%20Catalog.postman_collection.json) collection into Postman to:
-
-- Manually test and explore all available endpoints
-- View pre-configured requests with example data
-- See detailed descriptions for each endpoint
-- Modify parameters and experiment with the API
-
-## Transaction Building (M2)
-
-Build and submit transactions via the transaction service:
+Build a transaction with the transaction service. It needs the role `Transact`.
 
 ```bash
-# Build simple ADA transfer
 curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
   -H "Content-Type: application/json" \
   -d '{
@@ -382,52 +302,53 @@ curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTr
   }'
 ```
 
-See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for signing and submission.
+The answer carries the unsigned transaction and the build `id`. The
+[Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) describes signing and submitting.
 
-## External Signing (M3)
+## External Signing
 
-Create signing requests for external wallets (CIP-30 browser wallets, Cardano CLI, hardware wallets):
+The signing service creates a signing request for a wallet outside the server: a CIP-30 browser wallet,
+the Cardano CLI or a hardware wallet. It needs the role `Sign`.
 
 ```bash
-# 1. Build transaction first (returns buildId)
-BUILD_RESPONSE=$(curl -s -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
+# 1. Build the transaction; the answer carries the build id
+curl -X POST http://localhost:4004/odata/v4/cardano-transaction/BuildSimpleAdaTransaction \
   -H "Content-Type: application/json" \
   -d '{
     "senderAddress": "addr_test1...",
     "recipientAddress": "addr_test1...",
     "lovelaceAmount": 10000000
-  }')
+  }'
 
-# 2. Create signing request (returns signing instructions)
+# 2. Create the signing request; the answer carries its id
 curl -X POST http://localhost:4004/odata/v4/cardano-sign/CreateSigningRequest \
   -H "Content-Type: application/json" \
   -d '{
-    "buildId": "<buildId-from-step-1>",
+    "buildId": "<id-from-step-1>",
     "message": "Please sign this transaction"
   }'
 
-# 3. After signing externally, verify and submit
+# 3. Sign outside the server, then verify and submit
 curl -X POST http://localhost:4004/odata/v4/cardano-sign/SubmitVerifiedTransaction \
   -H "Content-Type: application/json" \
   -d '{
-    "signingRequestId": "<signingRequestId-from-step-2>",
+    "signingRequestId": "<id-from-step-2>",
     "signedTxCbor": "<signed-transaction-cbor>",
     "signerType": "browser-wallet",
-    "signerInfo": "Nami"
+    "signerInfo": "Eternl"
   }'
 ```
 
-**Signing Methods Supported:**
-- **CIP-30 Browser Wallets**: Nami, Eternl, Yoroi, Flint (use `api.signTx()`)
-- **Cardano CLI**: Use the `cardanoCliCommand` from signing request response
-- **Hardware Wallets**: Ledger, Trezor via browser wallet extensions
+- **CIP-30 browser wallets** such as Eternl, Lace, Yoroi or Vespr sign with `api.signTx()`.
+- **Cardano CLI**: the signing request carries the commands in `cardanoCliCommand`.
+- **Hardware wallets** such as Ledger or Trezor sign through a browser wallet extension.
 
-See [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) for complete external signing documentation.
+The [Transaction Workflow Guide](guides/TRANSACTION_WORKFLOW.md) has the details.
 
 ## Testing
 
 ```bash
-# All tests (88 files: 70 unit + 18 integration, vitest)
+# All tests (136 files: 116 unit + 20 integration, vitest)
 npm test
 
 # Coverage report
@@ -437,5 +358,7 @@ npm run test:coverage
 npm run test:integration
 npm run test:unit
 ```
+
+`npm test` deletes `db.sqlite` and creates it new. Stop a running `cds watch` first, it holds the file.
 
 The Koios integration suites run without a key. The Blockfrost suites need `BLOCKFROST_API_KEY` in your environment.

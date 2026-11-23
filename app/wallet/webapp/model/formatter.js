@@ -137,10 +137,12 @@ sap.ui.define([], function () {
                 "pending": "Warning",
                 "signed": "Information",
                 "verified": "Information",
+                "submitting": "Information",
                 "submitted": "Success",
                 "confirmed": "Success",
                 "expired": "Error",
-                "failed": "Error"
+                "failed": "Error",
+                "unresolved": "Warning"
             };
             return states[status || ""] || "None";
         },
@@ -150,10 +152,12 @@ sap.ui.define([], function () {
                 "pending": "sap-icon://pending",
                 "signed": "sap-icon://signature",
                 "verified": "sap-icon://accept",
+                "submitting": "sap-icon://paper-plane",
                 "submitted": "sap-icon://complete",
                 "confirmed": "sap-icon://shield",
                 "expired": "sap-icon://lateness",
-                "failed": "sap-icon://error"
+                "failed": "sap-icon://error",
+                "unresolved": "sap-icon://question-mark"
             };
             return icons[status || ""] || "";
         },
@@ -166,7 +170,7 @@ sap.ui.define([], function () {
                 "submitted": "Information",
                 "confirmed": "Success",
                 "failed": "Error",
-                "rejected": "Error"
+                "unresolved": "Warning"
             };
             return states[status || ""] || "None";
         },

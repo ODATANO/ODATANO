@@ -4,6 +4,7 @@ import { BackendError, NotFoundError, rejectInvalid, rejectMissing } from './uti
 import { ERROR_CODES } from './utils/error-codes';
 import { validateJsonWithLimits } from './utils/validators';
 import { answerNumbersAsText } from './utils/result-numbers';
+import { mapError } from './utils/mappers';
 import {
   getWalletWorker,
   isWalletWorkerRunning,
@@ -11,23 +12,32 @@ import {
   stopWalletWorker,
 } from './blockchain/wallet-worker';
 import {
+  bumpWalletStats,
+  countJobs,
   countPendingJobs,
   getJobById,
   insertJob,
   markCancelled,
   readWallet,
+  resolveUnresolvedJob,
   runWithoutAmbientTx,
   type WalletJobKindValue,
   type WalletJobRow,
 } from './blockchain/wallet-worker/job-store';
 import { getCardanoClient, getCardanoIndexer, getHsmConfig } from './server';
 import { loadWalletWorkerConfigFromEnv } from './config';
+import { parseJobRequest, submitSignedProblem } from './blockchain/wallet-worker/build-request';
+import { getActiveNetwork } from './utils/network-context';
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
-import { SubmitWalletJob, CancelJob, GetJobStatus } from '#cds-models/CardanoWorkerService';
+import { SubmitWalletJob, CancelJob, GetJobStatus, ResolveJob } from '#cds-models/CardanoWorkerService';
+import { checkResolvedTxHash, refuseFailedWhileItCanLand, resolutionNote, resolvedConcurrently } from './utils/resolution';
+import { readOutside } from './utils/tx-utils';
+import { TransactionSubmissions } from '#cds-models/odatano/cardano';
+import { emitServiceEvent } from './utils/service-events';
 
 const logger = cds.log('CardanoWorkerService');
 
-const TERMINAL_JOB_STATUS: ReadonlySet<string> = new Set(['confirmed', 'failed', 'cancelled']);
+const TERMINAL_JOB_STATUS: ReadonlySet<string> = new Set(['confirmed', 'failed', 'cancelled', 'unresolved']);
 const JOB_WAIT_POLL_MS = 1000;
 
 function isAdmin(req: Request): boolean {
@@ -54,6 +64,8 @@ function toJobStatus(job: WalletJobRow) {
     submittedAt: job.submittedAt,
     confirmedAt: job.confirmedAt,
     finishedAt: job.finishedAt,
+    resolution: job.resolution,
+    invalidationTxHash: job.invalidationTxHash,
   };
 }
 
@@ -71,11 +83,19 @@ module.exports = (srv: cds.Service) => {
     if (!requestJson?.trim()) return rejectInvalid(req, 'SubmitWalletJob', 'requestJson is required', 'requestJson');
     const jsonResult = validateJsonWithLimits(requestJson, 'requestJson');
     if (!jsonResult.valid) return rejectInvalid(req, 'SubmitWalletJob', jsonResult.error!, 'requestJson');
+    const request = parseJobRequest(requestJson);
+    if (!request) return rejectInvalid(req, 'SubmitWalletJob', 'requestJson must be a JSON object', 'requestJson');
     if (notBefore != null && Number.isNaN(Date.parse(String(notBefore)))) {
       return rejectInvalid(req, 'SubmitWalletJob', 'notBefore must be a valid timestamp', 'notBefore');
     }
     if (idempotencyKey != null && String(idempotencyKey).length > 100) {
       return rejectInvalid(req, 'SubmitWalletJob', 'idempotencyKey exceeds 100 characters', 'idempotencyKey');
+    }
+    if (kind === 'submitSigned') {
+      const network = getActiveNetwork();
+      if (!network) return rejectInvalid(req, 'SubmitWalletJob', 'No network is configured');
+      const problem = submitSignedProblem(request, network);
+      if (problem) return rejectInvalid(req, 'SubmitWalletJob', problem, 'requestJson');
     }
 
     let config: WalletWorkerConfig;
@@ -92,7 +112,10 @@ module.exports = (srv: cds.Service) => {
     // Role gate on this instance's config, mirroring the sign service's 403.
     const configuredRole = missingWalletRole(req, config.wallets.find((w) => w.walletId === walletId));
     if (configuredRole) {
-      return req.reject(403, `SubmitWalletJob on wallet "${walletId}" requires role '${configuredRole}'`);
+      return mapError(req, new BackendError(
+        `SubmitWalletJob on wallet "${walletId}" requires role '${configuredRole}'`,
+        403, ERROR_CODES.FORBIDDEN, undefined, undefined, 'walletId'
+      ), 'SubmitWalletJob');
     }
 
     return handleRequest(req, async (db) => {
@@ -144,8 +167,39 @@ module.exports = (srv: cds.Service) => {
     });
   });
 
+  // ResolveJob (Admin): settles an unresolved job as an operator read it on the chain. The job keeps
+  // its idempotency key, and the terminal event goes out after the commit.
+  srv.on(ResolveJob, async (req) => {
+    const { jobId, outcome, txHash, note } = req.data;
+    return handleRequest(req, async (db) => {
+      // read and ask the chain before the request takes its connection
+      const job = await readOutside(db, (d) => getJobById(d, jobId!));
+      if (!job) throw new NotFoundError(`Job ${jobId}`);
+      if (job.status !== 'unresolved') rejectInvalid(req, 'ResolveJob', `Job ${jobId} is ${job.status}: only an unresolved job can be resolved`, 'jobId');
+      checkResolvedTxHash(req, 'ResolveJob', txHash, job.txHash);
+      const resolved = outcome === 'confirmed' ? 'confirmed' : 'failed';
+      await refuseFailedWhileItCanLand('ResolveJob', resolved, job.signedTxCbor, getCardanoClient());
+      if (!(await resolveUnresolvedJob(db, job.ID, resolved, resolutionNote(resolved, req.user?.id, note)))) {
+        throw resolvedConcurrently('ResolveJob');
+      }
+      await bumpWalletStats(db, job.walletId, resolved);
+      // the job's submission record follows its outcome
+      if (job.txHash) {
+        await db.run(cds.ql.UPDATE.entity(TransactionSubmissions).set({ status: resolved === 'confirmed' ? 'confirmed' : 'failed' })
+          .where({ txHash: job.txHash, status: { in: ['submitted', 'pending', 'unresolved'] } }));
+      }
+      logger.warn(`Job ${job.ID}: unresolved outcome resolved as ${resolved} by ${req.user?.id ?? 'unknown'}`);
+      const after = (await getJobById(db, job.ID))!;
+      req.on('succeeded', () => emitServiceEvent('CardanoWorkerService', resolved === 'confirmed' ? 'jobConfirmed' : 'jobFailed', {
+        jobId: after.ID, walletId: after.walletId, kind: after.kind, txHash: after.txHash,
+        ...(resolved === 'failed' ? { errorCode: after.errorCode, errorMessage: after.errorMessage } : {}),
+      }));
+      return toJobStatus(after);
+    });
+  });
+
   // GetJobStatus: scoped to the creator unless Admin. With waitMs it answers once the job is
-  // confirmed, failed or cancelled, or when the time is up. Each read has its own transaction,
+  // confirmed, failed, cancelled or unresolved, or when the time is up. Each read has its own transaction,
   // so a waiting request holds no database connection.
   srv.on(GetJobStatus, async (req) => {
     const { jobId, waitMs } = req.data;
@@ -172,7 +226,7 @@ module.exports = (srv: cds.Service) => {
       const summary = worker?.getStatusSummary() ?? {
         running: false, wallets: [], executing: [], awaitingConfirmation: 0,
       };
-      return { ...summary, pendingJobs: await countPendingJobs(db) };
+      return { ...summary, pendingJobs: await countPendingJobs(db), unresolvedJobs: await countJobs(db, 'unresolved') };
     });
   });
 

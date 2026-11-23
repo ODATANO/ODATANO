@@ -1,399 +1,53 @@
-import { Script } from '@harmoniclabs/cardano-ledger-ts';
 import { BackendError } from '../../utils/errors';
 import { ERROR_CODES } from '../../utils/error-codes';
-import { validateJsonWithLimits, validatePlutusJson, PLUTUS_JSON_FIELDS, isAssetUnit } from '../../utils/validators';
-import { parseUtxoRefArray, parseRequiredSigners, parseAssetsArray, parseExtraOutputs, parseOutputList, parseMintActionPolicyFields } from '../../utils/tx-request-parsers';
-import { applyScriptParameters } from '../../utils/tx-build-helper';
-import { scriptHashToEnterpriseAddress } from '../../utils/mappers';
-import { MIN_FULL_ASSET_UNIT_LENGTH } from '../../utils/const';
-import type { JSONValue, MintAction, TxBuildPlutusRequest, TxBuildRequest } from '../../utils/types';
+import { prepareBuildRequest, preparePayoutRequest as preparePayout, type Prepared } from '../../utils/build-request';
+import type { TxBuildPlutusRequest, TxBuildRequest } from '../../utils/types';
 import type { Network } from '../cardano-client';
 import type { WalletJobKindValue } from './job-store';
+import { isValidCbor } from '../../utils/validators';
+import { sendProblem } from '../signing/landing-proof';
 
-// Turns a stored wallet-job request into the TxBuildRequest the build methods expect.
-// Invalid input throws 400 INVALID_INPUT so the job fails at once instead of retrying.
+export { MAX_PAYOUT_OUTPUTS } from '../../utils/build-request';
 
-type RawRequest = Record<string, unknown>;
+// A stored wallet-job request becomes the request the build methods take, checked as the Build*
+// action of the same kind checks it. Invalid input throws 400 so the job fails at once.
 
-function fail(message: string): never {
-  throw new BackendError(message, 400, ERROR_CODES.INVALID_INPUT);
+function requestOf<T>(result: Prepared<T>): T {
+  if ('error' in result) throw new BackendError(result.error, 400, ERROR_CODES.INVALID_INPUT, undefined, undefined, result.field);
+  return result.request;
 }
 
-/** Presence-only check; format validation (bech32, hex, amounts) stays with the builder/indexer. */
-function requirePresent(raw: RawRequest, required: string[]): void {
-  const missing = required.filter((f) => raw[f] === undefined || raw[f] === null || raw[f] === '');
-  if (missing.length > 0) fail(`${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} required`);
+export function preparePayoutRequest(raw: Record<string, unknown>): TxBuildPlutusRequest {
+  return requestOf(preparePayout(raw));
 }
 
-function parseJsonField(raw: RawRequest, field: string): JSONValue | undefined {
-  const value = raw[field];
-  if (value == null) return undefined;
-  if (typeof value !== 'string') fail(`${field} must be a JSON string`);
-  const result = PLUTUS_JSON_FIELDS.has(field) ? validatePlutusJson(value, field) : validateJsonWithLimits(value, field);
-  if (!result.valid) fail(result.error!);
-  return result.parsed as JSONValue;
-}
-
-function parseScriptParams(raw: RawRequest): JSONValue[] | undefined {
-  const parsed = parseJsonField(raw, 'scriptParamsJson');
-  if (parsed === undefined) return undefined;
-  if (!Array.isArray(parsed)) fail('scriptParamsJson must be a JSON array');
-  return parsed;
-}
-
-/** Mint-action parsing as in BuildMint/BuildPlutusSpend (bigint quantities, per-action policy fields). */
-function parseMintActions(raw: RawRequest, allowBareNames: boolean): MintAction[] {
-  const parsed = parseJsonField(raw, 'mintActionsJson');
-  if (!Array.isArray(parsed)) fail('mintActionsJson must be a JSON array');
-  return parsed.map((rawAction: unknown, i: number) => {
-    if (!rawAction || typeof rawAction !== 'object') {
-      fail('Each mint action must be an object with assetUnit and quantity');
-    }
-    const action = rawAction as Record<string, unknown>;
-    if (typeof action.quantity !== 'string' || !/^-?\d+$/.test(action.quantity)) {
-      fail(`Invalid quantity: "${String(action.quantity)}": must be an integer string`);
-    }
-    if (typeof action.assetUnit !== 'string') fail('Each mint action must have an assetUnit string');
-    // Optional per-action mintingPolicyScript + redeemerJson (multi-policy mint).
-    const policyFields = parseMintActionPolicyFields(action, i);
-    if (policyFields.error) fail(policyFields.error);
-    let actionPolicyId: string | undefined;
-    if (policyFields.script) {
-      actionPolicyId = scriptHashOf(policyFields.script, `mintActions[${i}].mintingPolicyScript is not a valid Plutus script`);
-    }
-    const bareAssetNameForExpansion =
-      (allowBareNames || !!actionPolicyId) &&
-      action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH &&
-      action.assetUnit.length % 2 === 0 &&
-      /^[0-9a-fA-F]*$/.test(action.assetUnit);
-    if (!isAssetUnit(action.assetUnit) && !bareAssetNameForExpansion) {
-      fail(`Invalid assetUnit: "${action.assetUnit}": must be policyId+assetName hex (or a bare assetName hex when scriptParamsJson or a per-action mintingPolicyScript is set)`);
-    }
-    let assetUnit = action.assetUnit as string;
-    if (actionPolicyId) {
-      if (assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-        assetUnit = actionPolicyId + assetUnit;
-      } else if (!assetUnit.toLowerCase().startsWith(actionPolicyId)) {
-        fail(`mintActions[${i}].assetUnit "${assetUnit}" does not start with its own policy id ${actionPolicyId}`);
-      }
-    }
-    return {
-      assetUnit,
-      quantity: BigInt(action.quantity as string),
-      ...(typeof action.redeemer === 'number' ? { redeemer: action.redeemer } : {}),
-      ...(policyFields.script ? { mintingPolicyScript: policyFields.script } : {}),
-      ...(policyFields.redeemer !== undefined ? { redeemerJson: policyFields.redeemer } : {})
-    };
-  });
-}
-
-function scriptHashOf(scriptHex: string, context: string): string {
+/** A job's requestJson as an object, or null when it is not a JSON object. */
+export function parseJobRequest(requestJson: string | null | undefined): Record<string, unknown> | null {
   try {
-    return Script.fromCbor(Buffer.from(scriptHex, 'hex')).hash.toString();
-  } catch (err: unknown) {
-    return fail(`${context}: ${err instanceof Error ? err.message : String(err)}`);
+    const value: unknown = JSON.parse(requestJson ?? '');
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
   }
 }
 
-/** parseAssetUnit drops the first 56 hex chars, so a wrong policy prefix would mint a truncated name. */
-function assertPolicyPrefix(actions: Array<{ assetUnit: string; mintingPolicyScript?: string }>, policyId: string): void {
-  // Actions with their own script were already checked against that script's policy id.
-  const mismatch = actions.find((a) => !a.mintingPolicyScript && !a.assetUnit.toLowerCase().startsWith(policyId));
-  if (mismatch) {
-    fail(`assetUnit "${mismatch.assetUnit}" does not start with the minting policy id ${policyId}. Pass the full unit as policyId+assetName (asset names longer than 28 bytes cannot be passed bare)`);
+// Why a submitSigned request cannot be run, or null. The transaction needs an expiry within the cap,
+// and passing scripts: otherwise an unanswered submit stays undecided, or only the collateral goes.
+export function submitSignedProblem(raw: Record<string, unknown>, network: Network): string | null {
+  const cbor = raw.signedTxCbor;
+  if (typeof cbor !== 'string' || !cbor) return 'submitSigned needs signedTxCbor in its request';
+  if (!isValidCbor(cbor)) return 'signedTxCbor must be a hex string';
+  try {
+    return sendProblem(cbor, network);
+  } catch {
+    return 'signedTxCbor is not a readable transaction';
   }
-}
-
-function takeParsed<T>(result: { parsed?: T; error?: string }): T | undefined {
-  if (result.error) fail(result.error);
-  return result.parsed;
-}
-
-function prepareSimpleAda(raw: RawRequest, network: Network): TxBuildRequest {
-  requirePresent(raw, ['senderAddress', 'recipientAddress', 'lovelaceAmount']);
-
-  const clean: RawRequest = { ...raw };
-  clean.forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
-  delete clean.forceInputsJson;
-  clean.protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
-  delete clean.protectInputsJson;
-
-  const outputDatum = parseJsonField(raw, 'outputDatumJson');
-  if (outputDatum !== undefined) clean.outputDatum = outputDatum;
-  delete clean.outputDatumJson;
-
-  const assets = takeParsed(parseAssetsArray(raw.assetsJson as string | undefined, 'assetsJson'));
-  if (assets) clean.assets = assets;
-  delete clean.assetsJson;
-
-  const scriptParams = parseScriptParams(raw);
-  if (raw.lockOnScript) {
-    const validatorScript = raw.validatorScript;
-    if (typeof validatorScript !== 'string' || !validatorScript) {
-      fail('lockOnScript requires validatorScript to derive the script address');
-    }
-    const finalScript = scriptParams && scriptParams.length > 0
-      ? applyScriptParameters(validatorScript, scriptParams)
-      : validatorScript;
-    clean.recipientAddress = scriptHashToEnterpriseAddress(
-      scriptHashOf(finalScript, 'Failed to derive script address'), network);
-  }
-  delete clean.validatorScript;
-  delete clean.scriptParamsJson;
-  delete clean.lockOnScript;
-
-  if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
-  delete clean.referenceScriptHex;
-
-  return clean as TxBuildRequest;
-}
-
-function prepareMetadata(raw: RawRequest): TxBuildRequest {
-  requirePresent(raw, ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'metadataJson']);
-  const parsedMetadata = parseJsonField(raw, 'metadataJson');
-  return { ...raw, metadataJson: parsedMetadata } as TxBuildRequest;
-}
-
-function prepareMultiAsset(raw: RawRequest): TxBuildRequest {
-  requirePresent(raw, ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'assetsJson']);
-
-  const assets = takeParsed(parseAssetsArray(raw.assetsJson as string | undefined, 'assetsJson'));
-  if (!assets || assets.length === 0) fail('assetsJson must contain at least one asset');
-
-  const clean: RawRequest = { ...raw, assets };
-  delete clean.assetsJson;
-
-  const outputDatum = parseJsonField(raw, 'outputDatumJson');
-  if (outputDatum !== undefined) clean.outputDatum = outputDatum;
-  delete clean.outputDatumJson;
-
-  if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
-  delete clean.referenceScriptHex;
-
-  return clean as TxBuildRequest;
-}
-
-function prepareMint(raw: RawRequest, network: Network): TxBuildRequest {
-  requirePresent(raw, ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'mintActionsJson', 'mintingPolicyScript']);
-
-  const scriptParams = parseScriptParams(raw);
-  const mintActions = parseMintActions(raw, !!scriptParams);
-  const requiredSigners = takeParsed(parseRequiredSigners(raw.requiredSignersJson as string | undefined));
-  const inlineDatum = parseJsonField(raw, 'inlineDatumJson');
-  const mintRedeemer = parseJsonField(raw, 'mintRedeemerJson');
-  const forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
-  const protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
-  const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
-  const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
-
-  if (raw.lockOnScript && (!scriptParams || scriptParams.length === 0)) {
-    fail('lockOnScript requires scriptParamsJson to derive script address');
-  }
-
-  let parsedMetadata: JSONValue | undefined;
-  if (raw.metadataJson) {
-    parsedMetadata = parseJsonField(raw, 'metadataJson');
-    if (typeof parsedMetadata !== 'object' || parsedMetadata === null || Array.isArray(parsedMetadata)) {
-      fail('metadataJson must be an object with numeric label keys');
-    }
-  }
-
-  const clean: RawRequest = { ...raw };
-  delete clean.mintActionsJson;
-  delete clean.requiredSignersJson;
-  delete clean.scriptParamsJson;
-  delete clean.inlineDatumJson;
-  delete clean.mintRedeemerJson;
-  delete clean.lockOnScript;
-  delete clean.forceInputsJson;
-  delete clean.protectInputsJson;
-  delete clean.referenceInputsJson;
-  delete clean.extraOutputsJson;
-  if (parsedMetadata) clean.metadataJson = parsedMetadata; else delete clean.metadataJson;
-
-  if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
-  delete clean.referenceScriptHex;
-
-  // Apply script parameters, expand bare asset names, route lockOnScript output.
-  let finalMintingPolicyScript = raw.mintingPolicyScript as string;
-  let effectivePolicyId: string | undefined;
-  if (scriptParams && scriptParams.length > 0) {
-    try {
-      finalMintingPolicyScript = applyScriptParameters(raw.mintingPolicyScript as string, scriptParams);
-    } catch (err: unknown) {
-      fail(`Failed to apply script parameters: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    effectivePolicyId = scriptHashOf(finalMintingPolicyScript, 'Failed to hash applied script');
-    for (const action of mintActions) {
-      if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-        action.assetUnit = effectivePolicyId + action.assetUnit;
-      }
-    }
-    if (raw.lockOnScript) {
-      clean.recipientAddress = scriptHashToEnterpriseAddress(effectivePolicyId, network);
-    }
-  } else {
-    try {
-      effectivePolicyId = Script.fromCbor(Buffer.from(raw.mintingPolicyScript as string, 'hex')).hash.toString();
-    } catch {
-      // Invalid script CBOR. The builder rejects it with its own message.
-    }
-  }
-  if (effectivePolicyId) assertPolicyPrefix(mintActions, effectivePolicyId);
-
-  return {
-    ...clean,
-    mintActions,
-    mintingPolicyScript: finalMintingPolicyScript,
-    requiredSigners,
-    inlineDatum,
-    mintRedeemer,
-    forceInputs,
-    protectInputs,
-    referenceInputs,
-    extraOutputs,
-  } as TxBuildRequest;
-}
-
-function preparePlutusSpend(raw: RawRequest, network: Network): TxBuildRequest {
-  requirePresent(raw, ['senderAddress', 'recipientAddress', 'lovelaceAmount', 'validatorScript', 'scriptTxHash', 'redeemerJson']);
-  if (raw.scriptOutputIndex === undefined || raw.scriptOutputIndex === null) {
-    fail('scriptOutputIndex is required');
-  }
-
-  const parsedRedeemer = parseJsonField(raw, 'redeemerJson');
-  const parsedDatum = parseJsonField(raw, 'datumJson');
-  const requiredSigners = takeParsed(parseRequiredSigners(raw.requiredSignersJson as string | undefined));
-  const scriptParams = parseScriptParams(raw);
-  const inlineDatum = parseJsonField(raw, 'inlineDatumJson');
-  if (raw.lockOnScript && (!scriptParams || scriptParams.length === 0)) {
-    fail('lockOnScript requires scriptParamsJson to derive script address');
-  }
-  const forceInputs = takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson'));
-  const protectInputs = takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson'));
-  const referenceInputs = takeParsed(parseUtxoRefArray(raw.referenceInputsJson as string | undefined, 'referenceInputsJson'));
-  const extraOutputs = takeParsed(parseExtraOutputs(raw.extraOutputsJson as string | undefined));
-
-  // Optional combined spend+mint.
-  const validatorScript = raw.validatorScript as string;
-  const mintingPolicyScript = raw.mintingPolicyScript as string | undefined;
-  let mintActions: Array<{ assetUnit: string; quantity: bigint }> | undefined;
-  let mintRedeemer: JSONValue | undefined;
-  if (raw.mintActionsJson) {
-    if (!mintingPolicyScript) fail('mintActionsJson requires mintingPolicyScript');
-    mintActions = parseMintActions(raw, !!scriptParams && mintingPolicyScript === validatorScript);
-    mintRedeemer = parseJsonField(raw, 'mintRedeemerJson');
-  } else if (mintingPolicyScript || raw.mintRedeemerJson) {
-    fail('mintingPolicyScript / mintRedeemerJson require mintActionsJson');
-  }
-
-  let finalValidatorScript = validatorScript;
-  if (scriptParams && scriptParams.length > 0) {
-    try {
-      finalValidatorScript = applyScriptParameters(validatorScript, scriptParams);
-    } catch (err: unknown) {
-      fail(`Failed to apply script parameters: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  let finalMintingPolicyScript: string | undefined;
-  if (mintActions) {
-    finalMintingPolicyScript = (mintingPolicyScript === validatorScript) ? finalValidatorScript : mintingPolicyScript;
-    if (finalMintingPolicyScript && scriptParams && scriptParams.length > 0 && mintingPolicyScript === validatorScript) {
-      const appliedPolicyId = scriptHashOf(finalMintingPolicyScript, 'Failed to hash applied script');
-      for (const action of mintActions) {
-        if (action.assetUnit.length < MIN_FULL_ASSET_UNIT_LENGTH) {
-          action.assetUnit = appliedPolicyId + action.assetUnit;
-        }
-      }
-    }
-    if (finalMintingPolicyScript) {
-      let mintPolicyId: string | undefined;
-      try {
-        mintPolicyId = Script.fromCbor(Buffer.from(finalMintingPolicyScript, 'hex')).hash.toString();
-      } catch {
-        // Invalid script CBOR. The builder rejects it with its own message.
-      }
-      if (mintPolicyId) assertPolicyPrefix(mintActions, mintPolicyId);
-    }
-  }
-
-  const clean: RawRequest = {
-    ...raw,
-    plutusScriptExecution: {
-      validatorScript: finalValidatorScript,
-      scriptUtxo: {
-        txHash: raw.scriptTxHash,
-        outputIndex: raw.scriptOutputIndex,
-      },
-      redeemer: parsedRedeemer,
-      datum: parsedDatum,
-    },
-    requiredSigners,
-    inlineDatum,
-    forceInputs,
-    protectInputs,
-    referenceInputs,
-    extraOutputs,
-    mintActions,
-    mintingPolicyScript: finalMintingPolicyScript,
-    mintRedeemer,
-  };
-  if (raw.referenceScriptHex) clean.referenceScript = raw.referenceScriptHex;
-  delete clean.requiredSignersJson;
-  delete clean.scriptParamsJson;
-  delete clean.inlineDatumJson;
-  delete clean.forceInputsJson;
-  delete clean.protectInputsJson;
-  delete clean.referenceInputsJson;
-  delete clean.extraOutputsJson;
-  delete clean.mintActionsJson;
-  delete clean.mintRedeemerJson;
-  delete clean.referenceScriptHex;
-  delete clean.redeemerJson;
-  delete clean.datumJson;
-
-  if (raw.lockOnScript && scriptParams && scriptParams.length > 0) {
-    clean.recipientAddress = scriptHashToEnterpriseAddress(
-      scriptHashOf(finalValidatorScript, 'Failed to derive script address'), network);
-  }
-  delete clean.lockOnScript;
-
-  return clean as TxBuildRequest;
-}
-
-/** Most recipients one payout job takes; the transaction size limit may be reached earlier. */
-export const MAX_PAYOUT_OUTPUTS = 150;
-
-// payout: the outputs of `outputsJson` in the given order, paid from the wallet in one transaction.
-// Entries read like those of BuildPlutusTransaction. No script runs.
-export function preparePayoutRequest(raw: RawRequest): TxBuildPlutusRequest {
-  requirePresent(raw, ['senderAddress', 'outputsJson']);
-  if (typeof raw.outputsJson !== 'string') fail('outputsJson must be a JSON string');
-  const outputs = takeParsed(parseOutputList(raw.outputsJson, 'outputsJson', MAX_PAYOUT_OUTPUTS));
-  if (!outputs) fail('outputsJson must list at least one output');
-  return {
-    network: raw.network as Network,
-    senderAddress: raw.senderAddress as string,
-    changeAddress: raw.changeAddress as string | undefined,
-    scriptInputs: [],
-    outputs,
-    forceInputs: takeParsed(parseUtxoRefArray(raw.forceInputsJson as string | undefined, 'forceInputsJson')),
-    protectInputs: takeParsed(parseUtxoRefArray(raw.protectInputsJson as string | undefined, 'protectInputsJson')),
-    validityStartMs: raw.validityStartMs as string | undefined,
-    validityEndMs: raw.validityEndMs as string | undefined,
-  };
 }
 
 /** Raw job request → TxBuildRequest for the matching build method; malformed payloads throw 400 INVALID_INPUT. */
-export function prepareWorkerBuildRequest(kind: WalletJobKindValue, raw: RawRequest, network: Network): TxBuildRequest {
-  switch (kind) {
-    case 'simpleAda': return prepareSimpleAda(raw, network);
-    case 'metadata': return prepareMetadata(raw);
-    case 'multiAsset': return prepareMultiAsset(raw);
-    case 'mint': return prepareMint(raw, network);
-    case 'plutusSpend': return preparePlutusSpend(raw, network);
-    default:
-      return fail(`Unsupported job kind "${String(kind)}"`);
+export function prepareWorkerBuildRequest(kind: WalletJobKindValue, raw: Record<string, unknown>, network: Network): TxBuildRequest {
+  if (kind === 'payout' || kind === 'submitSigned') {
+    throw new BackendError(`Unsupported job kind "${kind}"`, 400, ERROR_CODES.INVALID_INPUT);
   }
+  return requestOf(prepareBuildRequest(kind, raw, () => network));
 }

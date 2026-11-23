@@ -93,6 +93,14 @@ entity Blocks {
         @title      : 'Block Fees'
         @description: 'Total fees in the block'
         fees        : Lovelace;
+
+        @title      : 'Previous Block Hash'
+        @description: 'Hash of the block before this one; null when the source did not report it'
+        previousHash : String(64);
+
+        @title      : 'Withdrawals Reported'
+        @description: 'True when the crawl stored the withdrawals of every transaction of this block; null for blocks stored without them'
+        withdrawalsReported : Boolean;
 }
 
 @title      : 'Epoch Entity'
@@ -139,6 +147,10 @@ entity Epochs {
         @title      : 'Active Stake'
         @description: 'Total active stake in the epoch'
         activeStake    : Lovelace;
+
+        @title      : 'Final'
+        @description: 'True once the row was read after the epoch ended; a read refreshes the row while it is not'
+        final          : Boolean;
 }
 
 @title      : 'Pool Entity'
@@ -533,6 +545,10 @@ entity Assets : temporal {
         @title      : 'Registry Logo'
         @description: 'CIP-26 off-chain registry: base64-encoded logo or URL'
         registryLogo      : LargeString;
+
+        @title      : 'First Seen Slot'
+        @description: 'Slot of the crawled block that wrote this bare row; null for rows written otherwise. A rollback past it removes the row'
+        firstSeenSlot     : Integer64;
 }
 
 @title      : 'Asset History Entry'
@@ -783,6 +799,14 @@ entity Accounts : temporal {
         @title      : 'Has Addresses'
         @description: 'Indicates if account has associated addresses'
         hasAddresses       : Boolean;
+
+        @title      : 'Address Count'
+        @description: 'Number of addresses under the stake key; read them through the Address navigation'
+        addressCount       : Integer;
+
+        @title      : 'Address List'
+        @description: 'JSON array of the addresses under the stake key, sorted; lets a page of a large account be chosen without the backend'
+        addressList        : LargeString;
 }
 
 @title      : 'Transaction Entity'
@@ -1768,7 +1792,7 @@ entity TransactionSubmissions {
         submittedAt        : Integer64;
 
         @title      : 'Submission Status'
-        @description: 'Current status of the transaction submission (pending, submitted, confirmed, failed, rejected)'
+        @description: 'Current status of the transaction submission (pending, submitted, confirmed, failed, unresolved)'
         status             : SubmissionStatus default 'pending' @readonly;
 
         @title      : 'Error Code'
@@ -1778,6 +1802,10 @@ entity TransactionSubmissions {
         @title      : 'Error Message'
         @description: 'Detailed error message if failed'
         errorMessage       : LargeString;
+
+        @title      : 'Resolution'
+        @description: 'How an operator resolved an unresolved outcome: who, when, the outcome and the note. Null otherwise'
+        resolution         : String(500);
 
         @title      : 'Retry Count'
         @description: 'Number of retry attempts'
@@ -1969,6 +1997,10 @@ entity SigningRequests {
         @title      : 'Error Message'
         @description: 'Error message if signing, verification or the submit failed'
         errorMessage     : LargeString;
+
+        @title      : 'Resolution'
+        @description: 'How an operator resolved an unresolved outcome: who, when, the outcome and the note. Null otherwise'
+        resolution       : String(500);
 }
 
 @title      : 'Signature Verifications'
@@ -2117,6 +2149,10 @@ entity CardanoSyncState {
         @title      : 'Crawler Lease Expiry'
         @description: 'Lease deadline renewed by the active crawler; another instance may take over only after this time'
         leaseUntil        : Timestamp;
+
+        @title      : 'Node Behind Since'
+        @description: 'Since when the node behind chain-sync is behind the cursor and its rollback was refused; null while it follows'
+        nodeBehindSince   : Timestamp;
 }
 
 @title      : 'Cardano Reorg Log'
@@ -2213,11 +2249,8 @@ entity CardanoWorkerWallets {
 @description: 'Asynchronous transaction jobs executed by the wallet worker (build → sign → submit → confirm)'
 // The database enforces idempotency, since two concurrent retries can both find no job.
 // The unique constraint makes one insert lose, and insertJob returns the winner's job.
-@assert.unique.dedup: [
-    walletId,
-    kind,
-    dedupKey
-]
+// dedupKey is scoped to the user, so one key names one job across all wallets and kinds.
+@assert.unique.dedup: [dedupKey]
 entity CardanoWalletJobs {
 
         @title      : 'Job Id (Key)'
@@ -2233,15 +2266,15 @@ entity CardanoWalletJobs {
         kind           : WalletJobKind;
 
         @title      : 'Status'
-        @description: 'Job lifecycle state (pending | building | submitting | submitted | confirmed | failed | cancelled)'
+        @description: 'Job lifecycle state (pending | building | submitting | submitted | confirmed | failed | cancelled | unresolved)'
         status         : WalletJobStatus default 'pending';
 
         @title      : 'Idempotency Key'
-        @description: 'Optional caller-supplied dedup key: a non-failed job with the same (walletId, kind, idempotencyKey) is returned instead of creating a new one'
+        @description: 'Optional caller-supplied dedup key: per user, one key names one job across all wallets and kinds. A retry with the same request gets that job back, another request under the key is refused with 409'
         idempotencyKey : String(100);
 
         @title      : 'Dedup Key (internal)'
-        @description: 'Backing value of the unique (walletId, kind, dedupKey) constraint: the caller idempotency key while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide, with no reliance on NULL semantics, which differ across databases.'
+        @description: 'Backing value of the unique dedupKey constraint: the idempotency key hashed with the user while the job holds it, otherwise the job ID (unique by construction). Keyless jobs and terminated jobs therefore never collide, with no reliance on NULL semantics, which differ across databases.'
         dedupKey       : String(100);
 
         @title      : 'Request'
@@ -2313,8 +2346,28 @@ entity CardanoWalletJobs {
         createdBy      : String(100);
 
         @title      : 'Finished At'
-        @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled)'
+        @description: 'Timestamp the job reached a terminal state (confirmed | failed | cancelled | unresolved)'
         finishedAt     : Timestamp;
+
+        @title      : 'Resolution'
+        @description: 'How an operator resolved an unresolved outcome: who, when, the outcome and the note. Null otherwise'
+        resolution     : String(500);
+
+        @title      : 'Invalidation Tx Hash'
+        @description: 'Hash of the self-transfer that spends an input of a transaction without an expiry, so that transaction can never land. Null otherwise'
+        invalidationTxHash : String(64);
+
+        @title      : 'Invalidation Signed Tx CBOR'
+        @description: 'Signed bytes of that self-transfer, stored before it is sent'
+        invalidationTxCbor : LargeString;
+
+        @title      : 'Invalidation Sent At'
+        @description: 'When that self-transfer was stored and sent'
+        invalidationSentAt : Timestamp;
+
+        @title      : 'Spends No Wallet UTxO'
+        @description: 'True when the job transaction has no expiry, has not landed and spends no UTxO the wallet holds. It cannot take the wallet funds, so it does not hold the wallet queue'
+        spendsNoWalletUtxo : Boolean;
 }
 
 // Agent grants: the token is stored as SHA-256 only; a request carrying it runs as `agent:<ID>`.

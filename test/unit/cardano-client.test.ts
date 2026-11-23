@@ -669,18 +669,41 @@ describe('CardanoClient Configuration', () => {
       }
       expect(cb.shouldAttempt('koios')).toBe(true);
 
+      // a rate limit is no verdict about the request: the backend is backed off like on a 5xx
       mockBackend.getNetworkInformation.mockRejectedValue(new RateLimitError('rate limited', 'koios')); // 429
       for (let i = 0; i < 6; i++) {
         await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
       }
-      expect(cb.shouldAttempt('koios')).toBe(true);
+      expect(cb.shouldAttempt('koios')).toBe(false);
+      cb.recordSuccess('koios');
+      (cb as any).circuits.clear();
 
-      // real backend-health errors (5xx) still open the circuit
+      // real backend-health errors (5xx) open the circuit
       mockBackend.getNetworkInformation.mockRejectedValue(new ProviderUnavailableError('koios down', 'koios')); // 503
       for (let i = 0; i < 6; i++) {
         await expect(client.getNetworkInformation()).rejects.toThrow(AllBackendsFailedError);
       }
       expect(cb.shouldAttempt('koios')).toBe(false);
+    });
+
+    it('closes a half-open circuit when the probes answer 404, so the backend is not shut out', async () => {
+      const { NotFoundError, ProviderUnavailableError } = await import('../../srv/utils/errors');
+      const config = createTestConfig({ backends: ['koios'], circuitBreaker: { resetTimeoutMs: 0 } });
+      const client = new CardanoClient(config);
+      const mockBackend = { name: 'koios', getAccount: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'koios')) };
+      (client as any).historicalBackends = [mockBackend];
+      (client as any).initialized = true;
+      const cb = (client as any).circuitBreaker;
+
+      for (let i = 0; i < 5; i++) await expect(client.getAccount('stake_test1x')).rejects.toThrow();
+      expect(cb.getState('koios')).not.toBe('closed');
+
+      // two probes that end in a verdict close the circuit again
+      mockBackend.getAccount.mockRejectedValue(new NotFoundError('Account', 'koios'));
+      await expect(client.getAccount('stake_test1x')).rejects.toThrow();
+      await expect(client.getAccount('stake_test1x')).rejects.toThrow();
+      expect(cb.getState('koios')).toBe('closed');
+      expect(cb.shouldAttempt('koios')).toBe(true);
     });
   });
 
@@ -1168,10 +1191,10 @@ describe('CardanoClient Configuration', () => {
       expect(await clientWith(live).isRewardAccountRegistered(STAKE)).toBe(null);
     });
 
-    it('passes a provider failure on when the node has no summary', async () => {
+    it('returns null when the node has no summary and the provider is down: the node then decides', async () => {
       const live = vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios'));
       const hist = vi.fn().mockRejectedValue(new ProviderUnavailableError('timeout', 'koios'));
-      await expect(clientWith(live, hist).isRewardAccountRegistered(STAKE)).rejects.toThrow(AllBackendsFailedError);
+      expect(await clientWith(live, hist).isRewardAccountRegistered(STAKE)).toBe(null);
     });
 
     it('returns the node\'s registration state', async () => {
@@ -1262,5 +1285,109 @@ describe('odatano backend', () => {
     expect(client.hasEvaluatingBackend()).toBe(true);
     await client.evaluateTransaction('84a4');
     expect(remote.evaluateTransaction).toHaveBeenCalledWith('84a4');
+  });
+});
+
+describe('CardanoClient: timeouts, init retries and failover', () => {
+  const clientWith = (backends: unknown[], overrides: Partial<CardanoClientConfig> = {}) => {
+    const client = new CardanoClient(createTestConfig(overrides));
+    (client as any).historicalBackends = backends;
+    (client as any).liveBackend = undefined;
+    (client as any).initialized = true;
+    return client;
+  };
+
+  it('aborts the signal of a call that timed out, so its requests stop', async () => {
+    const { callSignal } = await import('../../srv/blockchain/backends/call-signal');
+    let seen: AbortSignal | undefined;
+    const slow = { name: 'koios', getNetworkInformation: vi.fn(() => { seen = callSignal(); return new Promise(() => {}); }) };
+    const client = clientWith([slow], { fallbackTimeoutMs: 20 });
+
+    await expect(client.getNetworkInformation()).rejects.toThrow(/timeout/);
+    expect(seen?.aborted).toBe(true);
+  });
+
+  it('shares one init retry between concurrent callers', async () => {
+    let release: () => void = () => {};
+    const init = vi.fn(() => new Promise<boolean>((resolve) => { release = () => resolve(true); }));
+    const backend = { name: 'koios', init, getBlock: vi.fn().mockResolvedValue({ hash: 'b' }) };
+    const client = clientWith([backend]);
+    (client as any).uninitializedBackends.add(backend);
+
+    const calls = [client.getBlock('b'), client.getBlock('b'), client.getBlock('b')];
+    await new Promise(r => setTimeout(r, 0));
+    release();
+    await Promise.all(calls);
+    expect(init).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails credential lookups over to the next capable backend', async () => {
+    const koios = { name: 'koios', getCredentialUtxos: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'koios')) };
+    const remote = { name: 'odatano', getCredentialUtxos: vi.fn().mockResolvedValue([{ txHash: 'a', outputIndex: 0 }]) };
+    const client = clientWith([koios, remote]);
+
+    expect(await client.getCredentialUtxos('c'.repeat(56))).toEqual([{ txHash: 'a', outputIndex: 0 }]);
+    expect(koios.getCredentialUtxos).toHaveBeenCalled();
+  });
+
+  it('reads the tip and the outputs from one backend, says whether it was the node, and fails over to the next', async () => {
+    const refs = [{ txHash: 'a', outputIndex: 0 }, { txHash: 'b', outputIndex: 1 }];
+    const node = { name: 'ogmios', getCurrentSlot: vi.fn().mockResolvedValue(900), isUtxoUnspent: vi.fn(async (h: string) => h === 'a') };
+    const live = clientWith([]);
+    (live as any).liveBackend = node;
+    expect(await live.readLedger(refs)).toEqual({ live: true, tip: 900, unspent: [true, false] });
+
+    const down = { name: 'koios', getCurrentSlot: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'koios')), isUtxoUnspent: vi.fn() };
+    const indexer = { name: 'blockfrost', getCurrentSlot: vi.fn().mockResolvedValue(880), isUtxoUnspent: vi.fn().mockResolvedValue(false) };
+    const providers = clientWith([down, indexer]);
+    expect(await providers.readLedger(refs)).toEqual({ live: false, tip: 880, unspent: [false, false] });
+    // tip and outputs never come from two backends
+    expect(down.isUtxoUnspent).not.toHaveBeenCalled();
+  });
+
+  it('looks unspent outputs up with failover and a timeout', async () => {
+    const remote = { name: 'odatano', getUnspentOutputs: vi.fn().mockResolvedValue([{ txHash: 'a', outputIndex: 1 }]) };
+    const client = clientWith([remote]);
+
+    expect(await client.getUnspentOutputs([{ txHash: 'a', outputIndex: 1 }])).toEqual([{ txHash: 'a', outputIndex: 1 }]);
+    expect(await clientWith([{ name: 'koios' }]).getUnspentOutputs([])).toBeNull();
+  });
+
+  it('takes the registration verdict of another ODATANO, and treats its null as a healthy "cannot tell"', async () => {
+    const remote = { name: 'odatano', isRewardAccountRegistered: vi.fn().mockResolvedValue(true), getAccount: vi.fn() };
+    expect(await clientWith([remote]).isRewardAccountRegistered('stake_test1x')).toBe(true);
+    expect(remote.getAccount).not.toHaveBeenCalled();
+
+    remote.isRewardAccountRegistered.mockResolvedValue(null);
+    const client = clientWith([remote]);
+    for (let i = 0; i < 6; i++) expect(await client.isRewardAccountRegistered('stake_test1x')).toBe(null);
+    // a "cannot tell" is no failure, so the remote stays reachable for every other read
+    expect((client as any).circuitBreaker.getState('odatano')).not.toBe('open');
+  });
+
+  it('asks the next source after a remote that cannot tell, and returns its verdict', async () => {
+    const node = { name: 'ogmios', getAccount: vi.fn().mockRejectedValue(new NotFoundError('Account', 'ogmios')) };
+    const remote = { name: 'odatano', isRewardAccountRegistered: vi.fn().mockResolvedValue(null), getAccount: vi.fn() };
+    const koios = { name: 'koios', getAccount: vi.fn().mockRejectedValue(new NotFoundError('Account', 'koios')) };
+    const client = clientWith([remote, koios]);
+    (client as any).liveBackend = node;
+    expect(await client.isRewardAccountRegistered('stake_test1x')).toBe(false);
+    expect(koios.getAccount).toHaveBeenCalled();
+  });
+
+  it('fails only when no source answered at all', async () => {
+    const remote = { name: 'odatano', isRewardAccountRegistered: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', 'odatano')), getAccount: vi.fn() };
+    await expect(clientWith([remote]).isRewardAccountRegistered('stake_test1x')).rejects.toThrow(AllBackendsFailedError);
+  });
+
+  it('leaves no timer behind when a backend call throws before it returns a promise', async () => {
+    vi.useFakeTimers();
+    try {
+      const client = clientWith([{ name: 'odatano', getCredentialUtxos: () => { throw new Error('sync'); } }]);
+      await expect(client.getCredentialUtxos('c'.repeat(56))).rejects.toThrow();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -73,7 +73,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
       await tx.run(DELETE.from('odatano.cardano.TransactionBuilds').where({ id: BUILD_ID }));
       const now = Date.now();
       await tx.run(cds.ql.INSERT.into('odatano.cardano.TransactionBuilds').entries({
-        id: BUILD_ID, network: TEST_FIXTURES.network, senderAddress: TEST_FIXTURES.addressWithFunds,
+        id: BUILD_ID, network: TEST_FIXTURES.network, senderAddress: TEST_FIXTURES.signerAddress,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor, txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built', builderType: 'buildooor', createdAt: now,
         validFrom: new Date(now).toISOString(), validTo: new Date(now + 300000).toISOString(),
@@ -160,7 +160,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
 
     const { data: status } = await GET(`${AGENT}/GetGrantStatus()`, withToken(mine.token));
     expect(status.grantId).to.equal(mine.grantId);
-    expect(status.allowedActions).to.deep.equal(['VerifySignature']);
+    expect(status.allowedActions).to.deep.equal(['CardanoSignService.VerifySignature']);
     expect(status.maxJobsPerDay).to.equal(5);
     expect(status.jobsUsedToday).to.equal(0);
 
@@ -274,7 +274,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     let r = await row();
     expect(r.agentLabel).to.equal('after');
     expect(Number(r.maxJobsPerDay)).to.equal(9);
-    expect(JSON.parse(r.allowedActions)).to.deep.equal(['BuildSimpleAdaTransaction', 'CreateSigningRequest']);
+    expect(JSON.parse(r.allowedActions)).to.deep.equal(['CardanoTransactionService.BuildSimpleAdaTransaction', 'CardanoSignService.CreateSigningRequest']);
 
     // An explicit null clears; the token sees the new shape.
     await POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, maxJobsPerDay: null });
@@ -290,7 +290,7 @@ describe('agent grants (integration: real CAP + real SQLite)', () => {
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, allowedActions: ['SubmitWalletJob'] }), 400);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, validUntil: '2000-01-01T00:00:00Z' }), 400);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, walletId: 'other' }), 400);
-    expect(JSON.parse((await row()).allowedActions)).to.deep.equal(['BuildSimpleAdaTransaction', 'CreateSigningRequest']);
+    expect(JSON.parse((await row()).allowedActions)).to.deep.equal(['CardanoTransactionService.BuildSimpleAdaTransaction', 'CardanoSignService.CreateSigningRequest']);
 
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, asBob), 403);
     await expectStatus(POST(`${AGENT}/UpdateAgentGrant`, { grantId: issued.grantId, agentLabel: 'x' }, withToken(issued.token)), 403);

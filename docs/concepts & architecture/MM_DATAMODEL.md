@@ -1,4 +1,15 @@
-# ODATANO Blockchain Schema
+# ODATANO Data Model
+
+The diagrams show the entities a client reads most often, with their main fields. `db/schema.cds` is the
+reference and has all 52 entities.
+
+Not drawn: Assets, AssetHistory, LedgerProtocolParameters, the epoch snapshots (PoolEpochSnapshots,
+DrepEpochSnapshots, EpochLedgerSnapshots, AccountEpochSnapshots), TransactionCertificates,
+TransactionWithdrawals, TransactionRedeemers, TransactionDatums, the crawler-fed UTxO set (LedgerUTxOs,
+LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts), TransactionBuildRedeemers,
+CardanoAgentGrants and CardanoAgentGrantUsage.
+
+## Chain data, builds and signing
 
 ```mermaid
 ---
@@ -55,18 +66,22 @@ erDiagram
         string output
         decimal fees
         decimal activeStake
+        boolean final "ended and past the rollback horizon"
     }
 
     Blocks {
         string hash PK "🔑"
-        string time
+        datetime time
         int height
         string slotLeader
         int epochNumber FK "🔗"
+        long slot
         int epochSlot
         int size
         int txCount
         decimal fees
+        string previousHash "parent block, null when unknown"
+        boolean withdrawalsReported "every tx reported its withdrawals"
     }
 
     Pools {
@@ -108,6 +123,8 @@ erDiagram
         string type
         boolean isScript
         decimal totalLovelace
+        int utxoCount
+        boolean hasTransactions
         boolean hasAssets
         boolean hasUTxOs
     }
@@ -125,6 +142,8 @@ erDiagram
         string poolId FK "🔗"
         string drepId FK "🔗"
         boolean hasAddresses
+        int addressCount
+        string addressList "JSON, sorted; not in the read projection"
     }
 
     AddressAssets {
@@ -142,11 +161,13 @@ erDiagram
         string hash
         int index
         string blockHash
+        decimal lovelace
         string dataHash
         string inlineDatum
         string referenceScriptHash
         integer referenceScriptSize
         string referenceScriptType
+        string paymentCredential
         boolean hasAssets
     }
 
@@ -162,6 +183,7 @@ erDiagram
 
     Transactions {
         string hash PK "🔑"
+        long txSeq "slot * 65536 + txIndex"
         string blockHash
         int blockHeight
         long blockTime
@@ -176,14 +198,15 @@ erDiagram
     }
 
     TransactionMetadata {
-        int id PK "🔑"
+        long id PK "🔑"
         string tx FK "🔗"
         string label
         string payload
+        long txSeq
     }
 
     TransactionInputs {
-        string tx FK "🔗"
+        long txSeq FK "🔗"
         int inputIndex
         string address FK "🔗"
         string dataHash
@@ -191,6 +214,10 @@ erDiagram
         string referenceScriptHash
         integer referenceScriptSize
         string referenceScriptType
+        string paymentCredential
+        string spentTxHash
+        int spentOutputIndex
+        long spentTxSeq
         boolean isCollateral
         boolean isReference
         boolean hasAddresses
@@ -198,7 +225,7 @@ erDiagram
     }
 
     TransactionOutputs {
-        string tx FK "🔗"
+        long txSeq FK "🔗"
         int outputIndex
         string address FK "🔗"
         string dataHash
@@ -206,11 +233,22 @@ erDiagram
         string referenceScriptHash
         integer referenceScriptSize
         string referenceScriptType
+        string paymentCredential
         boolean hasAddresses
         boolean hasAssets
     }
 
     TransactionInputAssets {
+        string input FK "🔗 view"
+        string unit
+        decimal quantity
+        string policyId
+        string assetNameHex
+        string assetName
+        string fingerprint
+    }
+
+    TransactionInputAssetCopies {
         string input FK "🔗"
         string unit
         decimal quantity
@@ -231,18 +269,23 @@ erDiagram
     }
 
     TransactionBuilds {
-        uuid buildId PK "🔑"
+        uuid id PK "🔑"
         string network
+        string builderEngine
         string senderAddress
+        string changeAddress
         string unsignedTxCbor
-        string txHash
+        string txBodyHash
         decimal fee
-        string builder
+        int size
+        long createdAt
         string scriptHash
+        string mintScriptHash
         string fingerprint
         string scriptAddress
         boolean hasInputs
         boolean hasOutputs
+        boolean wasSubmitted
         datetime validFrom
         datetime validTo
     }
@@ -250,15 +293,15 @@ erDiagram
     TransactionBuildInputs {
         uuid build FK "🔗"
         int inputIndex
+        string txHash
+        int outputIndex
         string address
-        decimal lovelaceAmount
-        string utxoHash
-        int utxoIndex
+        decimal lovelace
         boolean hasAssets
     }
 
     TransactionBuildInputAssets {
-        uuid buildInput FK "🔗"
+        uuid input FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -270,12 +313,13 @@ erDiagram
         uuid build FK "🔗"
         int outputIndex
         string address
-        decimal lovelaceAmount
+        decimal lovelace
+        boolean isChange
         boolean hasAssets
     }
 
     TransactionBuildOutputAssets {
-        uuid buildOutput FK "🔗"
+        uuid output FK "🔗"
         string unit
         decimal quantity
         string policyId
@@ -284,24 +328,27 @@ erDiagram
     }
 
     TransactionSubmissions {
-        uuid submissionId PK "🔑"
-        string network
+        uuid id PK "🔑"
+        uuid build FK "🔗"
         string signedTxCbor
         string txHash
-        string status
-        string backend
-        datetime submittedAt
+        long submittedAt
+        string status "pending|submitted|confirmed|failed"
+        string errorCode
+        string errorMessage
+        int retryCount
         boolean hasErrors
-        datetime validFrom
-        datetime validTo
     }
 
     TransactionSubmissionErrors {
+        uuid id PK "🔑"
         uuid submission FK "🔗"
-        int errorIndex
+        long occurredAt
+        string errorType
         string errorCode
         string errorMessage
-        string backend
+        string errorDetails
+        boolean isRecoverable
     }
 
     SigningRequests {
@@ -309,18 +356,17 @@ erDiagram
         uuid build FK "🔗"
         string txBodyHash
         string unsignedTxCbor
-        string cip30TxCbor
         string network
-        string status
-        string message
+        string status "pending|signed|verified|submitting|submitted|expired|failed"
         string cardanoCliCommand
+        string signedTxCbor
         string signerType
         string signerInfo
         string hsmKeyId
+        string errorMessage
         datetime createdAt
         datetime expiresAt
         datetime signedAt
-        datetime verifiedAt
         datetime submittedAt
     }
 
@@ -329,11 +375,11 @@ erDiagram
         uuid signingRequest FK "🔗"
         string signedTxCbor
         boolean isValid
+        string txBodyHash
         int witnessCount
         string signerKeyHashes
-        string signerType
-        string signerInfo
         string errorMessage
+        string warnings
         datetime verifiedAt
     }
 
@@ -350,7 +396,7 @@ erDiagram
     AddressTransactions {
         string address FK "🔗"
         string tx FK "🔗"
-        long netAmount
+        decimal netAmount
         long blockTime
         string netAssets
         boolean hasAssets
@@ -367,6 +413,7 @@ erDiagram
     Transactions ||--o{ TransactionInputs : "has"
     Transactions ||--o{ TransactionOutputs : "has"
     TransactionInputs ||--o{ TransactionInputAssets : "contains"
+    TransactionInputs ||--o{ TransactionInputAssetCopies : "stores"
     TransactionOutputs ||--o{ TransactionOutputAssets : "contains"
     Addresses ||--o{ TransactionInputs : "references"
     Addresses ||--o{ TransactionOutputs : "references"
@@ -376,6 +423,7 @@ erDiagram
     TransactionBuildOutputs ||--o{ TransactionBuildOutputAssets : "contains"
     TransactionSubmissions ||--o{ TransactionSubmissionErrors : "has"
     SigningRequests }o--|| TransactionBuilds : "references"
+    TransactionSubmissions }o--|| TransactionBuilds : "submits"
     SigningRequests ||--o{ SignatureVerifications : "has"
     Addresses ||--o{ AddressSigningRequests : "has"
     AddressSigningRequests }o--|| SigningRequests : "references"
@@ -385,16 +433,19 @@ erDiagram
     AddressTransactions }o--|| Transactions : "references"
 ```
 
-## entities — chain crawler and wallet worker
+Input and output rows are keyed by `txSeq` and their index. `TransactionInputAssets` is a view: the assets
+of an input come from its rows in `TransactionInputAssetCopies`, or from the output it spent, which
+`spentTxSeq` and `spentOutputIndex` name.
 
-Four entities were added in 2.0. They are standalone: the crawler writes into the existing
-`Blocks`/`Transactions` graph above but keeps its own cursor, and the worker's tables reference
-wallets and jobs only, never the chain entities.
+## Crawler and wallet worker
+
+These four entities reference no chain entity. The crawler writes blocks and transactions into the tables
+above and keeps its cursor here. The tables of the worker hold wallets and jobs.
 
 ```mermaid
 erDiagram
     CardanoSyncState {
-        uuid ID PK "🔑 singleton"
+        string ID PK "🔑 always SINGLETON"
         string network
         int64 startSlot
         string startBlockHash
@@ -403,13 +454,21 @@ erDiagram
         int64 lastHeight
         int64 tipSlot
         int64 tipHeight
-        string syncStatus "stopped|syncing|synced|error|reindexing|completed"
+        string syncStatus "stopped|syncing|synced|error"
+        datetime nodeBehindSince "set while the node is behind the cursor"
         string lastError
+        datetime lastErrorAt
         int consecutiveErrors
         boolean desiredRunning "cluster-wide pause/resume intent"
         string leaseOwner "one crawler per deployment"
         datetime leaseUntil
         datetime lastIndexedAt
+        string utxoSetStatus
+        int64 utxoAnchorSlot
+        string utxoAnchorHash
+        datetime utxoSetImportedAt
+        int64 utxoAppliedSlot
+        string utxoSetError
     }
 
     CardanoReorgLog {
@@ -428,6 +487,7 @@ erDiagram
         string signerType "hsm|software — key material NEVER stored here"
         string address
         string publicKeyHash
+        string requiresRole "role a caller needs to queue jobs"
         boolean enabled
         string leaseOwner "one executor per wallet"
         datetime leaseUntil
@@ -442,7 +502,7 @@ erDiagram
         string kind "simpleAda|metadata|multiAsset|mint|plutusSpend|payout|submitSigned"
         string status "pending|building|submitting|submitted|confirmed|failed|cancelled"
         string idempotencyKey "caller-supplied, kept for audit"
-        string dedupKey "UNIQUE(walletId,kind,dedupKey) — the key while owned, else the job ID"
+        string dedupKey "UNIQUE(dedupKey), scoped to the user — the key while owned, else the job ID"
         string request "Build* payload as JSON"
         int priority
         datetime notBefore
@@ -466,11 +526,12 @@ erDiagram
     CardanoWorkerWallets ||--o{ CardanoWalletJobs : "executes"
 ```
 
-Two constraints in this model carry the payment-safety guarantees and are easy to miss:
+Two parts of this model keep a payment from happening twice:
 
-- **`dedupKey` with `UNIQUE(walletId, kind, dedupKey)`** is what makes idempotency atomic. It holds
-  the caller's `idempotencyKey` while the job owns it, and the job's own ID otherwise — so keyless
-  jobs never contend and terminal jobs release the key without relying on NULL semantics.
-- **`status = submitting`** is the durable pre-submit state: `txHash` and `signedTxCbor` are written
-  before the transaction can reach a backend, and the row stays non-terminal so it keeps holding the
-  idempotency key. A crash there is reconciled against the chain, not failed.
+- **`dedupKey` with `UNIQUE(dedupKey)`.** While a job owns an idempotency key, `dedupKey` holds that key,
+  scoped to the user who queued it, across all wallets and kinds. Otherwise it holds the ID of the job. Two jobs with the same key cannot both be inserted,
+  and jobs without a key never collide. A cancelled job, and a job that failed before its transaction was
+  sent, give the key back.
+- **`status = submitting`.** `txHash` and `signedTxCbor` are written before the transaction reaches a
+  backend. The job is not finished in that status, so it keeps its idempotency key. After a crash the
+  worker checks the chain for the transaction and does not fail the job.

@@ -154,6 +154,9 @@ describe('aggregateStatements', () => {
     const [addresses, assets, accounts] = aggregateStatements();
     expect(addresses).toMatch(/^INSERT INTO odatano_cardano_LedgerAddresses .* FROM odatano_cardano_LedgerUTxOs WHERE spentTxHash IS NULL GROUP BY address$/);
     expect(assets).toContain('WHERE u.spentTxHash IS NULL GROUP BY u.address, a.unit');
+    // every slice column the ledger rows carry, the fingerprint included
+    expect(assets).toContain('asset_assetName, asset_fingerprint)');
+    expect(assets).toContain('MIN(a.asset_fingerprint)');
     expect(addresses).toContain('SUM(lovelace), COUNT(*)');
     expect(assets).toContain('JOIN odatano_cardano_LedgerUTxOs u ON a.utxo_txHash = u.txHash AND a.utxo_outputIndex = u.outputIndex');
     expect(accounts).toMatch(/WHERE stakeAddress IS NOT NULL GROUP BY stakeAddress$/);

@@ -164,18 +164,18 @@ export class RateLimitError extends BackendError {
   }
 }
 
-/** Every backend failed; carries the last error's status, or 503 when all were skipped. */
+// Every backend failed. It answers 404 only when every backend said 404, else the last other error.
+// With no error at all every backend was skipped, so 503.
 export class AllBackendsFailedError extends BackendError {
   /** @param skipped why backends were not called at all, e.g. `koios: circuit open` */
   constructor(public readonly errors: BackendError[], originalError?: unknown, skipped: string[] = []) {
-    const lastError = errors[errors.length - 1];
+    const decisive = [...errors].reverse().find((e) => e.statusCode !== 404) ?? errors[errors.length - 1];
     const noneCalled = skipped.length ? `no backend available (${skipped.join('; ')})` : 'unknown error';
 
     super(
-      // Empty errors: every backend was skipped (method unsupported), nothing failed upstream, so 503
-      `All backends failed: ${lastError?.message ?? noneCalled}`,
-      lastError?.statusCode ?? 503,
-      lastError?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
+      `All backends failed: ${decisive?.message ?? noneCalled}`,
+      decisive?.statusCode ?? 503,
+      decisive?.code ?? ERROR_CODES.PROVIDER_UNAVAILABLE,
       undefined,
       originalError
     );
@@ -190,7 +190,9 @@ export function isNotFoundOnAllBackends(err: unknown): boolean {
     && err.errors.every((e) => e instanceof NotFoundError || e.statusCode === 404);
 }
 
-function isBackendVerdict(err: unknown): boolean {
+// A 4xx a healthy backend gave about the request itself. A rate limit is not one, and 401, 402
+// and 403 arrive as 503 from normalizeBackendError.
+export function isBackendVerdict(err: unknown): boolean {
   return err instanceof BackendError && !(err instanceof AllBackendsFailedError)
     && err.statusCode >= 400 && err.statusCode < 500 && err.statusCode !== 429;
 }
@@ -221,6 +223,8 @@ export interface HttpErrorLike {
   message?: string;
   code?: string;
   status?: number;
+  /** Blockfrost SDK errors carry the HTTP status here. */
+  status_code?: number;
   response?: {
     status?: number;
     headers?: Record<string, unknown>;
@@ -245,7 +249,7 @@ export function isPostgrestServerErrorCode(code: unknown): boolean {
 /** HTTP status of an HttpErrorLike, default 500. */
 export function getErrorStatus(err: HttpErrorLike | unknown): number {
   const e = (err ?? {}) as HttpErrorLike;
-  return e.status ?? e.response?.status ?? 500;
+  return e.status ?? e.status_code ?? e.response?.status ?? 500;
 }
 
 /** Message of an HttpErrorLike: `response.data.error` (Koios), else `message`. */
@@ -257,6 +261,36 @@ export function getErrorMessage(err: HttpErrorLike | unknown): string {
   if (e.message) return e.message;
 
   return 'Unknown error';
+}
+
+/** Characters of an error text kept in a stored status or log line. */
+export const ERROR_TEXT_MAX = 500;
+
+/** Message of any thrown value, at most ERROR_TEXT_MAX characters. */
+export function errorText(err: unknown): string {
+  return (err instanceof Error ? err.message : String(err)).slice(0, ERROR_TEXT_MAX);
+}
+
+/** The `error` entries of a cardano-submit-api rejection, else the body as text. */
+export function nodeRejectionReason(body: unknown): string {
+  const errors: string[] = [];
+  const walk = (v: unknown): void => {
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.error)) errors.push(...o.error.map(String));
+    else if (typeof o.error === 'string') errors.push(o.error);
+    for (const child of Object.values(o)) walk(child);
+  };
+  walk(typeof body === 'string' ? (() => { try { return JSON.parse(body); } catch { return undefined; } })() : body);
+  const text = errors.length > 0 ? errors.join('; ') : (typeof body === 'string' ? body : JSON.stringify(body));
+  return text.slice(0, 1000);
+}
+
+// A node's refusal of a submitted transaction. Already-submitted and script failures keep their class.
+export function submitRejection(reason: string, backendName: string, err: unknown): BackendError {
+  const known = normalizeBackendError(new Error(reason), backendName);
+  if (known.statusCode === 409 || known instanceof ScriptValidationError) return known;
+  return new TransactionValidationError(`node rejected the transaction: ${reason}`, err);
 }
 
 /** Ogmios JSON-RPC code of a failed script evaluation. */
@@ -418,10 +452,9 @@ export function normalizeBackendError(
     return new TransactionValidationError(
       message || `Provider returned ${status}: invalid request`, err);
   }
-  if (status === 401 || status === 403) {
-    return new BackendError(
-      `Provider authentication failed (${status}): ${message}`,
-      status, ERROR_CODES.PROVIDER_UNAVAILABLE, backendName, err);
+  // A refused key is the provider's fault, not the request's: another backend may answer.
+  if (status === 401 || status === 402 || status === 403) {
+    return new ProviderUnavailableError(`Provider authentication failed (${status}): ${message}`, backendName, undefined, err);
   }
   if (status >= 400) {
     return new ProviderUnavailableError(

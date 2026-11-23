@@ -1,245 +1,304 @@
 # ODATANO Developer Guide
 
-**Version:** v2.0.0-rc.x | **Last Updated:** September 2026
+**Version:** v2.0.0-rc.x
 
----
+How the code is laid out, how the plugin starts, and which patterns a change has to follow. What the
+services do for a client is in the [User Guide](USER_GUIDE.md).
 
 ## Table of Contents
 
 1. [Architecture](#architecture)
-2. [Quick Setup](#quick-setup)
-3. [Plugin Architecture](#plugin-architecture)
+2. [Setup](#setup)
+3. [Plugin](#plugin)
 4. [Core Components](#core-components)
-5. [App Context Pattern](#app-context-pattern)
-6. [External Signing Module](#external-signing-module)
+5. [App Context](#app-context)
+6. [Signing Module](#signing-module)
 7. [Error Handling](#error-handling)
 8. [Testing](#testing)
 9. [Deployment](#deployment)
+10. [Troubleshooting](#troubleshooting)
+11. [Rules for Changes](#rules-for-changes)
 
 ---
 
 ## Architecture
 
-### Service Surface
+### Services
 
-**52 Entities:** NetworkInformation, Blocks, Epochs, Pools, Assets, AssetHistory, Dreps, Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets (a view over TransactionInputAssetCopies and the spent outputs), TransactionInputAssetCopies, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals (crawler-fed, `crawler.certificates`), TransactionRedeemers, TransactionDatums (crawler-fed, Ogmios chain-sync), LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts (crawler-fed, `crawler.utxoSet`), Accounts, Addresses, AddressAssets, AddressUTxOs, AddressTransactions, UTxOAssets, LedgerProtocolParameters, TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionSubmissions, TransactionSubmissionErrors, SigningRequests, SignatureVerifications, AddressSigningRequests, AddressTransactionBuilds, CardanoSyncState, CardanoReorgLog (crawler cursor + reorg audit, exposed via CardanoIndexerService), CardanoWorkerWallets, CardanoWalletJobs (wallet worker, exposed via CardanoWorkerService), PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, AccountEpochSnapshots (crawler-fed, `crawler.accountSnapshots`), TransactionBuildRedeemers, CardanoAgentGrants, CardanoAgentGrantUsage
+Seven services. Each has a model file `srv/<name>.cds` and an implementation `srv/<name>.ts`.
 
-**22 Read Actions:** GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetMetadataByLabel, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData
+| Service | File | Path | Purpose |
+|---|---|---|---|
+| CardanoODataService | `cardano-service` | `/odata/v4/cardano` | Read chain data: 33 entities, 22 actions |
+| CardanoTransactionService | `cardano-tx-service` | `/odata/v4/cardano-transaction` | Build and submit: 9 entities, 14 actions |
+| CardanoSignService | `cardano-sign-service` | `/odata/v4/cardano-sign` | Signing requests, verification, HSM: 5 entities, 9 actions |
+| CardanoIndexerService | `cardano-indexer-service` | `/odata/v4/cardano-indexer` | Crawler status and control, health probes |
+| CardanoWorkerService | `cardano-worker-service` | `/odata/v4/cardano-worker` | Wallet jobs |
+| CardanoAgentService | `cardano-agent-service` | `/odata/v4/cardano-agent` | Agent grants |
+| CardanoBackendService | `cardano-backend-service` | `/odata/v4/cardano-backend` | Chain data in provider shape for another ODATANO |
 
-**14 Transaction Actions:** BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, BuildPlutusTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress
+**Operations**
 
-**9 External Signing Actions:** CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus
+| Service | Operations |
+|---|---|
+| CardanoODataService | GetNetworkInformation, GetBlockByHash, GetEpochByNumber, GetPoolById, GetDrepById, GetAccountByStakeAddress, GetTransactionByHash, GetTransactionConfirmations, GetMetadataByTxHash, GetMetadataByLabel, GetAddressByBech32, GetUTxOsByAddress, GetUTxOsByCredential, GetAssetsByAddress, GetAssetInfo, GetAssetHistory, GetLatestTransactionsByAddress, GetLatestBlock, GetLatestEpoch, GetLedgerProtocolParameters, ParseTransactionCbor, DecodePlutusData |
+| CardanoTransactionService | BuildSimpleAdaTransaction, BuildTransactionWithMetadata, BuildMultiAssetTransaction, BuildMintTransaction, BuildPlutusSpendTransaction, BuildPlutusTransaction, SubmitTransaction, SubmitSignedTransaction, SetCollateral, DeriveScriptAddress, ExtractPaymentKeyHash, GetBuildDetails, CheckSubmissionStatus, GetTransactionBuildsByAddress |
+| CardanoSignService | CreateSigningRequest, GetSigningRequest, GetSigningRequestsByAddress, VerifySignature, VerifyDataSignature, SubmitVerifiedTransaction, SignWithHsm, SignAndSubmitWithHsm, GetHsmStatus |
+| CardanoIndexerService | Functions: getStatus, getLiveness, getReadiness. Actions, all Admin: pauseCrawler, resumeCrawler, importUtxoSet, backfillCertificates, backfillTransactions, backfillPaymentCredentials, backfillOutputDatums, backfillMetadataPositions, backfillEpochs, backfillAssetDecimals, backfillAssetRegistry, pruneInputAssetCopies, restoreInputAssetCopies |
+| CardanoWorkerService | Actions: SubmitWalletJob, CancelJob, and for Admin PauseWorker and ResumeWorker. Functions: GetJobStatus, GetWorkerStatus |
+| CardanoAgentService | Actions, all Admin: CreateAgentGrant, UpdateAgentGrant, RotateAgentGrantToken, RevokeAgentGrant. Functions: GetGrantStatus, GetGrantUsage |
+| CardanoBackendService | One action per backend method; see `cardano-backend-service.cds` |
 
-**Crawler control (CardanoIndexerService):** `getStatus`, `getLiveness`, `getReadiness` (functions) + `pauseCrawler` / `resumeCrawler` / `importUtxoSet` / `backfillCertificates` / `backfillTransactions` / `backfillPaymentCredentials` / `backfillAssetDecimals` / `backfillAssetRegistry` / `backfillOutputDatums` / `backfillMetadataPositions` (actions, Admin)
+An OData function is called with HTTP GET and its parameters in the URL, for example
+`GET .../GetJobStatus(jobId=<uuid>)`. A POST to a function answers 405.
 
-**Wallet worker (CardanoWorkerService):** `SubmitWalletJob`, `CancelJob`, `PauseWorker` / `ResumeWorker` (actions, the latter two Admin) + `GetJobStatus`, `GetWorkerStatus` (functions)
+**Events.** `CardanoIndexerService` publishes `blockIndexed` and `reorg`. `CardanoWorkerService` publishes
+`jobConfirmed`, `jobFailed` and `jobUnresolved`, once per outcome. An event is emitted after its commit and never throws into
+the caller. Events do not appear in `$metadata`.
 
-**Events:** `CardanoIndexerService` publishes `blockIndexed` / `reorg`, `CardanoWorkerService` the terminal `jobConfirmed` / `jobFailed`. They are emitted after the corresponding commit, fire-and-forget, and do not appear in `$metadata` (OData V4 has no event concept).
+### Entities
 
-> OData **functions** (`getStatus`, `GetJobStatus`, `GetWorkerStatus`) are invoked with HTTP **GET** and their parameters in the URL — `GET .../GetJobStatus(jobId=<uuid>)`. POSTing to them returns 405.
+`db/schema.cds` defines 52 entities in the namespace `odatano.cardano`.
 
-### Layered Architecture
+| Group | Entities |
+|---|---|
+| Chain data | NetworkInformation, Blocks, Epochs, Pools, Dreps, Assets, AssetHistory, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets, AddressTransactions, LedgerProtocolParameters |
+| Transactions | Transactions, TransactionInputs, TransactionOutputs, TransactionInputAssets, TransactionInputAssetCopies, TransactionOutputAssets, TransactionMetadata, TransactionCertificates, TransactionWithdrawals, TransactionRedeemers, TransactionDatums |
+| UTxO set from the crawler | LedgerUTxOs, LedgerUTxOAssets, LedgerAddresses, LedgerAddressAssets, LedgerAccounts |
+| Epoch snapshots | PoolEpochSnapshots, DrepEpochSnapshots, EpochLedgerSnapshots, AccountEpochSnapshots |
+| Builds and submissions | TransactionBuilds, TransactionBuildInputs, TransactionBuildOutputs, TransactionBuildInputAssets, TransactionBuildOutputAssets, TransactionBuildRedeemers, TransactionSubmissions, TransactionSubmissionErrors, AddressTransactionBuilds |
+| Signing | SigningRequests, SignatureVerifications, AddressSigningRequests |
+| Crawler | CardanoSyncState, CardanoReorgLog |
+| Wallet worker | CardanoWorkerWallets, CardanoWalletJobs |
+| Agent grants | CardanoAgentGrants, CardanoAgentGrantUsage |
+
+Three things to know before touching the model:
+
+- **Temporal entities** carry `validFrom` and `validTo` and expire after `INDEX_TTL_MS`:
+  NetworkInformation, Pools, Dreps, Assets, Accounts, Addresses, AddressAssets, AddressUTxOs, UTxOAssets and
+  TransactionBuilds. The other entities have neither field.
+- **Input and output rows are keyed by `txSeq`**, the chain position of their transaction
+  (`slot * 65536 + txIndex`), not by its hash.
+- **`TransactionInputAssets` is a view.** An input has stored copies in `TransactionInputAssetCopies`, or a
+  reference `spentTxSeq` to the output it spent. Writes go to the copy table.
+
+### Layers
 
 ```
-HTTP Client → OData Service (cardano-service.ts / cardano-tx-service.ts / cardano-sign-service.ts /
-                             cardano-indexer-service.ts / cardano-worker-service.ts)
+HTTP client
     ↓
-App Context (server.ts: getCardanoIndexer(), getCardanoClient())
+Service implementations (srv/*-service.ts)
     ↓
-CardanoIndexer + CardanoTransactionBuilder + CardanoCrawler (crawler/) + CardanoWalletWorker (wallet-worker/)
+App context (srv/server.ts: getCardanoIndexer(), getCardanoClient(), getCardanoTxBuilder())
     ↓
-CardanoClient (Multi-Backend Orchestrator)
+CardanoIndexer, CardanoTransactionBuilder, crawler, wallet worker
     ↓
-Backends: Ogmios (live) + Koios / Blockfrost / odatano (providers, failover in BACKENDS order)
+CardanoClient (routing and failover across the backends)
     ↓
-Transaction Builder: Buildooor
-    ↓
-External Signing Module: ExternalSignerModule + SignatureVerifier
-    ↓
-SQLite Cache (temporal entities)
+Backends: Ogmios (node), Koios, Blockfrost, another ODATANO
 ```
 
-### Data Flow
+The transaction builder is Buildooor. The database is the cache of the lazy path and the store of the
+crawler.
+
+### A read request
 
 ```
-1. HTTP Request → Service Handler
-2. Input Validation (isTxHash, isBech32Address, etc.)
-3. Cache Check (SELECT from DB)
-4. On miss: Fetch from the configured backends (e.g. Koios, Ogmios)
-5. Transform & Store (mappers → UPSERT)
-6. Return OData response
+1. The handler validates the input.
+2. It looks for the row in the database.
+3. On a miss it reads from the backends.
+4. It maps the answer and stores it.
+5. It runs the client's query and answers.
 ```
+
+[Indexing](../concepts%20&%20architecture/INDEXING.md) describes the two write paths, on demand and by
+crawler.
 
 ---
 
-## Quick Setup
+## Setup
 
 ```bash
-# Install
 git clone https://github.com/ODATANO/ODATANO
 cd ODATANO
 npm ci
 
-# Configure
-cp .env.example .env
-# Edit .env: NETWORK=preview, BACKENDS=koios (default); KOIOS_API_KEY is optional
+cp .env.example .env     # NETWORK=preview, BACKENDS=koios; KOIOS_API_KEY is optional
+npm run db:deploy        # deploys the schema to db.sqlite
 
-# Development (TypeScript, live reload)
-npm run cds:watch
+npm run cds:watch        # development: runs the TypeScript sources, reloads on change
 
-# Production (build first — `start` does NOT compile)
-npm run build
-npm start
-
-# Testing
-npm test             # Run tests
-npm run test:coverage # Coverage report
+npm run build            # production: compile first
+npm start                # runs cds-serve on the compiled files; it does not compile
 ```
 
-**Development vs Production:**
+The compiled `.js` files sit next to their sources and are gitignored. `npm ci` and `npm run build` compile
+in place, and CAP then loads the `.js` files. Run `npm run clean` before `npm run cds:watch` to run the
+TypeScript sources.
 
-- **`npm run cds:watch`** - Development mode using `ts-node`, runs TypeScript directly, auto-reloads on changes
-- **`npm start`** - Runs `cds-serve` against the **already compiled** output. It does not compile: run `npm run build` (or `npm run build:plugin`) first; the emitted `.js` files are gitignored
+The repository's own CAP configuration lives in `.cdsrc.json`: the database, the `[production]` profile
+(HANA and XSUAA), the build tasks, the cds-typer settings and the development users. It ships neither in
+the npm package nor in the image. The `cds` section of `package.json` holds only `log.mask_headers`, the
+one setting a project that uses the plugin should get from it.
 
-### Key Files
+| Script | Does |
+|---|---|
+| `npm run cds:types` | Generates the model types into `@cds-models/` |
+| `npm run typecheck` | `tsc --noEmit` |
+| `npm run lint` | ESLint |
+| `npm test` | All tests; see [Testing](#testing) |
+| `npm run release:check` | Every local release gate; see [Release gates](#release-gates) |
+
+### Key files
 
 ```
+src/
+  plugin.ts                     # CAP plugin registration, served and shutdown hooks
+  index.ts                      # Public API of the package
 srv/
-  server.ts                     # App Context initialization (M3)
-  cardano-service.cds           # Read entity/action definitions
-  cardano-service.ts            # Read handler implementations
-  cardano-tx-service.cds        # Transaction service definitions (build, submit)
-  cardano-tx-service.ts         # Transaction handler implementations (build, submit)
-  cardano-sign-service.cds      # Signing service definitions (signing requests, verification)
-  cardano-sign-service.ts       # Signing handler implementations
-  cardano-indexer-service.{cds,ts}  # Crawler control surface
-  cardano-worker-service.{cds,ts}   # Wallet job control surface
+  server.ts                     # App context, start and shutdown
+  config.ts                     # Every setting: CDS section, environment, default
+  cardano-service.{cds,ts}      # Read service
+  cardano-tx-service.{cds,ts}   # Build and submit
+  cardano-sign-service.{cds,ts} # Signing requests, verification, HSM
+  cardano-indexer-service.{cds,ts}  # Crawler status and control
+  cardano-worker-service.{cds,ts}   # Wallet jobs
+  cardano-agent-service.{cds,ts}    # Agent grants
+  cardano-backend-service.{cds,ts}  # Provider-shaped answers for another ODATANO
+  cbor/                         # Transaction and PlutusData decoding
   blockchain/
-    cardano-client.ts           # Multi-backend orchestrator
-    cardano-indexer.ts          # Lazy indexing & caching
-    cardano-tx-builder.ts       # Transaction builder coordinator (M2)
+    cardano-client.ts           # Routing and failover across the backends
+    cardano-indexer.ts          # Indexing on demand, bulk block write for the crawler
+    cardano-tx-builder.ts       # Coordinates the transaction builder
+    circuit-breaker.ts          # Skips a backend that keeps failing
+    stored-chain.ts             # Stored blocks and transactions in provider shape
+    ledger-state.ts             # Crawler-fed UTxO set
     backends/
-      blockfrost-backend.ts     # Historical provider
-      koios-backend.ts          # Fallback provider
-      ogmios-backend.ts         # Live WebSocket provider (M2)
-    transaction-building/       # M2 Transaction Builders
+      cardano-backend.ts        # Backend interfaces and capability guards
+      ogmios-backend.ts         # Node over WebSocket: tip state, submit, evaluate, chain-sync
+      koios-backend.ts
+      blockfrost-backend.ts
+      odatano-backend.ts        # Another ODATANO as backend
+    transaction-building/
       cardano-tx.ts             # Builder interface (CardanoTxBuilder)
-      buildooor-tx.ts           # Buildooor builder (sole builder)
-    signing/                    # M3 External Signing
-      external-signer.ts        # Signing request creation & workflow
-      signature-verifier.ts     # Cryptographic signature verification
-      hsm-signer.ts             # PKCS#11 signing (key never leaves the module)
-      cose-verifier.ts          # CIP-8/COSE data signatures (wallet login)
-      submission-finalizer.ts   # Shared submit + bookkeeping, incl. deferred submit
-    crawler/                    # chain crawler / pre-sync
-      crawler.ts                # Engine: chain-sync + pagination, reorg handling
-      sync-state.ts             # Cursor singleton + DB lease
-      hooks.ts                  # blockIndexed / reorg listeners
-    wallet-worker/              # async wallet job engine
-      wallet-worker.ts          # Dispatch loop, build -> sign -> submit
-      job-store.ts              # Job state machine + idempotency + leases
-      signers.ts                # hsm / software WorkerSigner
-      lease-heartbeat.ts        # Keeps the per-wallet lease alive during execution
-      confirmation-tracker.ts   # Depth tracking + rollback re-submit
-      build-request.ts          # Job payload -> TxBuildRequest
+      buildooor-tx.ts           # The Buildooor builder
+    signing/
+      external-signer.ts        # Signing requests and their workflow
+      signature-verifier.ts     # Witness verification
+      hsm-signer.ts             # PKCS#11 signing; the key stays in the module
+      cose-verifier.ts          # CIP-8 data signatures (wallet login)
+      landing-proof.ts          # When a sent transaction is on chain, can never land, or still open
+      submission-finalizer.ts   # Submit, its record and the reconciler
+    crawler/
+      crawler.ts                # Engine: chain-sync and pagination, reorg handling
+      sync-state.ts             # Cursor row and database lease
+      hooks.ts                  # In-process listeners for blockIndexed and reorg
+      account-snapshots.ts      # Reward accounts per epoch
+      input-asset-copies.ts     # Prune and restore of input asset copies
+      utxo-set-import.ts        # Import of a UTxO set snapshot
+      window-plan.ts            # Slot-window walks: one transaction per window, key lookups on PostgreSQL
+      key-pages.ts              # Key-ordered page walks
+      *-backfill.ts             # One file per backfill action
+    wallet-worker/
+      wallet-worker.ts          # Dispatch loop: build, sign, submit
+      job-store.ts              # Job state machine, idempotency, leases
+      signers.ts                # HSM and software signer
+      confirmation-tracker.ts   # Confirmation depth, resubmit after a rollback
   utils/
-    validators.ts               # Input validation (10+ functions)
-    errors.ts                   # Error hierarchy (14 classes)
-    error-codes.ts              # ODATANO_* error-code contract
-    service-events.ts           # Mirrors internal notifications onto CAP services (events)
-    mappers.ts                  # API → OData transformations
-    tx-build-helper.ts          # Transaction utilities (M2)
-    signing-helper.ts           # CIP-30 witness combination (M3)
-    backend-request-handler.ts  # DB transaction wrapper
-
-db/schema.cds                   # 52 entities with temporal support
-test/                           # unit and integration tests (vitest), see test/README.md
+    validators.ts               # Input validation
+    build-request.ts            # Build* request parsing, shared by the service and the worker
+    navigation.ts               # Navigation path and key of a read
+    detached-run.ts             # Runner of the maintenance actions, with cancel
+    lease.ts                    # Database leases (crawler, UTxO import, wallet)
+    db-kind.ts                  # Database kind and bulk SQL helpers
+    errors.ts                   # Error classes and normalizeBackendError
+    error-codes.ts              # ODATANO_* codes
+    backend-request-handler.ts  # handleRequest, handleBackendRequest
+    mappers.ts                  # Provider data to entity rows
+    tx-utils.ts                 # readOutside, detachedTx
+    result-numbers.ts           # Int64 and Decimal as text in results
+    agent-grants.ts, agent-access.ts, agent-token-auth.ts   # Agent grants
+    db-indexes.ts               # Secondary indexes created at start
+    signing-helper.ts           # CIP-30 witness set handling
+db/schema.cds                   # 52 entities
+scripts/migrate-schema.mjs      # Schema changes the additive deployment refuses
+scripts/deploy-schema.mjs       # Migration, then deploy with schema evolution; the upgrade command
+test/                           # vitest, see test/README.md
 ```
+
 ---
 
-## Plugin Architecture
+## Plugin
 
-ODATANO is published as [`@odatano/core`](https://www.npmjs.com/package/@odatano/core) — a standard SAP CAP plugin that any CAP project can install and auto-configure.
+ODATANO is published as [`@odatano/core`](https://www.npmjs.com/package/@odatano/core), a CAP plugin.
+CAP loads every package that has a `cds-plugin.js` at its root.
 
-### How It Works
-
-CAP automatically detects packages with a `cds-plugin.js` file at their root. When a consumer installs `@odatano/core`, the following happens at startup:
-
-```
-1. CAP finds cds-plugin.js in node_modules/@odatano/core/
-2. cds-plugin.js requires src/plugin.js
-3. src/plugin.ts registers the 'odatano-core' service kind
-4. cds.on('served') → src/index.ts initialize() → srv/server.ts initializeFromConfig()
-5. CDS models from db/schema.cds and srv/*.cds are merged into the consumer's model
-6. All five OData services become available automatically
-```
-
-### Plugin File Structure
+### Start sequence
 
 ```
-@odatano/core (npm package)
-├── cds-plugin.js                # CAP entry point → require('./src/plugin')
-├── src/
-│   ├── plugin.ts                # Register kind, cds.on('served'), cds.on('shutdown')
-│   └── index.ts                 # Public API: initialize(), shutdown(), getStatus()
-├── srv/
-│   ├── cardano-service.cds      # CardanoODataService definition
-│   ├── cardano-service.js       # Compiled handler
-│   ├── cardano-tx-service.cds   # CardanoTransactionService definition
-│   ├── cardano-tx-service.js    # Compiled handler
-│   ├── cardano-sign-service.cds # CardanoSignService definition
-│   ├── cardano-sign-service.js  # Compiled handler
-│   ├── cardano-indexer-service.cds # CardanoIndexerService definition
-│   ├── cardano-indexer-service.js  # Compiled handler
-│   ├── cardano-worker-service.cds  # CardanoWorkerService definition
-│   ├── cardano-worker-service.js   # Compiled handler
-│   ├── server.js                # AppContext, start and shutdown
-│   ├── config.js                # Every setting: loadConfigFromEnv() and the other loaders
-│   ├── blockchain/              # Backends, indexer, tx builder, signing, crawler/, wallet-worker/
-│   └── utils/                   # Validators, errors, mappers
-├── db/
-│   └── schema.cds               # 52 entities (namespace: odatano.cardano)
-└── config/                      # Network genesis configurations
+1. CAP finds cds-plugin.js in node_modules/@odatano/core/ and requires src/plugin.
+2. src/plugin.ts registers the kind 'odatano-core' with the schema and the seven service models.
+3. On 'loaded' it rewrites the relative @impl paths to package paths, so Node resolves them
+   from the consumer project.
+4. On 'served' it calls initialize() from src/index.ts, which builds the app context and
+   starts the crawler and the wallet worker when configured.
+5. On 'shutdown' it calls shutdown().
 ```
 
-### Plugin Bootstrap (src/plugin.ts)
+A failed start is logged and never thrown: the plugin must not stop the host application.
 
-```typescript
-import cds from '@sap/cds';
-let initialized = false;
+`PLUGIN_MODEL` and `IMPL_PATHS` in `src/plugin.ts` name every service file. A service missing there
+answers 404 in a consumer project. `test/unit/plugin.test.ts` checks both lists against `srv/*-service.cds`.
 
-// Register the 'odatano-core' service kind
-cds.env.requires.kinds['odatano-core'] = { impl: '@odatano/core' };
-
-// Initialize on served
-cds.on('served', async () => {
-  if (initialized) return;
-  try {
-    const core = await import('./index');
-    await core.initialize();
-    initialized = true;
-  } catch (err) {
-    logger.error('Failed to initialize plugin:', err);
-  }
-});
-
-// Graceful shutdown (closes Ogmios WebSocket, etc.)
-cds.on('shutdown', async () => {
-  if (!initialized) return;
-  const core = await import('./index');
-  await core.shutdown();
-});
-```
-
-### Dual-Mode Config Loading (srv/config.ts)
-
-`loadConfigFromEnv()` supports both plugin and standalone modes:
+### Package contents
 
 ```
-Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
+@odatano/core
+├── cds-plugin.js        # CAP entry point: require('./src/plugin')
+├── src/                 # plugin.js, index.js
+├── srv/                 # *.cds models, compiled *.js, blockchain/, utils/, cbor/
+├── db/                  # schema.cds and its types
+├── @cds-models/         # generated model types
+└── scripts/             # migrate-schema.mjs, migrate-slot-leader.mjs
 ```
 
-**Plugin mode** — consumer configures via `package.json`:
+`tsconfig.build.json` sets `outDir: "."`. The compiled `.js` files then sit next to the `.cds` files, where
+CAP resolves a service's `@impl`.
+
+```bash
+npm run build:plugin     # generate types, compile in place
+npm pack --dry-run       # check the contents
+```
+
+`prepublishOnly` (`scripts/publish-guard.mjs`) refuses to publish a tree that is not committed and tagged,
+and a commit whose "Release" workflow run is not green. It needs `gh`, logged in.
+
+### Release gates
+
+`npm run release:check` runs them in this order and stops at the first failure. Each gate cleans up its
+temp folder and image, also when it fails.
+
+| Gate | Checks |
+|---|---|
+| 1 | The version is the same in `package.json`, both places of `package-lock.json` and `mta.yaml` |
+| 1b | The CHANGELOG has a `## [vX]` heading for the version, and no tag `vX` points at another commit |
+| 2 | No stale `**Version:**` header in the docs |
+| 3 | typecheck, lint, `npm audit`, the audits of `app/router` and `app/wallet`, `npm pack --dry-run`, and `scripts/smoke-consumer.mjs` (the tarball in an empty CAP project, also under `NODE_ENV=production`) |
+| 3b | `scripts/check-login-package.mjs`: the range, the lockfile and the installed copy of `@odatano/cap-auth` read `trustProxy` |
+| 4 | `scripts/build/verify-btp-module.mjs`: the BTP module built as `mta.yaml` does, installed, every service implementation loaded as JavaScript, and audited |
+| 5 | Where docker runs: the image is built and passes `scripts/smoke-image.mjs` (logins, the one SQLite writer, a restart, development users refused) |
+
+`.github/workflows/release.yml` runs the same gates on a tag and pushes the image it tested.
+
+### Configuration (`srv/config.ts`)
+
+Every setting is read in `srv/config.ts` and nowhere else. For each one:
+
+```
+cds.requires["odatano-core"].<key>   wins over   the environment variable   wins over   the default
+```
+
+In a consumer project:
 
 ```json
 {
@@ -258,7 +317,7 @@ Priority: cds.env.requires["odatano-core"].X  >  process.env.X  >  default value
 }
 ```
 
-**Standalone mode** — configured via environment variables (unchanged from previous behavior):
+Standalone, with the environment:
 
 ```env
 NETWORK=preview
@@ -266,21 +325,23 @@ BACKENDS=koios
 KOIOS_API_KEY=optional_koios_token
 ```
 
-### Dual-Mode Initialization Guard
+The values above are the defaults, except the token. The loaders are not cached. CAP copies a local `.env`
+into `process.env` on the first read of `cds.env`, so a test that clears variables reads `cds.env` first.
 
-The `cds.on('served')` hook in `srv/server.ts` has a guard to prevent double-initialization:
+### One start, two entry points
+
+Both `src/plugin.ts` and `srv/server.ts` listen to `served`. The plugin hook runs first and builds the app
+context. The hook in `server.ts` then returns:
 
 ```typescript
 cds.on('served', async () => {
-  if (appContext) return;  // Already initialized by plugin
-  if (env.SKIP_AUTO_INIT === 'true') return;  // Tests
-  // ... normal standalone initialization
+  if (appContext) return;            // the plugin built it
+  if (autoInitSkipped()) return;     // SKIP_AUTO_INIT=true, used by tests
+  // standalone start
 });
 ```
 
-When running as a plugin, `src/plugin.ts` hooks `served` first (plugins load before app code), sets `appContext` via `initializeFromConfig()`, and then `server.ts`'s hook sees `appContext` is already set and skips.
-
-### Public API (src/index.ts)
+### Public API (`src/index.ts`)
 
 ```typescript
 import { initialize, shutdown, getStatus } from '@odatano/core';
@@ -290,148 +351,152 @@ import type { CardanoClientConfig, Network, BackendName } from '@odatano/core';
 
 | Export | Description |
 |--------|-------------|
-| `initialize()` | Load config and start blockchain components |
-| `shutdown()` | Close all backend connections |
-| `getStatus()` | Returns `{ initialized, network }` |
-| `getCardanoClient()` | Multi-backend orchestrator instance |
-| `getCardanoIndexer()` | Lazy indexing instance |
-| `getCardanoTxBuilder()` | Transaction builder instance |
-| `CardanoClient` | Client class (for advanced use) |
-| `CardanoIndexer` | Indexer class |
-| `CardanoTransactionBuilder` | Tx builder class |
-| `loadConfigFromEnv()` | Config loader (dual CDS/env) |
-| `parseTransaction(cborHex)` | Decode transaction CBOR; inline datums as they stand in the transaction |
-| `verifyTxWitnesses(signedTxCbor)` | Check every vkey signature against the body hash; returns the signer key hashes |
-| `posixToSlot(network, posixMs)` / `slotToPosixMs(network, slot)` | Slot conversion, exact from the Shelley start on; `posixToSlot` throws a `RangeError` for an earlier time |
-| `getTransactionConfirmations(txHash)` | Blocks on top of a transaction, 0 while it is not on chain; needs `initialize()` |
-| `applyScriptParameters(scriptHex, params)` | Apply parameters to a parameterized Plutus script |
+| `initialize()` | Loads the configuration, builds the app context, starts crawler and worker when configured |
+| `shutdown()` | Stops worker and crawler, closes the backend connections |
+| `getStatus()` | `{ initialized, network, backends }` |
+| `getCardanoClient()`, `getCardanoIndexer()`, `getCardanoTxBuilder()` | The instances of the app context |
+| `CardanoClient`, `CardanoIndexer`, `CardanoTransactionBuilder` | The classes |
+| `loadConfigFromEnv()` and the loaders for HSM, crawler, wallet worker and agent grants | Configuration as the package reads it |
+| `parseTransaction(cborHex)` | Decodes transaction CBOR. Inline datums keep their bytes |
+| `verifyTxWitnesses(signedTxCbor)` | Checks every vkey signature against the body hash. Returns the signer key hashes |
+| `posixToSlot(network, posixMs)`, `slotToPosixMs(network, slot)` | Slot conversion, exact from the Shelley start on. `posixToSlot` throws a `RangeError` for an earlier time |
+| `getTransactionConfirmations(txHash)` | Blocks on top of a transaction, 0 while it is not on chain. Needs `initialize()` |
+| `applyScriptParameters(scriptHex, params)` | Applies parameters to a parameterized Plutus script |
 | `plutusScriptHash(scriptHex, version)` | Script hash for `plutusV2` or `plutusV3` |
+| `getHsmSigner()` | The HSM signer, when one is configured |
+| `issueAgentGrant()`, `updateAgentGrant()`, `rotateAgentGrantToken()`, `revokeAgentGrantById()`, `getGrantUsage()` | Grant administration from code |
 | `agentAccessOf(service, event)` | What an agent token may do with an operation: `read`, `grant`, `operator`, or `closed` for a service closed to tokens |
 | `agentGrantableActions()` | Names of the operations a grant may list |
-
-### Building & Publishing the Plugin
-
-```bash
-# Build (compiles TS in-place for @impl resolution)
-npm run build:plugin
-
-# Dry-run to check contents
-npm pack --dry-run
-
-# Publish to npm
-npm publish --access public
-```
-
-The `tsconfig.build.json` uses `outDir: "."` so compiled `.js` files sit alongside `.cds` files — this is required for CAP's `@impl` annotation resolution when installed from `node_modules`.
+| `registerTransportLane()` | Adds a way to authenticate a request before CAP's own strategy |
 
 ---
 
 ## Core Components
 
-### 1. Service Handler (srv/cardano-service.ts)
+### 1. Service handlers
 
-**Entity Handler Pattern:**
+Every service implementation starts with `answerNumbersAsText(srv)`; see [Rules for Changes](#rules-for-changes).
+
+A read that fills the cache on a miss is built from two halves. `fetch` reads the database and calls the
+backend. `store` writes.
 
 ```typescript
-this.on('READ', Transactions, async (req: Request) => {
-    const hash = req.data?.hash;
-    
-    // Validate input
-    if (hash && !isTxHash(hash)) {
-        return rejectInvalid(req, 'Transactions', 'Invalid hash format', 'hash');
-    }
-    
-    // Use handleRequest wrapper for automatic error handling
-    return handleRequest(req, async (db) => {
-        if (hash) {
-            const existing = await db.run(SELECT.one.from(Transactions).where({ hash }));
-            if (existing) return existing; // Cache hit
-            return await indexer.indexTransaction(db, hash); // Index from blockchain
-        }
-        return db.run(req.query);
-    });
+const transactionIndex = indexPair(
+  (db, hash: string) => indexer().fetchTransaction(db, hash),
+  (db, fetched) => indexer().storeTransaction(db, fetched),
+);
+
+srv.on('READ', Transactions, indexOnMissRead(Transactions, 'hash', isTxHash, transactionIndex, { errorMessage: 'Invalid transaction hash format' }));
+srv.on('GetTransactionByHash', indexOnMissAction('GetTransactionByHash', Transactions, 'hash', isTxHash, transactionIndex, { errorMessage: 'Invalid transaction hash format' }));
+```
+
+Both helpers call `indexMissing` in `srv/cardano-service.ts`:
+
+1. It looks for the row outside the request transaction.
+2. On a miss it calls `fetch`. The request transaction holds no database connection while the backend answers.
+3. It looks again, now on the request transaction.
+4. It calls `store` unless the row has appeared in the meantime.
+
+`indexOnMissRead` then runs the client's own query, so `$expand`, `$select` and `$filter` apply.
+
+A handler written by hand validates first and wraps the work in `handleRequest`:
+
+```typescript
+srv.on(GetTransactionConfirmations, async (req) => {
+  const { txHash } = req.data;
+  if (!txHash) rejectMissing(req, 'GetTransactionConfirmations', 'txHash');
+  if (!isTxHash(txHash)) rejectInvalid(req, 'GetTransactionConfirmations', 'Invalid transaction hash format', 'txHash');
+  return handleRequest(req, (db) => indexer().resolveTransactionConfirmations(db, txHash));
 });
 ```
 
-**Action Handler Pattern:**
+`rejectMissing` and `rejectInvalid` throw a 400. `handleRequest` gives the callback the request transaction
+and maps every error to an OData error.
+
+### 2. Validators (`srv/utils/validators.ts`)
 
 ```typescript
-this.on('GetTransactionByHash', async (req: Request) => {
-    const hash = req.data?.hash;
-    
-    if (!hash) return rejectMissing(req, 'Transactions', 'hash');
-    if (!isTxHash(hash)) return rejectInvalid(req, 'Transactions', 'Invalid hash', 'hash');
-    
-    return handleRequest(req, async (db) => {
-        let row = await db.run(SELECT.one.from(Transactions).where({ hash }));
-        if (!row) row = await indexer.indexTransaction(db, hash);
-        return row;
-    });
-});
+isTxHash(s)                     // 64 lowercase hex characters
+isBlockHash(s)                  // 64 lowercase hex characters
+isAssetUnit(s)                  // policy id plus asset name
+isValidCredential(s)            // 56 hex characters
+isValidPoolId(s)                // bech32 pool id
+isValidDrepId(s)                // bech32 DRep id
+isValidBech32Address(s)         // address of the active network
+isValidBech32StakeAddress(s)    // stake address of the active network
+isEpochNumber(s)
+isValidCbor(s)                  // hex of even length
+validateTransactionInputs(data, fields)   // several fields at once
+validateJsonWithLimits(json, field)       // size, depth and key limits
 ```
 
-### 2. Input Validators (srv/utils/validators.ts)
+Validate before `handleRequest`, so an invalid request costs no backend call.
 
-```typescript
-// Transaction hash: 64 lowercase hex characters
-export function isTxHash(s: unknown): s is string {
-    return typeof s === "string" && TX_HASH_REGEX.test(s);   // /^[a-f0-9]{64}$/
-}
+### 3. Errors (`srv/utils/errors.ts`)
 
-// Block hash: separate regex (HEX_64_REGEX) for semantic clarity
-export function isBlockHash(s: unknown): s is string {
-    return typeof s === "string" && HEX_64_REGEX.test(s);    // /^[a-f0-9]{64}$/
-}
-
-// Bech32 address validation (network-aware)
-export function isValidBech32Address(s: unknown): s is string { ... }
-
-// Bech32 stake address validation
-export function isValidBech32StakeAddress(s: unknown): s is string { ... }
+```
+BackendError                            base class, 500
+├── NotFoundError                       404
+├── TransactionValidationError          400
+├── ScriptValidationError               400
+├── InsufficientFundsError              400
+├── MixedAssetsError                    400
+├── TransactionAlreadySubmittedError    409
+├── ChainPointMismatchError             409
+├── RateLimitError                      429
+├── ProviderUnavailableError            503
+│   └── ChainSyncClosedError
+├── SubmitOutcomeUnknownError           503
+├── ChainSyncStalledError               503
+├── ChainSyncFrameError                 503
+├── HsmError                            503
+├── BackendInitError                    500
+└── AllBackendsFailedError              status of the last backend error, 503 when none was called
+ConfigError                             not a BackendError
+AllBackendsInitFailedError              not a BackendError
 ```
 
-**Usage:** Always validate input BEFORE `handleRequest()` to prevent unnecessary API requests. Prefix reject calls with `return`.
+[Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) has the codes and the rules that turn a
+provider error into one of these classes.
 
-### 3. Error Hierarchy (srv/utils/errors.ts)
+### 4. Indexer (`srv/blockchain/cardano-indexer.ts`)
 
-```typescript
-BackendError                            // Base class (500)
-├── NotFoundError                       // Resource not found (404)
-├── ProviderUnavailableError            // Timeout/unavailable (503)
-├── RateLimitError                      // Rate limit exceeded (429)
-├── BackendInitError                    // Init failed (500)
-├── AllBackendsFailedError              // All backends failed (503)
-├── InsufficientFundsError              // Not enough UTxOs (400) - M2
-├── MixedAssetsError                    // Mixed asset types (400) - M2
-├── TransactionValidationError          // Invalid signature/CBOR (400) - M2
-├── TransactionAlreadySubmittedError    // Duplicate TX (409) - M2
-└── HsmError                            // HSM operation failed (503) - M3
-ConfigError                             // Configuration error (standalone)
-AllBackendsInitFailedError              // All init failed (standalone)
+- An index method is split: `fetchX` reads and calls the backend, `storeX` writes, `indexX` does both.
+- A composite fetches everything first. `fetchAddress` includes the address's transactions, `fetchAccount`
+  its addresses, `fetchBlock` its epoch.
+- Related rows are written in the caller's transaction, so all persist or none.
+- `indexBlockFull` writes a whole block for the crawler, one UPSERT per table.
 
-// Helper functions
-rejectMissing(req, entity, field)       // Missing parameter (400)
-rejectInvalid(req, entity, msg, field)  // Invalid input (400)
-```
+### 5. Client (`srv/blockchain/cardano-client.ts`)
 
-### 4. Indexing Layer (srv/blockchain/cardano-indexer.ts)
+`CardanoClient` holds one node backend (Ogmios) and the provider backends in the fixed order Blockfrost,
+Koios, another ODATANO.
+`METHOD_ROUTING` says per method which side is asked first:
 
-**Lazy On-Demand Indexing:**
-- Data fetched from blockchain only when first requested
-- Temporal entities (Addresses, Accounts) with TTL-based refresh
-- Non-temporal entities (Transactions, Blocks) persist permanently
-- UPSERT operations for automatic insert/update
-- Related entities indexed atomically
+- Node first: tip and state queries such as `getLatestBlock`, `getAddressUtxos`, `getPool`, `getAccount`,
+  `getProtocolParameters`, `submitTransaction`.
+- Providers first: history such as `getTransaction`, `getBlock`, `getEpoch`, `getAssetInfo`,
+  `getAddressTransactions`, `getNetworkInformation`.
 
-See [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) for details.
+For one call the client goes through the backends in that order:
+
+- A backend that does not support the method is skipped.
+- A backend whose circuit is open is skipped. A circuit opens after repeated failures. A 4xx other than
+  429 is a verdict, not a failure, and closes a half-open circuit. 401, 402 and 403 arrive as 503 and fail
+  over.
+- Each call has a timeout: `fallbackTimeoutMs` for Koios and a remote ODATANO, `primaryTimeoutMs` for the others.
+- An error is normalized and the next backend is asked. For `submitTransaction` a verdict is final: every
+  backend submits to the same ledger.
+- When all failed, the client throws `AllBackendsFailedError` with every error.
+
+Backend modules load on first use (`backendModules`). A static import of a backend class outside its own
+module would load its SDK for every consumer.
 
 ---
 
-## App Context Pattern
+## App Context
 
-### Overview (srv/server.ts)
-
-M3 introduced a centralized App Context pattern that manages all blockchain components as a singleton:
+`srv/server.ts` holds one context for the process:
 
 ```typescript
 interface AppContext {
@@ -441,371 +506,251 @@ interface AppContext {
 }
 ```
 
-### Key Functions
-
 ```typescript
-// Get the singleton context (must be called after CAP bootstrap)
-getAppContext(): AppContext
-
-// Convenience functions for services
+getAppContext(): AppContext          // throws a 503 while no context exists
 getCardanoIndexer(): CardanoIndexer
 getCardanoClient(): CardanoClient
+getCardanoTxBuilder(): CardanoTransactionBuilder
 
-// Test utilities
-createTestContext(backends, protocolParams?): Promise<AppContext>
-resetAppContext(context: AppContext | null): void  // Throws if NODE_ENV=production
+initializeFromConfig(config, protocolParams?, hsmConfig?): Promise<void>   // no effect when a context exists
 shutdownAppContext(): Promise<void>
+
+// tests
+createTestContext(backends, protocolParams?): Promise<AppContext>
+resetAppContext(context: AppContext | null): void   // throws in production
 ```
 
-### Usage in Services
+A handler resolves the instance per request:
 
 ```typescript
-// In cardano-service.ts or cardano-tx-service.ts
-import { getCardanoIndexer, getCardanoClient } from './server';
+import { getCardanoIndexer } from './server';
 
-srv.on('GetTransactionByHash', async (req: Request) => {
-  return handleRequest(req, async (db) => {
-    // Use shared indexer instance
-    return await getCardanoIndexer().indexTransaction(db, hash);
-  });
-});
-
-// In cardano-sign-service.ts (CardanoSignService)
-srv.on('SubmitVerifiedTransaction', async (req: Request) => {
-  return handleRequest(req, async (db) => {
-    // Use shared client instance
-    await getCardanoClient().submitTransaction(signedTxCbor);
-  });
-});
+const indexer = () => getCardanoIndexer();
 ```
 
-### Bootstrap Process
-
-The context is automatically initialized when CAP starts:
+A test sets `SKIP_AUTO_INIT=true` before the server starts and builds its own context:
 
 ```typescript
-cds.on('served', async () => {
-  if (env.SKIP_AUTO_INIT === 'true') return; // For tests
-
-  const config: CardanoClientConfig = {
-    network: env.NETWORK || 'preview',
-    backends: env.BACKENDS?.split(',') || ['koios'],
-    // ... other config from environment
-  };
-
-  appContext = await initializeAppContext(config);
-});
-```
-
-### Test Context Management
-
-```typescript
-// In test setup
 beforeAll(async () => {
-  const testContext = await createTestContext(['koios']);
-  resetAppContext(testContext);
+  resetAppContext(await createTestContext(['koios']));
 });
 
 afterAll(async () => {
-  await shutdownAppContext(); // Clean up connections
+  await shutdownAppContext();
 });
 ```
 
 ---
 
-## External Signing Module
+## Signing Module
 
-### Overview (srv/blockchain/signing/)
-
-M3 provides complete external signing workflow with private key isolation:
+`srv/blockchain/signing/`. For external signing the server never holds the key: it exports the unsigned
+transaction and verifies what comes back. `hsm-signer.ts` signs on the server, and the key stays in the HSM.
 
 ### ExternalSignerModule
 
 ```typescript
-// Create signing request for external signing
-createSigningRequest(buildId, unsignedTxCbor, txBodyHash, network, message): UnsignedTxExportPayload
+createSigningRequest(buildId, unsignedTxCbor, txBodyHash, network, message, options?): UnsignedTxExportPayload
+verifySignedTransaction(signedTxCbor, expectedTxBodyHash, options?): SignatureVerificationResult
+verifyOrThrow(signedTxCbor, expectedTxBodyHash, options?): SignatureVerificationResult
 
-// Verify signed transaction cryptographically
-verifySignedTransaction(signedTxCbor, expectedTxBodyHash): SignatureVerificationResult
-
-// Workflow state management
 createWorkflowState(request): SigningWorkflowState
 markAsSigned(state, signedTxCbor): SigningWorkflowState
 markAsVerified(state, result): SigningWorkflowState
 markAsSubmitted(state, txHash): SigningWorkflowState
+markAsFailed(state, errorMessage): SigningWorkflowState
+isExpired(expiresAt): boolean
 ```
 
 ### SignatureVerifier
 
 ```typescript
-// Verify without throwing
-verify(signedTxCbor, options?): SignatureVerificationResult
-
-// Verify with throwing on failure
+verify(signedTxCbor, options?): SignatureVerificationResult          // never throws
 verifyOrThrow(signedTxCbor, options?): SignatureVerificationResult
-
-// Utility functions
 extractTxBodyHash(txCbor): string
 isSigned(txCbor): boolean
 getWitnessCount(txCbor): number
 ```
 
-### Signing Workflow States
+### Status of a signing request
+
+| Status | Meaning |
+|---|---|
+| `pending` | Created, waiting for the signature |
+| `signed` | A signed transaction was handed in |
+| `verified` | The signature is valid |
+| `submitting` | The submit is running, or it ended without a verdict and the server is resolving it |
+| `submitted` | The transaction was accepted |
+| `expired` | Not signed within 30 minutes |
+| `failed` | Verification failed, or the node refused the transaction |
+
+### Wallet witness sets (`srv/utils/signing-helper.ts`)
 
 ```typescript
-enum SigningStatus {
-  PENDING = 'pending',      // Request created, awaiting signing
-  SIGNED = 'signed',        // Transaction signed externally
-  VERIFIED = 'verified',    // Signature cryptographically verified
-  SUBMITTED = 'submitted',  // Transaction submitted to blockchain
-  EXPIRED = 'expired',      // TTL exceeded (30 minutes default)
-  FAILED = 'failed',        // Signing or verification failed
-}
-```
-
-### CIP-30 Wallet Support (srv/utils/signing-helper.ts)
-
-```typescript
-// Combine unsigned TX with CIP-30 wallet witness set
-combineTransactionWithWitnesses(unsignedTxCbor, witnessSetCbor): string
-
-// Detect if CBOR is witness set (CIP-30) or full transaction
-isWitnessSetCbor(cborHex): boolean
-```
-
----
-
-### 5. Multi-Backend Failover (srv/blockchain/cardano-client.ts)
-
-```typescript
-async getTransaction(hash: string): Promise<Transaction> {
-    await this.ensureInitialized();
-    const errors: BackendError[] = [];
-
-    for (let i = 0; i < this.backends.length; i++) {
-        const backend = this.backends[i];
-        const timeout = i === 0 ? PRIMARY_TIMEOUT_MS : FALLBACK_TIMEOUT_MS;
-
-        try {
-            return await Promise.race([
-                backend.getTransaction(hash),
-                new Promise((_, reject) => setTimeout(() => 
-                    reject(new ProviderUnavailableError(`Timeout ${timeout}ms`)), timeout))
-            ]);
-        } catch (err) {
-            errors.push(normalizeBackendError(err, backend.constructor.name));
-        }
-    }
-    throw new AllBackendsFailedError('getTransaction', errors);
-}
+combineTransactionWithWitnesses(unsignedTxCbor, witnessSetCbor): string   // CIP-30 witness set into the transaction
+isWitnessSetCbor(cborHex): boolean                                        // witness set or full transaction
+toSignedTransaction(unsignedTxCbor, signedTxOrWitnessSet): string         // accepts either
 ```
 
 ---
 
 ## Error Handling
 
-### Status Code Mapping
+| HTTP | When | Example |
+|------|------|---------|
+| 400 | Invalid or missing input, failed validation | Malformed hash, insufficient funds |
+| 401 | No login | |
+| 403 | Login without the role | A user without `Read` on the read service |
+| 404 | Not on chain | Unknown transaction hash |
+| 409 | Conflict | Transaction already submitted |
+| 429 | Rate limit of a provider | |
+| 500 | Internal error | |
+| 503 | No backend answered, or a submit got no verdict | Provider timeout |
 
-| HTTP | Scenario | Example |
-|------|----------|---------|
-| 200 | Success | Transaction found |
-| 400 | Bad Request | Invalid hash format, missing parameter |
-| 404 | Not Found | Transaction/address doesn't exist |
-| 429 | Rate Limit | Too many requests |
-| 500 | Internal Error | Configuration error |
-| 503 | Service Unavailable | Provider timeout, all backends failed |
-
-### Error Flow
-
-```
-HTTP Request
-    ↓
-Input Valid? → NO → 400 (rejectInvalid/rejectMissing)
-    ↓ YES
-Cache Hit? → YES → 200 OK
-    ↓ NO
-Provider Request
-    ├─→ 200 OK (success)
-    ├─→ 404 Not Found
-    ├─→ 429 Rate Limit
-    ├─→ 503 Timeout/Unavailable
-    └─→ 500 Internal Error
-```
-
-### Implementation
-
-```typescript
-// Validation errors (400)
-if (!hash) return rejectMissing(req, 'Transactions', 'hash');
-if (!isTxHash(hash)) return rejectInvalid(req, 'Transactions', 'Invalid hash', 'hash');
-
-// Backend errors (automatic via handleRequest wrapper)
-return handleRequest(req, async (db) => {
-    // All BackendErrors caught and normalized automatically
-    const tx = await indexer.indexTransaction(db, hash);
-    return tx;
-});
-```
+A handler rejects invalid input itself, before any backend call. `handleRequest` maps every other error.
+The body of an error carries the `ODATANO_*` code in `error.code`.
+[Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) lists the codes.
 
 ---
 
 ## Testing
 
-See [test/README.md](../../test/README.md) for complete test documentation.
+[test/README.md](../../test/README.md) describes the suites, the commands and what each needs.
 
-### Test Example
+- `npm run test:unit` needs no network.
+- `npm test` runs everything. The pretest creates `db.sqlite` new.
+- The test setup makes a request without credentials privileged, so a test needs no login.
+
+An integration test starts the server with `cds.test` and replaces the app context:
 
 ```typescript
 import cds from '@sap/cds';
+// require, not import: the test must share the module instances of the server cds.test() starts
+const { createTestContext, resetAppContext, shutdownAppContext } =
+  require('../../srv/server') as typeof import('../../srv/server');
 
-describe('CardanoODataService', () => {
-    let GET: Function, POST: Function;
+process.env.SKIP_AUTO_INIT = 'true';
 
-    beforeAll(async () => {
-        const server = await cds.test('serve', '--in-memory');
-        ({ GET, POST } = server);
-    });
+describe('GetTransactionByHash', () => {
+  const test = cds.test(__dirname + '/../../');
 
-    test('GetTransactionByHash - valid tx', async () => {
-        const { data } = await POST('/odata/v4/cardano/GetTransactionByHash', {
-            hash: '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83'
-        });
+  beforeAll(async () => {
+    resetAppContext(await createTestContext(['koios']));
+  });
 
-        expect(data.hash).toBe('2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83');
-        expect(data.fee).toBeDefined();
-    });
+  afterAll(async () => {
+    await shutdownAppContext();
+  });
 
-    // `fail()` is a Jest/Jasmine global and does NOT exist in vitest — assert on
-    // the rejection instead, which also keeps the failure message useful.
-    test('GetTransactionByHash - invalid hash', async () => {
-        await expect(
-            POST('/odata/v4/cardano/GetTransactionByHash', { hash: 'invalid' })
-        ).rejects.toMatchObject({
-            response: { status: 400, data: { error: { message: expect.stringContaining('Invalid') } } },
-        });
-    });
+  it('refuses a malformed hash', async () => {
+    await expect(
+      test.post('/odata/v4/cardano/GetTransactionByHash', { hash: 'invalid' })
+    ).rejects.toMatchObject({ response: { status: 400 } });
+  });
 });
 ```
+
+vitest has no `fail()`. Assert on the rejection, as above.
 
 ---
 
 ## Deployment
 
-### Environment Configuration
+Development:
 
-**.env (Development)**
 ```env
 DEBUG=CardanoService,CardanoIndexer
 NETWORK=preview
 BACKENDS=koios
 # KOIOS_API_KEY=          # optional token, raises the Koios rate limit
-PRIMARY_TIMEOUT_MS=8000
-FALLBACK_TIMEOUT_MS=10000
 INDEX_TTL_MS=60000
 ```
 
-**.env (Production)**
+Production:
+
 ```env
 NETWORK=mainnet
 BACKENDS=ogmios,koios
 OGMIOS_URL=ws://ogmios:1337
 KOIOS_API_KEY=your_koios_token
-PRIMARY_TIMEOUT_MS=8000
-FALLBACK_TIMEOUT_MS=10000
 PORT=4004
 ```
-
-**Request log.** In production CAP writes one JSON line per request, with the request headers as fields.
-Headers whose name contains `authorization`, `cookie`, `cert`, `ssl`, `token`, `key`, `secret` or
-`project_id` are written as `***` (`cds.log.mask_headers` in the package of `@odatano/core`). A consumer
-that sets its own `cds.log.mask_headers` replaces that list, so it has to carry these patterns itself.
-
-### Production Build
 
 ```bash
 npm run build
 NODE_ENV=production npm start
 ```
 
-### Docker (via docker-compose.yml)
+**Request log.** In production CAP writes one JSON line per request, with the request headers as fields.
+Headers whose name contains `authorization`, `cookie`, `cert`, `ssl`, `token`, `key`, `secret` or
+`project_id` are written as `***` (`cds.log.mask_headers` in the `package.json` of `@odatano/core`). A
+consumer that sets its own `cds.log.mask_headers` replaces that list, so it has to carry these patterns
+itself.
 
-```bash
-# Start
-docker-compose up -d
-
-# Logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
-```
-
-See [Docker Deployment Guide](DOCKER_DEPLOYMENT.md) for details.
+The [Docker guide](DOCKER_DEPLOYMENT.md) covers the image and the compose stack, the
+[Production guide](PRODUCTION_DEPLOYMENT.md) covers SAP BTP.
 
 ---
 
 ## Troubleshooting
 
-### Common Issues
+**Port 4004 in use**
 
-**Port 4004 in use:**
 ```bash
 # Windows
 netstat -ano | findstr :4004
 taskkill /PID <PID> /F
 
-# Linux/Mac
+# Linux, macOS
 lsof -i :4004
 kill -9 <PID>
 ```
 
-**Tests failing:**
-```bash
-# The tests start their own server and create db.sqlite new.
-# Stop a running `cds watch` first: it holds the file.
-npm test
-```
+**Tests fail at the start.** The tests start their own server and create `db.sqlite` new. Stop a running
+`cds watch` first: it holds the file.
 
-**Slow responses:**
-- Check provider timeouts (`primaryTimeoutMs` / `fallbackTimeoutMs` in `cds.requires.odatano-core`, or `PRIMARY_TIMEOUT_MS` / `FALLBACK_TIMEOUT_MS`)
-- Verify network connectivity
-- Check the status of the configured providers (e.g. https://koios.rest, https://status.blockfrost.io)
+**Slow answers**
 
-**BLOCKFROST_API_KEY not set:**
-- Koios tests run without key (always available)
-- Blockfrost tests require valid key
-- Get key: https://blockfrost.io
+- Check the timeouts: `primaryTimeoutMs` and `fallbackTimeoutMs` in `cds.requires.odatano-core`, or
+  `PRIMARY_TIMEOUT_MS` and `FALLBACK_TIMEOUT_MS`.
+- Check the status of the configured providers, for example https://koios.rest or
+  https://status.blockfrost.io.
+
+**Blockfrost tests are skipped or fail.** They need `BLOCKFROST_API_KEY`. The Koios tests need no key.
 
 ---
 
-## Development Best Practices
+## Rules for Changes
 
-1. **Always validate input** before calling providers
-2. **Use handleRequest wrapper** for automatic error handling
-3. **Test edge cases** including error scenarios
-4. **Log important operations** for debugging
-5. **Implement timeouts** to prevent hanging requests
-6. **Check cache/db first for immutable data** to reduce API calls
-7. **Document changes** in relevant files
-8. **Declare agent access** on every new action and function in the service model:
+1. **Validate input before `handleRequest`.**
+2. **Wrap handler work in `handleRequest`.** It maps errors and provides the request transaction.
+3. **Throw the error classes of `srv/utils/errors.ts`**, not a plain `Error`.
+4. **Read the database first.** Stored chain data needs no backend call.
+5. **Declare agent access** on every new action and function in the service model:
    `@odatano.agent: 'read'` (every token), `'grant'` (only when the grant lists it, one budget unit per
    call) or `'operator'` (no token). An operation without it is refused for agent tokens.
-9. **Ask the backend before the first write.** SQLite has one connection, and a transaction takes it
+6. **Ask the backend before the first write.** SQLite has one connection, and a transaction takes it
    with its first statement. A database read that comes before a backend call goes through
    `readOutside(tx, read)` (`srv/utils/tx-utils.ts`), and an index method has a `fetch` half that
    reads and a `store` half that writes. A handler stores only after every backend call returned.
-10. **Start a new service implementation with `answerNumbersAsText(srv)`** (`srv/utils/result-numbers.ts`).
-    CAP reads `Int64` and `Decimal` from the database as text; this renders the rows a handler builds
-    the same way.
+7. **Start a new service implementation with `answerNumbersAsText(srv)`** (`srv/utils/result-numbers.ts`).
+   CAP reads `Int64` and `Decimal` from the database as text; this renders the rows a handler builds
+   the same way.
+8. **Name a new service file in `src/plugin.ts`**, in `PLUGIN_MODEL` and `IMPL_PATHS`.
+9. **Read settings in `srv/config.ts` only.**
+10. **A schema change that is not additive needs a step in `scripts/migrate-schema.mjs`.** Without it the
+    deployment refuses on an existing database.
+11. **Test the error cases too.**
 
 ---
 
-**Additional Resources:**
-- [User Guide](USER_GUIDE.md) - API documentation
-- [Transaction Workflow](TRANSACTION_WORKFLOW.md) - Build, sign & submit transactions (M2/M3)
-- [Test Documentation](../../test/README.md) - Complete test reference
-- [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) - Error architecture
-- [Indexing Concept](../concepts%20&%20architecture/INDEXING.md) - Caching strategy
-- [Backend Configuration](BACKEND_CONFIGURATION.md) - Multi-backend setup
-- [Production Deployment](PRODUCTION_DEPLOYMENT.md) - Production & BTP deployment
+**More**
 
+- [User Guide](USER_GUIDE.md): the API
+- [Crawler Guide](CRAWLER_GUIDE.md): running the chain crawler
+- [Transaction Workflow](TRANSACTION_WORKFLOW.md): build, sign and submit
+- [Test Documentation](../../test/README.md)
+- [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md)
+- [Indexing](../concepts%20&%20architecture/INDEXING.md)
+- [Backend Configuration](BACKEND_CONFIGURATION.md)
+- [Production Deployment](PRODUCTION_DEPLOYMENT.md)

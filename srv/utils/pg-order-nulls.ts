@@ -1,6 +1,7 @@
 // Drops the NULLS clause from ORDER BY on PostgreSQL for columns that cannot be NULL.
 // The driver's NULLS placement is the opposite of the btree index, so `$top` would sort the whole table.
 import cds from '@sap/cds';
+import { configuredDbKind } from './db-kind';
 
 const logger = cds.log('PgOrderNulls');
 const INSTALLED = Symbol.for('odatano.pgOrderNulls');
@@ -8,7 +9,6 @@ const INSTALLED = Symbol.for('odatano.pgOrderNulls');
 interface OrderTerm { nulls?: string; element?: { key?: boolean; notNull?: boolean; '@cds.valid.from'?: boolean } }
 type OrderByFn = (this: unknown, orderBy: OrderTerm[], ...rest: unknown[]) => string[];
 
-const dbKind = (): string => String(((cds.env?.requires as Record<string, { kind?: string }> | undefined)?.db)?.kind ?? '');
 
 /** Strips the null placement from the rendered terms whose column cannot be NULL. */
 export function stripNullsForNotNull(orderBy: OrderTerm[], rendered: string[]): string[] {
@@ -28,7 +28,7 @@ export function installPostgresOrderNulls(): boolean {
     PostgresService = require('@cap-js/postgres/lib/PostgresService');
   } catch (err) {
     // No loadable Postgres driver: silent unless the database is Postgres.
-    if (dbKind() === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, ORDER BY keeps the NULLS clause: ${String((err as Error)?.message ?? err)}`);
+    if (configuredDbKind() === 'postgres') logger.warn(`@cap-js/postgres/lib/PostgresService not loadable, ORDER BY keeps the NULLS clause: ${String((err as Error)?.message ?? err)}`);
     return false;
   }
   const proto = PostgresService.CQN2SQL?.prototype;
@@ -42,6 +42,6 @@ export function installPostgresOrderNulls(): boolean {
     return stripNullsForNotNull(orderBy, orig.call(this, orderBy, ...rest));
   };
   proto[INSTALLED] = true;
-  if (dbKind() === 'postgres') logger.info('ORDER BY on Postgres: NULLS clause dropped for key and NOT NULL columns');
+  if (configuredDbKind() === 'postgres') logger.info('ORDER BY on Postgres: NULLS clause dropped for key and NOT NULL columns');
   return true;
 }

@@ -1,6 +1,6 @@
 {
   "name": "@odatano/core",
-  "version": "2.0.0-rc.50",
+  "version": "2.0.0-rc.51",
   "description": "SAP CAP plugin for Cardano blockchain OData V4 integration",
   "imports": {
     "#cds-models/*": "./@cds-models/*/index.js"
@@ -17,6 +17,7 @@
     "db/**/*.cds",
     "@cds-models/",
     "scripts/migrate-schema.mjs",
+    "scripts/deploy-schema.mjs",
     "scripts/migrate-slot-leader.mjs"
   ],
   "engines": {
@@ -27,7 +28,6 @@
   },
   "dependencies": {
     "@blockfrost/blockfrost-js": "~6.2.0",
-    "@cap-js/hana": "^3",
     "@cardano-ogmios/client": "^7.0.0",
     "@harmoniclabs/buildooor": "0.3.0",
     "@harmoniclabs/cardano-costmodels-ts": "~1.7.0",
@@ -37,8 +37,7 @@
     "@harmoniclabs/plutus-data": "^2.1.1",
     "@harmoniclabs/uint8array-utils": "^1.0.4",
     "@harmoniclabs/uplc": "^2.0.8",
-    "@odatano/cap-auth": "^0.1.0",
-    "@sap/xssec": "^4",
+    "@odatano/cap-auth": "^0.2.0",
     "axios": "^1.18.0",
     "bech32": "^2.0.0",
     "blake2b": "^2.1.4"
@@ -60,11 +59,13 @@
     "@cap-js/cds-test": "^0.4.1",
     "@cap-js/cds-typer": "^0.40.0",
     "@cap-js/cds-types": "^0.18.0",
+    "@cap-js/hana": "^3",
     "@cap-js/postgres": "^3.1.1",
     "@cap-js/sqlite": "^3",
     "@sap/cds": "^10",
     "@sap/cds-dk": "^10",
     "@sap/eslint-plugin-cds": "^4.2.4",
+    "@sap/xssec": "^4",
     "@types/blake2b": "^2.1.3",
     "@types/node": "^22.19.7",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
@@ -73,6 +74,7 @@
     "dotenv": "^16.3.1",
     "eslint": "^9.39.2",
     "nock": "^13.5.6",
+    "semver": "^7.8.6",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
@@ -90,45 +92,6 @@
         "/secret/i",
         "/project_id/i"
       ]
-    },
-    "typer": {
-      "ieee754compatible": true
-    },
-    "build": {
-      "tasks": [
-        {
-          "for": "node-cf",
-          "src": "srv",
-          "dest": "../gen/srv"
-        },
-        {
-          "for": "hana",
-          "src": "db",
-          "dest": "../gen/db"
-        }
-      ]
-    },
-    "requires": {
-      "db": {
-        "kind": "sqlite",
-        "credentials": {
-          "url": "db.sqlite"
-        },
-        "client": {
-          "timeout": 5000
-        }
-      },
-      "[production]": {
-        "db": {
-          "kind": "hana",
-          "pool": {
-            "acquireTimeoutMillis": 30000,
-            "min": 0,
-            "max": 10
-          }
-        },
-        "auth": "xsuaa"
-      }
     }
   },
   "scripts": {
@@ -141,7 +104,7 @@
     "start": "cds-serve",
     "cds:watch": "cds watch",
     "cds:serve": "cds serve --with-mocks",
-    "cds:types": "cds-typer \"*\" --outputDirectory @cds-models",
+    "cds:types": "cds-typer \"*\" --outputDirectory @cds-models --ieee754compatible true",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "db:deploy": "cds deploy",

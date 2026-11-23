@@ -18,10 +18,11 @@ vi.mock('@cardano-ogmios/client', () => ({
 }));
 
 import { Method, createInteractionContext, createLedgerStateQueryClient } from '@cardano-ogmios/client';
+import { withCallSignal } from '../../srv/blockchain/backends/call-signal';
 import { credentialToStakeAddress } from '../../srv/utils/mappers';
 import { blake2b_224 } from '@harmoniclabs/crypto';
 import { OgmiosBackend, resolveOgmiosTip, resolveOgmiosHeight, decodeDrepId, ogmiosScriptHash, issuerKeyToPoolId, mapOgmiosEpochState } from '../../srv/blockchain/backends/ogmios-backend';
-import { BackendInitError, NotFoundError, ProviderUnavailableError, ScriptValidationError, TransactionValidationError } from '../../srv/utils/errors';
+import { BackendInitError, NotFoundError, ProviderUnavailableError, ScriptValidationError, TransactionValidationError, isSubmitRejection } from '../../srv/utils/errors';
 
 describe('OgmiosBackend', () => {
   const NETWORK = 'preview' as const;
@@ -216,12 +217,13 @@ describe('OgmiosBackend', () => {
       expect(result).toEqual({
         stakeaddress: 'stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr',
         active: true,
-        activeEpoch: 0,
-        controlledAmount: '0',
-        rewardsSum: '1500000',
-        withdrawalsSum: '0',
-        reservesSum: '0',
-        treasurySum: '0',
+        // the summary carries the current balance only; every figure it does not report is null
+        activeEpoch: null,
+        controlledAmount: null,
+        rewardsSum: null,
+        withdrawalsSum: null,
+        reservesSum: null,
+        treasurySum: null,
         withdrawableAmount: '1500000',
         poolId: 'pool1abc123',
         drepId: 'drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0',
@@ -286,7 +288,7 @@ describe('OgmiosBackend', () => {
         rewardAccountSummaries: vi.fn().mockResolvedValue([{ stakePool: { id: 'pool1x' }, rewards: { ada: { lovelace: 0 } } }]),
       };
       expect(await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr'))
-        .toMatchObject({ poolId: 'pool1x', rewardsSum: '0', withdrawableAmount: '0' });
+        .toMatchObject({ poolId: 'pool1x', rewardsSum: null, withdrawableAmount: '0' });
     });
 
     it('maps the predefined DReps (abstain / no confidence)', async () => {
@@ -316,7 +318,8 @@ describe('OgmiosBackend', () => {
 
       const result = await backend.getAccount('stake1u8a9qstrmj4rvc3k5z8fems7f0j2vzrem30yavmgfswmswysxcgvr');
 
-      expect(result.rewardsSum).toBe('1500000');
+      expect(result.withdrawableAmount).toBe('1500000');
+      expect(result.rewardsSum).toBeNull();
       expect(result.withdrawableAmount).toBe('1500000');
       expect(result.poolId).toBe('pool1abc123');
     });
@@ -507,12 +510,20 @@ describe('OgmiosBackend', () => {
       });
     });
 
-    it('keeps an already-known transaction a 409', async () => {
+    it('answers a failure without a node verdict as a 503, whatever words its text holds', async () => {
       const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
-      const known = Object.assign(new Error('transaction already known in the mempool'), { code: 3117 });
-      (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(known) };
+      // no JSON-RPC code: a socket or session failure, even when its text reads like a duplicate
+      (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(new Error('socket hang up: duplicate known transaction')) };
       (backend as any).isShutdown = false;
-      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 409 });
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 503, code: 'ODATANO_PROVIDER_UNAVAILABLE' });
+    });
+
+    it('decides a node refusal by its code, not by words such as "already known" in its text', async () => {
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const worded = Object.assign(new Error('duplicate certificate, already known'), { code: 3145 });
+      (backend as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(worded) };
+      (backend as any).isShutdown = false;
+      await expect(backend.submitTransaction('84a4')).rejects.toMatchObject({ statusCode: 400, originalError: { code: 3145 } });
     });
 
     describe('a resubmit the node reports as spent inputs', () => {
@@ -541,11 +552,43 @@ describe('OgmiosBackend', () => {
         await expect(backendWith(false, []).submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 400 });
       });
 
-      it('stays a 400 when the on-chain lookup hangs', async () => {
+      // a failed lookup is no proof the node lacks the transaction, so the refusal is no verdict
+      it('is a 503 without verdict when the on-chain lookup hangs', async () => {
         const backend = backendWith(false, []);
         (backend as any).timeoutMs = 50;
         (backend as any).stateQueryClient = { utxo: vi.fn(() => new Promise(() => undefined)) };
-        await expect(backend.submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 400 });
+        await expect(backend.submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 503, code: 'ODATANO_PROVIDER_UNAVAILABLE' });
+      });
+
+      it('is a 503 without verdict when the mempool lookup fails', async () => {
+        const backend = backendWith(false, []);
+        vi.spyOn(backend as any, 'mempoolHas').mockRejectedValue(new Error('socket closed'));
+        const err = await backend.submitTransaction(SIGNED).catch((e: unknown) => e);
+        expect(err).toMatchObject({ statusCode: 503 });
+        expect(isSubmitRejection(err)).toBe(false);
+      });
+
+      it('asks for a ledger refusal by its code 3117 alone, whatever its text, and keeps the code on the 400', async () => {
+        const unknownRefs = () => Object.assign(new Error('Some transaction outputs referenced as inputs are unknown.'), {
+          code: 3117, data: { unknownOutputReferences: [{ transaction: { id: 'ab'.repeat(32) }, index: 0 }] },
+        });
+        const held = backendWith(true, []);
+        (held as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(unknownRefs()) };
+        await expect(held.submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 409 });
+
+        const other = backendWith(false, []);
+        (other as any).txSubmissionClient = { submitTransaction: vi.fn().mockRejectedValue(unknownRefs()) };
+        const err = await other.submitTransaction(SIGNED).catch((e: unknown) => e);
+        expect(err).toMatchObject({ statusCode: 400, originalError: { code: 3117 } });
+      });
+
+      it('takes a mempool refusal without spent inputs as a 400 and does not ask', async () => {
+        const backend = backendWith(true, []);
+        (backend as any).txSubmissionClient = {
+          submitTransaction: vi.fn().mockRejectedValue(Object.assign(new Error('mempool'), { code: 3997, data: { error: 'mempool is full' } })),
+        };
+        await expect(backend.submitTransaction(SIGNED)).rejects.toMatchObject({ statusCode: 400, originalError: { code: 3997 } });
+        expect((backend as any).mempoolHas).not.toHaveBeenCalled();
       });
 
       it('stays a 400 when the signed CBOR has no readable hash', async () => {
@@ -959,7 +1002,9 @@ describe('OgmiosBackend', () => {
       expect(result.fixedCost).toBe('340000000');
       expect(result.margin).toBeCloseTo(0.05, 10);
       // activeStake is not derivable from pool params
-      expect(result.activeStake).toBe('0');
+      expect(result.activeStake).toBeNull();
+      expect(result.liveSaturation).toBeNull();
+      expect(result.blocksMinted).toBeNull();
     });
 
     it('should throw NotFoundError when pool does not exist', async () => {
@@ -1022,7 +1067,8 @@ describe('OgmiosBackend', () => {
       (backend as any).isShutdown = false;
 
       const result = await backend.getAccount('stake1u8test');
-      expect(result.rewardsSum).toBe('500000');
+      expect(result.withdrawableAmount).toBe('500000');
+      expect(result.rewardsSum).toBeNull();
       expect(result.poolId).toBe('pool1delegated');
       expect(result.drepId).toBe('drep1y2ldnl4ugmhx873hpw7x23rvqe7krtwvgmvqjn3hy62xv6c8ashc0');
     });
@@ -1138,8 +1184,8 @@ describe('OgmiosBackend', () => {
       expect(info.supply).toEqual({
         max: '45000000000000000',
         total: '37446719827876210',
-        circulating: '0',
-        locked: '0',
+        circulating: null,
+        locked: null,
         treasury: '7144014116012711',
         reserves: '7553280172123790',
       });
@@ -1465,8 +1511,11 @@ describe('OgmiosBackend', () => {
 
       const result = await backend.getLatestEpoch();
       expect(result.epoch).toBe(100);
-      expect(result.block_count).toBe(0);
-      expect(result.tx_count).toBe(0);
+      // block statistics are not in the ledger state
+      expect(result.block_count).toBeNull();
+      expect(result.tx_count).toBeNull();
+      expect(result.first_block_time).toBeNull();
+      expect(result.fees).toBeNull();
       // preview geometry: epoch 100 spans slots [8 640 000, 8 726 400)
       expect(result.start_time).toBe(1666656000 + 100 * 86400);
       expect(result.end_time).toBe(1666656000 + 101 * 86400);
@@ -1610,6 +1659,31 @@ describe('OgmiosBackend', () => {
       ]);
     });
 
+    it('closes its connection when the call signal is aborted, so a stuck query ends', async () => {
+      let rejectQuery: (err: Error) => void = () => undefined;
+      // a closed socket rejects pending queries; the mock does that on terminate
+      terminate.mockImplementation(() => rejectQuery(new Error('Connection closed')));
+      session(vi.fn(() => new Promise((_resolve, reject) => { rejectQuery = reject; })));
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const controller = new AbortController();
+
+      const pending = withCallSignal(controller.signal, () => backend.rewardAccountsAt(point, (ask) => ask([KEY])));
+      await new Promise((r) => setTimeout(r, 5));
+      controller.abort(new Error('timed out'));
+
+      await expect(pending).rejects.toThrow();
+      expect(terminate).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens no connection for a call that was already given up', async () => {
+      session(vi.fn());
+      const backend = new OgmiosBackend(NETWORK, TIMEOUT_MS, OGMIOS_URL);
+      const controller = new AbortController();
+      controller.abort(new Error('timed out'));
+      await expect(withCallSignal(controller.signal, () => backend.rewardAccountsAt(point, (ask) => ask([KEY])))).rejects.toThrow();
+      expect(createInteractionContext).not.toHaveBeenCalled();
+    });
+
     it('sends only the list that has entries', async () => {
       const rewardAccountSummaries = vi.fn(async () => []);
       session(rewardAccountSummaries);
@@ -1668,7 +1742,7 @@ describe('mapOgmiosEpochState', () => {
       liveDelegators: null, blocksEpoch: null, rewardAccount: 'stake_test1a',
     });
     // the ledger's live view has no active stake; the indexer derives it from the previous snapshot
-    expect(a).toMatchObject({ activeStake: '0', activeSize: 0 });
+    expect(a).toMatchObject({ activeStake: null, activeSize: null, blocksMinted: null });
     expect(state.pools.find(p => p.poolId === POOL_B)).toMatchObject({ liveSize: 0.75, liveSaturation: 0.75 });
   });
 

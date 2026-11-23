@@ -68,7 +68,7 @@ describe('deferred submit', () => {
       INSERT.into('CardanoSignService.TransactionBuilds').entries({
         id: testBuildId,
         network: TEST_FIXTURES.network,
-        senderAddress: TEST_FIXTURES.addressWithFunds,
+        senderAddress: TEST_FIXTURES.signerAddress,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',
@@ -159,7 +159,8 @@ describe('deferred submit', () => {
     const signingRequestId = await createSigningRequest();
     const signSrv = await cds.connect.to('CardanoSignService');
 
-    refuseSubmit('ValueNotConserved');
+    // a failure of the bytes in any ledger state, so the refusal is final
+    refuseSubmit('InvalidWitnessesUTXOW');
 
     const result = await cds.tx(async (tx: cds.Transaction) => {
       await tx.run(SELECT.one.from('CardanoSignService.SigningRequests').where({ id: signingRequestId }));

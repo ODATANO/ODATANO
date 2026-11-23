@@ -22,9 +22,12 @@ const { fakeDb, workerMock, jobStoreMock, serverMock } = vi.hoisted(() => ({
     WALLET_JOB_KINDS: ['simpleAda', 'metadata', 'multiAsset', 'mint', 'plutusSpend', 'submitSigned'],
     findNextDueJob: vi.fn(async (): Promise<unknown> => null),
     countPendingJobs: vi.fn(async (): Promise<number> => 0),
+    countJobs: vi.fn(async (): Promise<number> => 0),
     getJobById: vi.fn(async (): Promise<unknown> => null),
     insertJob: vi.fn(async (): Promise<unknown> => ({ jobId: 'job-1', status: 'pending', deduplicated: false })),
     markCancelled: vi.fn(async () => true),
+    resolveUnresolvedJob: vi.fn(async () => true),
+    bumpWalletStats: vi.fn(async () => undefined),
     readWallet: vi.fn(),
     runWithoutAmbientTx: (fn: () => unknown) => fn(),
   },
@@ -40,6 +43,7 @@ vi.mock('@sap/cds', () => {
   const cdsMock = {
     log: vi.fn(() => ({ info: vi.fn(), debug: vi.fn(), warn: vi.fn(), error: vi.fn() })),
     tx: (fn: (db: unknown) => unknown) => fn(fakeDb),
+    ql: { UPDATE: { entity: () => ({ set: (set: unknown) => ({ where: (where: unknown) => ({ _op: 'UPDATE', set, where }) }) }) } },
   };
   return { default: cdsMock, ...cdsMock };
 });
@@ -73,8 +77,10 @@ function boot(): Record<string, Handler> {
 
 /** CAP's req.reject throws — mirror that so the handler stops at the gate. */
 function makeReq(roles: string[], data: Record<string, unknown>) {
-  const reject = vi.fn((code: number, message: string) => {
-    throw Object.assign(new Error(message), { code });
+  // like CAP: req.reject(status, message) or req.reject({ status, code, message, target })
+  const reject = vi.fn((arg: number | { status: number; code?: string; message: string; target?: string }, message?: string) => {
+    if (typeof arg === 'object') throw Object.assign(new Error(arg.message), { statusCode: arg.status, code: arg.code, target: arg.target });
+    throw Object.assign(new Error(message), { code: arg });
   });
   return {
     data,
@@ -105,8 +111,10 @@ describe('CardanoWorkerService.SubmitWalletJob role gate', () => {
     const req = makeReq([], JOB_DATA);
     const handlers = boot();
 
-    await expect(handlers.SubmitWalletJob(req)).rejects.toThrow(/requires role 'HsmSigner'/);
-    expect(req.reject).toHaveBeenCalledWith(403, expect.stringContaining("requires role 'HsmSigner'"));
+    await expect(handlers.SubmitWalletJob(req)).rejects.toMatchObject({
+      statusCode: 403, code: 'ODATANO_FORBIDDEN', target: 'walletId',
+      message: `[ODATANO_FORBIDDEN] SubmitWalletJob: SubmitWalletJob on wallet "treasury" requires role 'HsmSigner'`,
+    });
     expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
   });
 
@@ -122,6 +130,27 @@ describe('CardanoWorkerService.SubmitWalletJob role gate', () => {
       statusCode: 403,
       message: expect.stringContaining("requires role 'HsmSigner'"),
     });
+    expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a submitSigned job whose transaction has no expiry, and queues one that has', async () => {
+    const { TEST_FIXTURES } = await import('../integration/test-fixtures');
+    const handlers = boot();
+    const submitSigned = (signedTxCbor: string) => ({ ...JOB_DATA, kind: 'submitSigned', requestJson: JSON.stringify({ signedTxCbor }) });
+
+    await expect(handlers.SubmitWalletJob(makeReq(['HsmSigner'], submitSigned(TEST_FIXTURES.signedTxCbor2)))).rejects.toThrow(/no expiry/);
+    expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
+
+    await handlers.SubmitWalletJob(makeReq(['HsmSigner'], submitSigned(TEST_FIXTURES.signedTxCborWithTtl)));
+    expect(jobStoreMock.insertJob).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a submitSigned job whose transaction expires more than 24 hours ahead', async () => {
+    const { withExpiry } = await import('../integration/test-fixtures');
+    const handlers = boot();
+    const far = { ...JOB_DATA, kind: 'submitSigned', requestJson: JSON.stringify({ signedTxCbor: withExpiry(25 * 3_600_000).cbor }) };
+
+    await expect(handlers.SubmitWalletJob(makeReq(['HsmSigner'], far))).rejects.toThrow(/more than 24 hours ahead/);
     expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
   });
 
@@ -174,8 +203,9 @@ describe('CardanoWorkerService.SubmitWalletJob role gate', () => {
       const req = makeReq([], JOB_DATA);
       const handlers = boot();
 
-      await expect(handlers.SubmitWalletJob(req)).rejects.toThrow(/requires role 'Treasurer'/);
-      expect(req.reject).toHaveBeenCalledWith(403, expect.stringContaining('wallet "treasury"'));
+      await expect(handlers.SubmitWalletJob(req)).rejects.toMatchObject({
+        statusCode: 403, code: 'ODATANO_FORBIDDEN', message: expect.stringContaining('wallet "treasury"'),
+      });
       expect(jobStoreMock.insertJob).not.toHaveBeenCalled();
     });
 
@@ -236,6 +266,9 @@ describe('CardanoWorkerService.SubmitWalletJob validation', () => {
     ['walletId is missing', { ...JOB_DATA, walletId: '  ' }, 'walletId is required'],
     ['requestJson is missing', { ...JOB_DATA, requestJson: '' }, 'requestJson is required'],
     ['requestJson is not JSON', { ...JOB_DATA, requestJson: 'not-json' }, 'requestJson'],
+    ['requestJson is null', { ...JOB_DATA, requestJson: 'null' }, 'requestJson must be a JSON object'],
+    ['requestJson is an array', { ...JOB_DATA, requestJson: '[1]' }, 'requestJson must be a JSON object'],
+    ['requestJson is a number', { ...JOB_DATA, requestJson: '7' }, 'requestJson must be a JSON object'],
     ['notBefore is unparseable', { ...JOB_DATA, notBefore: 'whenever' }, 'notBefore must be a valid timestamp'],
     ['idempotencyKey is oversized', { ...JOB_DATA, idempotencyKey: 'x'.repeat(101) }, 'idempotencyKey exceeds'],
   ];
@@ -438,21 +471,24 @@ describe('CardanoWorkerService worker control', () => {
       getStatusSummary: () => ({ running: true, wallets: ['treasury'], executing: ['treasury'], awaitingConfirmation: 2 }),
     });
     jobStoreMock.countPendingJobs.mockResolvedValue(3);
+    jobStoreMock.countJobs.mockResolvedValue(1);
     const handlers = boot();
 
     await expect(handlers.GetWorkerStatus(makeReq([], {}))).resolves.toEqual({
-      running: true, wallets: ['treasury'], executing: ['treasury'], awaitingConfirmation: 2, pendingJobs: 3,
+      running: true, wallets: ['treasury'], executing: ['treasury'], awaitingConfirmation: 2, pendingJobs: 3, unresolvedJobs: 1,
     });
+    expect(jobStoreMock.countJobs).toHaveBeenCalledWith(fakeDb, 'unresolved');
   });
 
   it('GetWorkerStatus falls back to a stopped summary when no worker runs here', async () => {
     workerMock.getWalletWorker.mockReturnValue(undefined);
     // clearAllMocks() clears calls but keeps implementations — be explicit.
     jobStoreMock.countPendingJobs.mockResolvedValue(0);
+    jobStoreMock.countJobs.mockResolvedValue(0);
     const handlers = boot();
 
     await expect(handlers.GetWorkerStatus(makeReq([], {}))).resolves.toEqual({
-      running: false, wallets: [], executing: [], awaitingConfirmation: 0, pendingJobs: 0,
+      running: false, wallets: [], executing: [], awaitingConfirmation: 0, pendingJobs: 0, unresolvedJobs: 0,
     });
   });
 
@@ -490,5 +526,34 @@ describe('CardanoWorkerService worker control', () => {
       statusCode: 400, message: expect.stringContaining('no wallets configured'),
     });
     expect(workerMock.startWalletWorker).not.toHaveBeenCalled();
+  });
+});
+
+describe('CardanoWorkerService.ResolveJob', () => {
+  const unresolved = { ID: 'job-1', walletId: 'treasury', kind: 'simpleAda', status: 'unresolved', txHash: 'a'.repeat(64), resolution: null };
+  const reqWithEvents = (data: Record<string, unknown>) => {
+    const succeeded: Array<() => void> = [];
+    return { ...makeReq(['Admin'], data), on: (event: string, fn: () => void) => { if (event === 'succeeded') succeeded.push(fn); }, succeeded };
+  };
+
+  it('refuses a job that is not unresolved', async () => {
+    jobStoreMock.getJobById.mockResolvedValue({ ...unresolved, status: 'submitted' });
+    await expect(boot().ResolveJob(reqWithEvents({ jobId: 'job-1', outcome: 'failed' }))).rejects.toThrow(/only an unresolved job/);
+    expect(jobStoreMock.resolveUnresolvedJob).not.toHaveBeenCalled();
+  });
+
+  it('refuses a txHash of another transaction', async () => {
+    jobStoreMock.getJobById.mockResolvedValue(unresolved);
+    await expect(boot().ResolveJob(reqWithEvents({ jobId: 'job-1', outcome: 'confirmed', txHash: 'f'.repeat(64) }))).rejects.toThrow(/is not the transaction of this record/);
+  });
+
+  it('resolves with the note, counts it for the wallet and sends the terminal event after the commit', async () => {
+    jobStoreMock.getJobById.mockResolvedValueOnce(unresolved).mockResolvedValue({ ...unresolved, status: 'confirmed', resolution: 'confirmed by alice' });
+    const req = reqWithEvents({ jobId: 'job-1', outcome: 'confirmed', txHash: 'A'.repeat(64), note: 'seen on an explorer' });
+    const result = await boot().ResolveJob(req);
+    expect(jobStoreMock.resolveUnresolvedJob).toHaveBeenCalledWith(fakeDb, 'job-1', 'confirmed', expect.stringMatching(/^confirmed by alice at .*: seen on an explorer$/));
+    expect(jobStoreMock.bumpWalletStats).toHaveBeenCalledWith(fakeDb, 'treasury', 'confirmed');
+    expect(result).toMatchObject({ jobId: 'job-1', status: 'confirmed' });
+    expect(req.succeeded).toHaveLength(1);
   });
 });

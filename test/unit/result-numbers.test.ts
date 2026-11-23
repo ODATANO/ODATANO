@@ -44,6 +44,13 @@ describe('numbersAsText', () => {
       .toEqual({ priceStep: '0.0000721000', minFeeA: 44 });
   });
 
+  it('renders the execution units of the redeemers a Plutus build answers with', () => {
+    const build = { id: 'b', fee: 190000, redeemers: [{ tag: 'Spend', redeemerIndex: 0, mem: 14000000, steps: 10000000000 }] };
+    expect(numbersAsText(returnsOf('CardanoTransactionService.BuildPlutusTransaction'), build)).toEqual({
+      id: 'b', fee: '190000', redeemers: [{ tag: 'Spend', redeemerIndex: 0, mem: '14000000', steps: '10000000000' }],
+    });
+  });
+
   it('keeps text, null and unknown keys as they are', () => {
     const block = { hash: 'ab', slot: '128679788', epoch_epoch: null, '@odata.context': 'x', extra: 5 };
     expect(numbersAsText(returnsOf('CardanoODataService.GetBlockByHash'), block)).toBe(block);

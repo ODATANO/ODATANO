@@ -6,6 +6,7 @@ import type { BlockData, Transaction } from '../../utils/types';
 import { ChainSyncClosedError, ChainSyncFrameError, ChainSyncStalledError, ProviderUnavailableError } from '../../utils/errors';
 import { chunk, IN_CHUNK } from '../../utils/collections';
 import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
+import { epochOfSlot } from '../../utils/epoch-slots';
 import { emitBlockIndexed, emitReorg } from './hooks';
 import { undoLedgerForTransactions } from '../ledger-state';
 import { deleteTransactionRows, type TxKey } from '../transaction-rows';
@@ -18,11 +19,14 @@ import {
   // The typer appends an underscore to the plural class of this entity name.
   AssetHistory_ as AssetHistory,
   CardanoReorgLog,
+  TransactionOutputAssets,
+  TransactionInputAssets,
   PoolEpochSnapshots,
   DrepEpochSnapshots,
   EpochLedgerSnapshots,
 } from '#cds-models/odatano/cardano';
 import { snapshotAccounts, dropAccountSnapshotsAfter } from './account-snapshots';
+import { withCallSignal } from '../backends/call-signal';
 import {
   ensureSyncStateSingleton,
   readCursor,
@@ -35,6 +39,8 @@ import {
   renewCrawlerLease,
   releaseCrawlerLease,
   latchPoisonBlock,
+  markNodeBehind,
+  recordRollbackRefusal,
   CRAWLER_LEASE_TTL_MS,
   MAX_CONSECUTIVE_ERRORS,
   type CrawlPoint,
@@ -119,11 +125,19 @@ export class CardanoCrawler {
   private static readonly SNAPSHOT_TIMEOUT_MS = 5 * 60_000;
   /** One node request per 2000 known accounts; an hour covers a mainnet-sized set. */
   private static readonly ACCOUNT_SNAPSHOT_TIMEOUT_MS = 60 * 60_000;
+  /** How long a timed-out snapshot may take to end before the next attempt is allowed. */
+  private static readonly SNAPSHOT_ABORT_GRACE_MS = 60_000;
   /** Backoff after a failed snapshot attempt, doubling up to the cap; the marker is only set on success. */
   private static readonly SNAPSHOT_RETRY_BASE_MS = 30_000;
   private static readonly SNAPSHOT_RETRY_MAX_MS = 10 * 60_000;
   /** Retry cadence for a chain-sync backend's init while the crawl runs on pagination. */
   private static readonly CHAIN_SYNC_RETRY_MS = 30_000;
+  /** Wait before chain-sync is reopened after the node was found behind the cursor. */
+  private static readonly NODE_BEHIND_RETRY_MS = 60_000;
+  /** Refused rollbacks that contradict the stored chain before the crawler halts with an error. */
+  private static readonly MAX_ROLLBACK_REFUSALS = 5;
+  /** At most one node-behind warning per this interval; the rest go to debug. */
+  private static readonly NODE_BEHIND_LOG_MS = 10 * 60_000;
 
   private running = false;
   private chainSyncHandle: ChainSyncHandle | null = null;
@@ -146,6 +160,10 @@ export class CardanoCrawler {
   private frameFailure: ChainSyncFrameError | ChainSyncStalledError | null = null;
   /** The stream closed after making progress; the ingest loop reopens chain-sync at the cursor. */
   private reopenStream = false;
+  /** The stream ended on a refused rollback; the ingest loop retries later. */
+  private streamRefused = false;
+  private rollbackRefusals = 0;
+  private nodeBehindLoggedAt = 0;
   /** Blocks persisted by the current chain-sync stream. */
   private blocksThisStream = 0;
   /** Resolves the ingest loop's wait for the current chain-sync stream to end. */
@@ -163,6 +181,8 @@ export class CardanoCrawler {
   /** Epoch whose pool/DRep snapshot this process has settled, and the in-flight attempt. */
   private snapshotedEpoch: number | null = null;
   private snapshotInFlight: Promise<void> | null = null;
+  /** The snapshot work itself. It can outlive a timed-out attempt until it sees its abort flag. */
+  private snapshotWork: Promise<unknown> | null = null;
   /** Consecutive snapshot failures and the earliest time the next attempt may run. */
   private snapshotFailures = 0;
   private accountSnapshotWarned = false;
@@ -339,13 +359,28 @@ export class CardanoCrawler {
         // pagination fetches that block, then chain-sync takes over again. Other errors halt.
         while (this.running) {
           const streamEnd = new Promise<void>((resolve) => { this.streamEnded = resolve; });
-          await this.runChainSync(chainSync);
+          try {
+            await this.runChainSync(chainSync);
+          } catch (err) {
+            // With 'auto' an open that fails while the node replays falls back to pagination.
+            if (!this.running || err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) throw err;
+            if (this.config.source !== 'auto' || !this.client.getPaginatingBackend()) throw err;
+            logger.warn(`chain-sync could not be opened (${err instanceof Error ? err.message : String(err)}), crawling on pagination until it opens again`);
+            await this.runPagination({ untilChainSync: true });
+            continue;
+          }
           if (!this.chainSyncHandle) return; // open refused, halted, or stop() raced us
           await streamEnd;
 
           const failure = this.takeFrameFailure();
           if (!this.running) return;
           if (this.reopenStream) { this.reopenStream = false; continue; }
+          if (this.streamRefused) {
+            this.streamRefused = false;
+            if (this.config.source === 'auto' && this.client.getPaginatingBackend()) await this.runPagination({ untilChainSync: true });
+            else await this.sleep(CardanoCrawler.NODE_BEHIND_RETRY_MS);
+            continue;
+          }
           if (failure?.height == null) return;
           logger.warn(
             `chain-sync cannot deliver block ${failure.height}, switching to pagination until it is behind the cursor`
@@ -408,7 +443,7 @@ export class CardanoCrawler {
   }
 
   /** Bound a direct backend call. These calls bypass the client's timeout and circuit breaker. */
-  private withTimeout<T>(p: Promise<T>, label: string, ms = CardanoCrawler.CALL_TIMEOUT_MS): Promise<T> {
+  private withTimeout<T>(p: Promise<T>, label: string, ms = CardanoCrawler.CALL_TIMEOUT_MS, onTimeout?: () => void): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       let settled = false;
       let timer: ReturnType<typeof setTimeout>;
@@ -421,7 +456,7 @@ export class CardanoCrawler {
         cb();
       };
       timer = setTimeout(
-        () => finish(() => reject(new ProviderUnavailableError(`${label} timed out`, 'crawler', ms))),
+        () => finish(() => { onTimeout?.(); reject(new ProviderUnavailableError(`${label} timed out`, 'crawler', ms)); }),
         ms,
       );
       timer.unref?.(); // never keep the process alive for a watchdog timer
@@ -453,13 +488,14 @@ export class CardanoCrawler {
       rollForward: (block, txs, tip) => this.trackCallback(async () => {
         if (!this.running) return;
         this.clearIdleWatchdog();
-        if (await this.persistBlock(block, txs, tip)) {
+        if (await this.persistBlock(block, txs, tip, true)) {
           this.blocksThisStream++;
           this.idleReopens = 0;
+          this.rollbackRefusals = 0;
         }
         this.armIdleWatchdog();
       }),
-      rollBackward: (point) => this.trackCallback(async () => {
+      rollBackward: (point, tip) => this.trackCallback(async () => {
         if (!this.running) return;
         this.clearIdleWatchdog();
         // Ogmios always opens the stream with a rollBackward to the intersection. That is the
@@ -468,6 +504,15 @@ export class CardanoCrawler {
         if (point !== 'origin' && current?.lastBlockHash === point.hash) {
           logger.debug(`chain-sync intersection acknowledged at slot ${point.slot}, no reorg`);
         } else {
+          const refusal = await this.rollbackRefusal(point, tip, current);
+          if (refusal?.nodeBehind) {
+            await this.waitForNode(refusal.reason);
+            return;
+          }
+          if (refusal) {
+            await this.refuseRollback(refusal.reason);
+            return;
+          }
           await this.handleReorg(point);
         }
         this.armIdleWatchdog();
@@ -586,7 +631,10 @@ export class CardanoCrawler {
       const heights: number[] = [];
       const pushHeight = (height: number) => { if (height > 0 && !heights.includes(height)) heights.push(height); };
       for (let step = 1; step <= DENSE_DEPTH; step++) pushHeight(cursor.lastHeight - step);
-      for (let step = 16; step <= 1 << 14; step *= 2) pushHeight(cursor.lastHeight - step);
+      // A fork is never deeper than k, so no ancestor below that is offered.
+      const k = this.securityParam();
+      for (let step = 16; step <= k; step *= 2) pushHeight(cursor.lastHeight - step);
+      pushHeight(cursor.lastHeight - k);
       if (heights.length) {
         const rows = await cds.tx((tx) => tx.run(
           SELECT.from(Blocks).columns('height', 'slot', 'hash').where({ height: { in: heights } }),
@@ -601,6 +649,93 @@ export class CardanoCrawler {
       add({ slot: this.config.startSlot, hash: this.config.startBlockHash, height: this.config.startHeight });
     }
     return points;
+  }
+
+  // The first block of a Byron epoch follows that epoch's boundary block, which has no height and
+  // is never stored. Its parent hash names that block, not the last stored one.
+  private followsByronBoundary(block: BlockData, parentSlot: number): boolean {
+    const cfg = EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK];
+    if (!cfg || block.slot == null || block.slot >= cfg.shelleyStartSlot) return false;
+    // a Byron epoch is 10k slots long
+    const byronEpoch = (slot: number) => Math.floor(slot / (10 * cfg.securityParam));
+    return byronEpoch(block.slot) > byronEpoch(parentSlot);
+  }
+
+  /** Blocks the node can roll back at most (Praos `k`). */
+  private securityParam(): number {
+    return EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK]?.securityParam
+      ?? EPOCH_CONFIG_BY_NETWORK.mainnet.securityParam;
+  }
+
+  // Why a rollBackward must not be executed, or null for a real fork. A fork is at most k blocks
+  // deep, its point is a stored block, and the new chain is not shorter than the cursor.
+  // `nodeBehind` = the node's tip is below the cursor, so waiting resolves it; the rest contradict the stored chain.
+  private async rollbackRefusal(
+    point: ChainPoint | 'origin',
+    tip: ChainPoint | undefined,
+    cursor: Awaited<ReturnType<typeof readCursor>>,
+  ): Promise<{ reason: string; nodeBehind: boolean } | null> {
+    if (!cursor?.lastBlockHash) return null;
+    if (tip?.height != null && cursor.lastHeight > 0 && tip.height < cursor.lastHeight) {
+      return { reason: `the node's tip ${tip.height} is behind the cursor at block ${cursor.lastHeight}`, nodeBehind: true };
+    }
+    if (point === 'origin') return { reason: `the node rolled back to genesis while the cursor is at block ${cursor.lastHeight}`, nodeBehind: false };
+    const isStart = point.hash === this.config.startBlockHash;
+    let pointHeight = point.height ?? (isStart ? this.config.startHeight : undefined) ?? null;
+    if (!isStart) {
+      const stored = await cds.tx((tx) => tx.run(SELECT.one.from(Blocks).columns('hash', 'height').where({ hash: point.hash }))) as { height?: number | string | null } | undefined;
+      if (!stored) return { reason: `the rollback point ${point.hash} at slot ${point.slot} is not a stored block`, nodeBehind: false };
+      if (pointHeight == null && stored.height != null) pointHeight = Number(stored.height);
+    }
+    // The depth is the crawled chain between the point and the cursor; lazily stored tip blocks do not count.
+    const k = this.securityParam();
+    let depth: number;
+    if (pointHeight != null && cursor.lastHeight > 0) {
+      depth = cursor.lastHeight - pointHeight;
+    } else {
+      const after = await cds.tx((tx) => tx.run(
+        SELECT.from(Blocks).columns('hash').where({ slot: { '>': point.slot, '<=': cursor.lastSlot } }).limit(k + 1)
+      )) as unknown[];
+      depth = (after ?? []).length;
+    }
+    if (depth > k) return { reason: `a rollback to slot ${point.slot} would remove more than k=${k} blocks`, nodeBehind: false };
+    return null;
+  }
+
+  // Ends the stream without deleting anything and records why. The ingest loop tries again later,
+  // when the node has caught up and intersects at the cursor.
+  private async waitForNode(reason: string): Promise<void> {
+    const now = Date.now();
+    if (now - this.nodeBehindLoggedAt >= CardanoCrawler.NODE_BEHIND_LOG_MS) {
+      logger.warn(`chain-sync rollback refused, nothing deleted: ${reason}. Waiting for the node`);
+      this.nodeBehindLoggedAt = now;
+    } else {
+      logger.debug(`chain-sync rollback refused, nothing deleted: ${reason}`);
+    }
+    const recorded = await cds.tx((tx) => markNodeBehind(tx, reason, this.leaseOwner)).catch((err: unknown) => {
+      logger.error('node-behind state could not be written:', err);
+      return true;
+    });
+    if (!recorded) { await this.halt('stopped'); return; }
+    await this.endStream(() => { this.streamRefused = true; });
+  }
+
+  // A rollback that contradicts the stored chain: nothing is deleted, the status turns error, and
+  // after MAX_ROLLBACK_REFUSALS in a row the crawler halts until resumeCrawler.
+  private async refuseRollback(reason: string): Promise<void> {
+    this.rollbackRefusals++;
+    logger.error(`chain-sync rollback refused, nothing deleted: ${reason} (${this.rollbackRefusals} of ${CardanoCrawler.MAX_ROLLBACK_REFUSALS})`);
+    const streak = await cds.tx((tx) => recordRollbackRefusal(tx, reason, this.leaseOwner)).catch((err: unknown) => {
+      logger.error('rollback refusal could not be written:', err);
+      return 0;
+    });
+    if (streak < 0) { await this.halt('stopped'); return; }
+    if (this.rollbackRefusals >= CardanoCrawler.MAX_ROLLBACK_REFUSALS) {
+      logger.error(`chain-sync keeps asking for a rollback the stored chain contradicts; crawler halted until resumeCrawler. Check that Ogmios serves the configured network and node: ${reason}`);
+      await this.halt('error', true);
+      return;
+    }
+    await this.endStream(() => { this.streamRefused = true; });
   }
 
   /** Track streamed callbacks because closing a socket does not imply DB callbacks finished. */
@@ -690,10 +825,19 @@ export class CardanoCrawler {
         );
         if (!blocks.length) { await this.pollPause(untilChainSync); continue; }
 
+        // Each block must name the one before it. A different parent means the cursor was orphaned.
+        let parent = { hash: cursor.lastBlockHash, slot: cursor.lastSlot };
+        for (const block of blocks) {
+          if (block.previousHash != null && block.previousHash !== parent.hash && !this.followsByronBoundary(block, parent.slot)) {
+            throw new Error(`${CHAIN_POINT_MISMATCH_PREFIX} block ${block.hash} at height ${block.height ?? '?'} follows ${block.previousHash}, not ${parent.hash}`);
+          }
+          parent = { hash: block.hash, slot: block.slot ?? parent.slot };
+        }
+
         for (const block of blocks) {
           if (!this.running) break;
           if ((block.height ?? 0) > target) break; // stay behind the confirmation window
-          const txs = await this.withTimeout(backend.getBlockTransactions(block.hash), 'getBlockTransactions');
+          const txs = await this.withTimeout(backend.getBlockTransactions(block.hash, block.txCount), 'getBlockTransactions');
           const ok = await this.persistBlock(block, txs, tipPoint);
           if (!ok) return; // persistBlock already recorded + halted
           // Chain-sync came back mid-batch. Streaming the rest is cheaper than fetching it.
@@ -762,14 +906,17 @@ export class CardanoCrawler {
   // ---------------------------------------------------------------------------
 
   /** Persist one block atomically and advance the cursor. Returns false when the crawler stopped. */
-  private async persistBlock(block: BlockData, txs: Transaction[], tip?: ChainPoint): Promise<boolean> {
+  private async persistBlock(block: BlockData, txs: Transaction[], tip?: ChainPoint, fromChainSync = false): Promise<boolean> {
     if (txs.length !== block.txCount) {
       throw new ProviderUnavailableError(
         `Incomplete block ${block.hash}: backend returned ${txs.length}/${block.txCount} transactions`,
         'crawler',
       );
     }
-    const isAtTip = tip != null && block.slot != null && block.slot >= tip.slot;
+    // Pagination stays confirmationDepth behind the tip on purpose, so that distance counts as synced.
+    const isAtTip = tip != null && (tip.height != null && block.height != null
+      ? tip.height - block.height <= this.config.confirmationDepth
+      : block.slot != null && block.slot >= tip.slot);
 
     // Fetch epoch data before the write transaction, so no DB lock is held across network I/O.
     if (block.epoch != null) {
@@ -790,7 +937,11 @@ export class CardanoCrawler {
             { slot: block.slot ?? 0, hash: block.hash, height: block.height ?? 0 },
             tip ? { slot: tip.slot, height: tip.height } : undefined,
             isAtTip ? 'synced' : 'syncing',
-            ledgerApplied ? { utxoAppliedSlot: block.slot ?? 0 } : undefined,
+            {
+              ...(ledgerApplied ? { utxoAppliedSlot: block.slot ?? 0 } : {}),
+              // only a block from chain-sync shows that the node caught up
+              ...(fromChainSync ? { nodeBehindSince: null } : {}),
+            },
             this.leaseOwner,
           );
           if (!leaseHeld) throw new CrawlerLeaseLostError();
@@ -853,11 +1004,9 @@ export class CardanoCrawler {
     }
   }
 
-  /** Epoch a slot belongs to, from the network's Shelley anchor (same math as the Ogmios mapper). */
+  /** Epoch a slot belongs to, from the network's Shelley anchor. */
   private epochOfSlot(slot: number): number {
-    const cfg = EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK]
-      ?? EPOCH_CONFIG_BY_NETWORK.preview;
-    return cfg.shelleyStartEpoch + Math.floor((slot - cfg.shelleyStartSlot) / cfg.slotsPerEpoch);
+    return epochOfSlot(this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK, slot);
   }
 
   // Snapshot pools and DReps once per epoch. Ogmios reads the ledger at a block within k of the tip.
@@ -873,8 +1022,7 @@ export class CardanoCrawler {
     }
     const fromLedger = this.client.getEpochStateBackend() != null && !!block.hash;
     if (fromLedger) {
-      const k = EPOCH_CONFIG_BY_NETWORK[this.network as keyof typeof EPOCH_CONFIG_BY_NETWORK]?.securityParam
-        ?? EPOCH_CONFIG_BY_NETWORK.mainnet.securityParam;
+      const k = this.securityParam();
       const behind = tip.height != null && block.height != null ? tip.height - block.height : null;
       if (behind == null || behind >= k - CardanoCrawler.SNAPSHOT_WINDOW_MARGIN) {
         logger.debug(`epoch ${block.epoch} snapshot skipped at height ${block.height}: ${behind ?? '?'} blocks behind the tip, outside the node's volatile window (k=${k})`);
@@ -892,17 +1040,22 @@ export class CardanoCrawler {
     }
 
     if (Date.now() < this.snapshotRetryAfter) return;
+    // A timed-out attempt still runs until it sees its abort flag; never start a second one beside it.
+    if (this.snapshotWork) return;
 
     const epoch = block.epoch;
     const at = { slot: block.slot ?? 0, time: block.time ?? 0, hash: fromLedger ? block.hash : null };
+    const attempt = { aborted: false };
+    const stopped = () => attempt.aborted || !this.running;
     this.snapshotInFlight = this.trackCallback(async () => {
       const existing = await cds.tx(async (tx) =>
         (await tx.run(SELECT.one.from(EpochLedgerSnapshots).columns('epoch').where({ epoch })))
           ?? (await tx.run(SELECT.one.from(PoolEpochSnapshots).columns('epoch').where({ epoch })))
       );
       if (!existing) {
-        await this.withTimeout(
-          this.indexer.snapshotEpoch(epoch, at),
+        await this.attemptWithTimeout(
+          () => this.indexer.snapshotEpoch(epoch, at, stopped),
+          attempt,
           `snapshotEpoch(${epoch})`,
           CardanoCrawler.SNAPSHOT_TIMEOUT_MS,
         );
@@ -914,7 +1067,7 @@ export class CardanoCrawler {
           logger.warn(`epoch snapshots missing for epochs ${last + 1}..${epoch - 1}: passed outside the snapshot window`);
         }
       }
-      await this.maybeSnapshotAccounts(epoch, at);
+      await this.maybeSnapshotAccounts(epoch, at, attempt);
       this.snapshotedEpoch = epoch;
       this.snapshotFailures = 0;
       this.snapshotRetryAfter = 0;
@@ -934,7 +1087,11 @@ export class CardanoCrawler {
 
   // The account snapshot of an epoch, after its pool snapshot. Skipped with one warning without a
   // backend that reads the ledger at a block.
-  private async maybeSnapshotAccounts(epoch: number, at: { slot: number; time: number; hash: string | null }): Promise<void> {
+  private async maybeSnapshotAccounts(
+    epoch: number,
+    at: { slot: number; time: number; hash: string | null },
+    attempt: { aborted: boolean },
+  ): Promise<void> {
     if (!this.config.accountSnapshots) return;
     const backend = at.hash ? this.client.getRewardAccountStateBackend() : null;
     if (!backend || !at.hash) {
@@ -942,15 +1099,38 @@ export class CardanoCrawler {
       this.accountSnapshotWarned = true;
       return;
     }
-    await this.withTimeout(
-      snapshotAccounts({
-        backend, epoch, at: { slot: at.slot, hash: at.hash },
+    const point = { slot: at.slot, hash: at.hash };
+    await this.attemptWithTimeout(
+      () => snapshotAccounts({
+        backend, epoch, at: point,
         withdrawals: this.config.certificates,
-        shouldStop: () => !this.running,
+        shouldStop: () => attempt.aborted || !this.running,
       }),
+      attempt,
       `snapshotAccounts(${epoch})`,
       CardanoCrawler.ACCOUNT_SNAPSHOT_TIMEOUT_MS,
     );
+  }
+
+  // A bounded snapshot step. On a timeout the attempt is marked aborted and its call signal fires,
+  // which closes its ledger-state connection, so the work ends and writes nothing more.
+  private attemptWithTimeout<T>(run: () => Promise<T>, attempt: { aborted: boolean }, label: string, ms: number): Promise<T> {
+    const controller = new AbortController();
+    const work = withCallSignal(controller.signal, run);
+    this.snapshotWork = work;
+    const forget = () => { if (this.snapshotWork === work) this.snapshotWork = null; };
+    work.then(forget, forget);
+    return this.withTimeout(work, label, ms, () => {
+      attempt.aborted = true;
+      controller.abort(new Error(`${label} timed out after ${ms} ms`));
+      // A work that does not end once its connection is closed must not block every later attempt.
+      const grace = setTimeout(() => {
+        if (this.snapshotWork !== work) return;
+        logger.warn(`${label} did not end ${CardanoCrawler.SNAPSHOT_ABORT_GRACE_MS} ms after its timeout; its connection is closed and it writes nothing more, so the next attempt may start`);
+        this.snapshotWork = null;
+      }, CardanoCrawler.SNAPSHOT_ABORT_GRACE_MS);
+      grace.unref?.();
+    });
   }
 
   // Roll back in one transaction. Deletes blocks after the fork slot, never by height, and their transactions.
@@ -961,6 +1141,7 @@ export class CardanoCrawler {
     let txsRolledBack = 0;
     let emittedForkHeight: number | null = null;
     const rolledBackTxHashes: string[] = [];
+    const rolledBackUnits = new Set<string>();
     let ledgerInvalidated = false;
 
     try {
@@ -994,6 +1175,19 @@ export class CardanoCrawler {
         txsRolledBack += txHashes.length;
         rolledBackTxHashes.push(...txHashes);
 
+        // the units the catalogue may have first seen in these transactions: outputs, inputs, mints and burns
+        for (const seqChunk of chunk(staleTxs.map((t) => t.txSeq), IN_CHUNK)) {
+          for (const query of [
+            SELECT.distinct.from(TransactionOutputAssets).columns('unit').where({ output_txSeq: { in: seqChunk } }),
+            SELECT.distinct.from(TransactionInputAssets).columns('unit').where({ input_txSeq: { in: seqChunk } }),
+          ]) {
+            for (const u of (await tx.run(query) as Array<{ unit: string }>) ?? []) rolledBackUnits.add(u.unit);
+          }
+        }
+        for (const txChunk of chunk(txHashes, IN_CHUNK)) {
+          const history = await tx.run(SELECT.distinct.from(AssetHistory).columns('unit').where({ txHash: { in: txChunk } })) as Array<{ unit: string }>;
+          for (const u of history ?? []) rolledBackUnits.add(u.unit);
+        }
         for (const txChunk of chunk(txHashes, IN_CHUNK)) {
           // These tables have no cascading delete. Remove them first so no orphans leak via OData.
           await tx.run(DELETE.from(UTxOAssets).where({ utxo_hash: { in: txChunk } }));
@@ -1023,12 +1217,13 @@ export class CardanoCrawler {
           });
           ledgerInvalidated = true;
         } else {
-          await undoLedgerForTransactions(tx, rolledBackTxHashes);
+          await undoLedgerForTransactions(tx, rolledBackTxHashes, forkSlot);
           if (persisted.appliedSlot != null && persisted.appliedSlot > forkSlot) {
             await setUtxoSetState(tx, { appliedSlot: forkSlot });
           }
         }
       }
+      if (rolledBackUnits.size) await this.indexer.reconcileRolledBackAssets(tx, [...rolledBackUnits], forkSlot);
       await resetCursorTo(tx, point === 'origin'
         ? { slot: forkSlot, hash: this.config.startBlockHash ?? '', height: 0 }
         : { slot: point.slot, hash: point.hash, height: forkHeight ?? 0 });
@@ -1058,6 +1253,8 @@ export class CardanoCrawler {
     }
     // The rollback may have removed this epoch's snapshot. The next block re-checks it.
     this.snapshotedEpoch = null;
+    // Epoch totals cached in memory counted the removed blocks.
+    this.indexer.forgetCrawlEpochs();
     emitReorg({ forkSlot, forkHeight: emittedForkHeight, blocksRolledBack });
     logger.warn(`Reorg handled: rolled back ${blocksRolledBack} blocks (${txsRolledBack} txs) to slot ${forkSlot}`);
   }

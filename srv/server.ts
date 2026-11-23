@@ -16,7 +16,7 @@ import { startWalletWorker, stopWalletWorker } from './blockchain/wallet-worker'
 import type { WalletWorkerConfig } from './blockchain/wallet-worker';
 import { activateAgentGrants } from './utils/agent-grants-config';
 import {
-  autoInitSkipped, loadConfigFromEnv, loadCrawlerConfigFromEnv, loadHsmConfigFromEnv,
+  autoInitSkipped, isProduction, loadConfigFromEnv, loadCrawlerConfigFromEnv, loadHsmConfigFromEnv,
   loadPoolMetadataFetchFromEnv, loadWalletWorkerConfigFromEnv,
 } from './config';
 
@@ -44,11 +44,9 @@ async function initializeAppContext(
   // then the secondary indexes the model cannot declare.
   installPostgresOrderNulls();
   installPostgresInlineJson();
-  try {
-    await ensureDbIndexes();
-  } catch (err) {
-    logger.warn('secondary indexes not ensured (non-fatal):', err);
-  }
+  // PostgreSQL builds its indexes CONCURRENTLY, so the service answers while a large one builds.
+  const indexes = ensureDbIndexes().catch((err: unknown) => { logger.warn('secondary indexes not ensured (non-fatal):', err); });
+  if ((cds.db as { kind?: string } | undefined)?.kind !== 'postgres') await indexes;
 
   const cardanoClient = new CardanoClient(config);
 
@@ -146,7 +144,7 @@ export async function initializeFromConfig(config: CardanoClientConfig, protocol
 
 /** Reset the application context (tests only); lets tests inject their own instances. */
 export function resetAppContext(context: AppContext | null): void {
-  if (process.env.NODE_ENV === 'production') {
+  if (isProduction()) {
     throw new Error('resetAppContext() is not available in production');
   }
   appContext = context;

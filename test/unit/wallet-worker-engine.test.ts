@@ -91,8 +91,17 @@ vi.mock('#cds-models/odatano/cardano', () => ({
 }));
 
 const MOCK_TX_HASH = 'c'.repeat(64);
+const { verifyOrThrow } = vi.hoisted(() => ({ verifyOrThrow: vi.fn() }));
+vi.mock('../../srv/blockchain/signing/external-signer', () => ({ getExternalSignerModule: () => ({ verifyOrThrow }) }));
+vi.mock('../../srv/cbor', () => ({ parseTransaction: () => ({ requiredSigners: ['AB'.repeat(28)] }) }));
 vi.mock('../../srv/utils/tx-build-helper', () => ({
   getTxHashFromCbor: vi.fn(() => 'c'.repeat(64)),
+  // the stand-in CBOR 'beef0000' carries no expiry; every other one expires an hour ahead (preview slots)
+  extractTxCacheTargets: vi.fn((cbor: string) => ({
+    inputs: [], outputAddresses: [], outputCount: 1, validityStartSlot: null,
+    ttlSlot: cbor === 'beef0000' ? null : Math.floor((Date.now() - 1_666_656_000_000) / 1000) + 3600,
+    isValid: true, collateralInputs: [], hasCollateralReturn: false,
+  })),
 }));
 
 import cds from '@sap/cds';
@@ -137,10 +146,11 @@ const CONFIG: WalletWorkerConfig = {
 
 function makeDeps() {
   const client = {
+    network: 'preview' as const,
     submitTransaction: vi.fn().mockResolvedValue(TX_HASH),
     getTransaction: vi.fn(),
     getLatestBlock: vi.fn(),
-    supports: vi.fn(() => true),
+    supports: vi.fn((_method: string) => true),
   };
   const indexer = {
     indexSimpleBuildResult: vi.fn().mockResolvedValue({
@@ -154,11 +164,11 @@ function makeDeps() {
       id: 'build-payout', unsignedTxCbor: 'dead', txBodyHash: 'e'.repeat(64), fee: '190000',
     }),
     persistTransactionSubmission: vi.fn().mockResolvedValue({}),
-    findIndexedTransaction: vi.fn().mockResolvedValue(null),
+    findCrawledTransaction: vi.fn().mockResolvedValue(null),
   };
   const signer = {
     type: 'software' as const,
-    getAddress: vi.fn(() => 'addr_test1_worker'),
+    getAddress: vi.fn(() => 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt'),
     getPublicKeyHash: vi.fn(() => 'f'.repeat(56)),
     signTransaction: vi.fn(() => 'beef'),
   };
@@ -178,8 +188,8 @@ function makeWorker(deps: ReturnType<typeof makeDeps>, config: WalletWorkerConfi
   return worker;
 }
 
-async function seedJob(kind = 'simpleAda', request = '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}'): Promise<WalletJobRow> {
-  await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+async function seedJob(kind = 'simpleAda', request = '{"recipientAddress":"addr_test1vqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsw74k48","lovelaceAmount":"1000000"}'): Promise<WalletJobRow> {
+  await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', publicKeyHash: 'f'.repeat(56) });
   // executeJob fences on a held lease (renewWalletLease before build) — tests
   // driving executeJob directly must hold it, like the dispatch path would.
   await tryAcquireWalletLease(db, 'w1', 'test-instance');
@@ -225,8 +235,8 @@ describe('engine: executeJob', () => {
 
     // sender/change forced to the wallet address
     const buildReq = deps.indexer.indexSimpleBuildResult.mock.calls[0][1];
-    expect(buildReq.senderAddress).toBe('addr_test1_worker');
-    expect(buildReq.changeAddress).toBe('addr_test1_worker');
+    expect(buildReq.senderAddress).toBe('addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt');
+    expect(buildReq.changeAddress).toBe('addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt');
     expect(buildReq.network).toBe('preview');
 
     expect(deps.signer.signTransaction).toHaveBeenCalledWith('dead', 'e'.repeat(64));
@@ -241,6 +251,18 @@ describe('engine: executeJob', () => {
     expect(row.signedTxCbor).toBe('beef');
     expect(row.attempt).toBe(1);
     expect(worker.getStatusSummary().awaitingConfirmation).toBe(1);
+  });
+
+  it('sends the change to the wallet even when the request names another change address', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob('simpleAda', '{"recipientAddress":"addr_test1vqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsw74k48","lovelaceAmount":"1000000","changeAddress":"addr_test1vqpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqc7thun8","senderAddress":"addr_test1vqpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqcrqvpsxqc7thun8"}');
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    const buildReq = deps.indexer.indexSimpleBuildResult.mock.calls[0][1];
+    expect(buildReq.senderAddress).toBe('addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt');
+    expect(buildReq.changeAddress).toBe('addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt');
   });
 
   it('records the submission row once when an interrupted submit is adopted again', async () => {
@@ -354,6 +376,22 @@ describe('engine: executeJob', () => {
     expect(worker.getStatusSummary().awaitingConfirmation).toBe(0);
   });
 
+  it('verifies its own signature against the wallet key and the required signers, and sends nothing when it fails', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob();
+    const { TransactionValidationError } = await import('../../srv/utils/errors');
+    verifyOrThrow.mockImplementationOnce(() => { throw new TransactionValidationError('Missing required signer'); });
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    expect(verifyOrThrow).toHaveBeenCalledWith('beef', 'e'.repeat(64), {
+      requiredSigners: expect.arrayContaining([deps.signer.getPublicKeyHash().toLowerCase(), 'ab'.repeat(28)]),
+    });
+    expect(deps.client.submitTransaction).not.toHaveBeenCalled();
+    expect((await getJobById(db, job.ID))!.status).toBe('failed');
+  });
+
   it('submitSigned submits the provided CBOR without building or signing', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
@@ -365,6 +403,19 @@ describe('engine: executeJob', () => {
     expect(deps.signer.signTransaction).not.toHaveBeenCalled();
     expect(deps.client.submitTransaction).toHaveBeenCalledWith('f00d');
     expect((await getJobById(db, job.ID))!.status).toBe('submitted');
+  });
+
+  it('fails a submitSigned job queued before the expiry rule, without an expiry, and sends nothing', async () => {
+    const deps = makeDeps();
+    const worker = makeWorker(deps);
+    const job = await seedJob('submitSigned', JSON.stringify({ signedTxCbor: 'beef0000' }));
+
+    await (worker as unknown as { executeJob: (j: WalletJobRow, s: unknown) => Promise<void> }).executeJob(job, deps.signer);
+
+    expect(deps.client.submitTransaction).not.toHaveBeenCalled();
+    const row = (await getJobById(db, job.ID))!;
+    expect(row.status).toBe('failed');
+    expect(row.errorMessage).toMatch(/no expiry/);
   });
 });
 
@@ -415,6 +466,49 @@ describe('engine: start / stop', () => {
     expect(worker.getStatusSummary()).toMatchObject({ running: false, wallets: [], awaitingConfirmation: 0 });
   });
 
+  it('refuses to start when no backend can confirm a transaction', async () => {
+    const deps = makeDeps();
+    deps.client.supports.mockReturnValue(false);
+    const worker = rawWorker(deps);
+
+    await worker.start();
+
+    expect(worker.isRunning()).toBe(false);
+  });
+
+  it('starts with Ogmios alone: a ledger read of the outputs confirms', async () => {
+    const deps = makeDeps();
+    deps.client.supports.mockImplementation((method: string): boolean => method === 'isUtxoUnspent');
+    const worker = rawWorker(deps);
+
+    await worker.start();
+    try {
+      expect(worker.isRunning()).toBe(true);
+    } finally {
+      await worker.stop();
+    }
+  });
+
+  it('watches the submitted jobs of its wallets that another instance left behind', async () => {
+    const deps = makeDeps();
+    const worker = rawWorker(deps);
+    await worker.start();
+    try {
+      // a job another instance submitted after this one started
+      const job = await seedJob();
+      await markBuilding(db, job.ID, 1);
+      await markSubmitting(db, job.ID, { txHash: MOCK_TX_HASH, unsignedTxCbor: 'dead', signedTxCbor: 'beef', fee: '170000' });
+      await markSubmitted(db, job.ID, MOCK_TX_HASH);
+      expect(worker.getStatusSummary().awaitingConfirmation).toBe(0);
+
+      await (worker as unknown as { tick: () => Promise<void> }).tick();
+
+      expect(worker.getStatusSummary().awaitingConfirmation).toBe(1);
+    } finally {
+      await worker.stop();
+    }
+  });
+
   it('skips a wallet whose signer cannot be built, but starts for the healthy ones', async () => {
     const deps = makeDeps();
     const worker = rawWorker(deps, {
@@ -449,7 +543,7 @@ describe('engine: start / stop', () => {
 
   it('re-watches submitted jobs found at boot instead of failing them', async () => {
     const deps = makeDeps();
-    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', publicKeyHash: 'f'.repeat(56) });
     const { jobId } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{}' });
     await markBuilding(db, jobId, 1);
     await markSubmitting(db, jobId, { txHash: TX_HASH, unsignedTxCbor: 'dead', signedTxCbor: 'beef', fee: '170000' });
@@ -649,7 +743,7 @@ describe('engine: reconciling an interrupted submit', () => {
   it('adopts the job from the local index without asking the backends', async () => {
     const deps = makeDeps();
     deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('BadInputsUTxO', undefined));
-    deps.indexer.findIndexedTransaction.mockResolvedValue({ slot: 100, blockHeight: 42 });
+    deps.indexer.findCrawledTransaction.mockResolvedValue({ slot: 100, blockHeight: 42, blockHash: 'b', tipHeight: 42, spendsCollaterals: false });
     const worker = makeWorker(deps);
     const job = await seedInterruptedSubmit();
 
@@ -673,7 +767,7 @@ describe('engine: reconciling an interrupted submit', () => {
 
   it('fails only once the chain proves absence and the tx is permanently rejected', async () => {
     const deps = makeDeps();
-    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('ValueNotConserved', undefined));
+    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('ConwayUtxowFailure (InvalidWitnessesUTXOW [...])', undefined));
     deps.client.getTransaction.mockRejectedValue(new NotFoundError('Transaction', 'koios'));
     const worker = makeWorker(deps);
     const job = await seedInterruptedSubmit();
@@ -702,7 +796,7 @@ describe('engine: reconciling an interrupted submit', () => {
   it('takes the rejection as final when no backend can look transactions up', async () => {
     const deps = makeDeps();
     deps.client.supports.mockReturnValue(false);
-    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('ValueNotConserved', undefined));
+    deps.client.submitTransaction.mockRejectedValue(new TransactionValidationError('ConwayUtxowFailure (InvalidWitnessesUTXOW [...])', undefined));
     const worker = makeWorker(deps);
     const job = await seedInterruptedSubmit();
 
@@ -782,7 +876,7 @@ describe('engine: dispatch mapping and failure classification', () => {
   it('payout: one transaction for all recipients, the wallet as sender and change target', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
-    const outputs = [{ address: 'addr_test1_a', lovelaceAmount: '2000000' }, { address: 'addr_test1_b', lovelaceAmount: '3000000' }];
+    const outputs = [{ address: 'addr_test1vqzqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqpqg3v3', lovelaceAmount: '2000000' }, { address: 'addr_test1vqzs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg342m23', lovelaceAmount: '3000000' }];
     // address validation needs the app context; this test is about the dispatch
     const parser = await import('../../srv/utils/tx-request-parsers');
     const parse = vi.spyOn(parser, 'parseOutputList').mockReturnValue({ parsed: outputs });
@@ -793,7 +887,7 @@ describe('engine: dispatch mapping and failure classification', () => {
 
     expect(deps.indexer.indexPlutusBuildResult).toHaveBeenCalledTimes(1);
     expect(deps.indexer.indexPlutusBuildResult.mock.calls[0][1]).toMatchObject({
-      network: 'preview', senderAddress: 'addr_test1_worker', changeAddress: 'addr_test1_worker', scriptInputs: [], outputs,
+      network: 'preview', senderAddress: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', changeAddress: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', scriptInputs: [], outputs,
     });
     expect(deps.indexer.indexSimpleBuildResult).not.toHaveBeenCalled();
     expect((await getJobById(db, job.ID))!.status).toBe('submitted');
@@ -885,7 +979,7 @@ describe('engine: per-wallet serialization', () => {
     const worker = makeWorker(deps);
     await seedJob(); // w1
     await upsertWalletRegistration(db, { walletId: 'w2', signerType: 'software', address: 'addr_test1_w2', publicKeyHash: 'e'.repeat(56) });
-    const { jobId: w2Job } = await insertJob(db, { walletId: 'w2', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}' });
+    const { jobId: w2Job } = await insertJob(db, { walletId: 'w2', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1vqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsw74k48","lovelaceAmount":"1000000"}' });
     (worker as unknown as { signers: Map<string, unknown> }).signers.set('w2', deps.signer);
 
     await runTick(worker);
@@ -897,8 +991,8 @@ describe('engine: per-wallet serialization', () => {
   it('with one slot, the wallet holding the more urgent job runs first', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps, { ...CONFIG, maxConcurrentWallets: 1 });
-    const request = '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}';
-    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    const request = '{"recipientAddress":"addr_test1vqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsw74k48","lovelaceAmount":"1000000"}';
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', publicKeyHash: 'f'.repeat(56) });
     await upsertWalletRegistration(db, { walletId: 'w2', signerType: 'software', address: 'addr_test1_w2', publicKeyHash: 'e'.repeat(56) });
     (worker as unknown as { signers: Map<string, unknown> }).signers.set('w2', deps.signer);
     const { jobId: routine } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request, priority: 100 });
@@ -913,10 +1007,10 @@ describe('engine: per-wallet serialization', () => {
   it('a job scheduled for later does not hold back a due job of the same wallet', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
-    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1_worker', publicKeyHash: 'f'.repeat(56) });
+    await upsertWalletRegistration(db, { walletId: 'w1', signerType: 'software', address: 'addr_test1vqqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgasfzjt', publicKeyHash: 'f'.repeat(56) });
     const later = new Date(Date.now() + 3_600_000).toISOString();
     const { jobId: scheduled } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{}', priority: 1, notBefore: later });
-    const { jobId: due } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1_r","lovelaceAmount":"1000000"}' });
+    const { jobId: due } = await insertJob(db, { walletId: 'w1', kind: 'simpleAda', request: '{"recipientAddress":"addr_test1vqpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqsw74k48","lovelaceAmount":"1000000"}' });
 
     await runTick(worker);
 
@@ -927,7 +1021,7 @@ describe('engine: per-wallet serialization', () => {
   it('skips wallets this instance has no signer for', async () => {
     const deps = makeDeps();
     const worker = makeWorker(deps);
-    await upsertWalletRegistration(db, { walletId: 'foreign', signerType: 'hsm', address: 'addr_test1_f', publicKeyHash: 'd'.repeat(56) });
+    await upsertWalletRegistration(db, { walletId: 'foreign', signerType: 'hsm', address: 'addr_test1vqrswpc8qurswpc8qurswpc8qurswpc8qurswpc8qurswpcjw59ta', publicKeyHash: 'd'.repeat(56) });
     const { jobId } = await insertJob(db, { walletId: 'foreign', kind: 'simpleAda', request: '{}' });
 
     await runTick(worker);

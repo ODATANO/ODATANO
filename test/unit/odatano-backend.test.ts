@@ -44,6 +44,21 @@ describe('OdatanoBackend', () => {
     expect(created[0].baseURL).toBe('https://gw.example/odata/v4/cardano-backend');
   });
 
+  it('checks the transaction count of a block itself, so a remote of an earlier version needs no new parameter', async () => {
+    post.mockResolvedValue(ok('[{"hash":"aa"}]'));
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    await expect(b.getBlockTransactions('bb', 2)).rejects.toBeInstanceOf(ProviderUnavailableError);
+    expect(post).toHaveBeenCalledWith('/GetBlockTransactions', { blockHash: 'bb' });
+    expect(await b.getBlockTransactions('bb', 1)).toEqual([{ hash: 'aa' }]);
+    expect(await b.getBlockTransactions('bb')).toEqual([{ hash: 'aa' }]);
+  });
+
+  it('reads account addresses as plain strings and as the { address } objects every version answers', async () => {
+    post.mockResolvedValue(ok('{"stakeaddress":"stake_test1x","addresses":["addr_test1a",{"address":"addr_test1b"}]}'));
+    const b = new OdatanoBackend('preview', 5000, undefined, 'k');
+    expect((await b.getAccount('stake_test1x')).addresses).toEqual(['addr_test1a', 'addr_test1b']);
+  });
+
   it('parses the JSON answer and keeps big integers', async () => {
     post.mockResolvedValue(ok('{"hash":"aa","fee":"170000","metadata":[{"label":"1","json":{"n":18446744073709551615}}]}', { 'x-access-units-left': '41' }));
     const b = new OdatanoBackend('preview', 5000, undefined, 'k');

@@ -1,9 +1,9 @@
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
-import { TX_SEQ_SLOT_FACTOR } from '../../utils/mappers';
 import { TransactionInputs } from '#cds-models/odatano/cardano';
+import { slotRangeOf, walkSlotWindows, type SlotRange } from './window-plan';
+import { bulkSqlKind, connectedDbKind } from '../../utils/db-kind';
 
-const { SELECT } = cds.ql;
 const logger = cds.log('InputAssetCopies');
 
 // An input reads its assets from a stored copy or, through `spentTxSeq`, from the output it spent.
@@ -33,15 +33,17 @@ export interface InputCopyRestoreProgress {
   rows: number; // copy rows written
 }
 
-export interface SlotWalkOptions<P> {
+export interface CopyWalkOptions<P> {
   fromSlot: number;
   toSlot: number;
   slotWindow?: number; // slots per transaction
   onProgress?: (p: P) => void;
+  shouldStop?: () => boolean; // stops the walk before the next window
 }
 
-const supported = (kind: string): boolean => kind === 'postgres' || kind === 'sqlite' || kind === 'better-sqlite';
-const bounds = (kind: string): [string, string] => (kind === 'postgres' ? ['$1', '$2'] : ['?', '?']);
+const supported = (kind: string): boolean => bulkSqlKind(kind) !== null;
+/** The two window bounds as numbered parameters, so a statement can name each more than once. */
+const bounds = (kind: string): [string, string] => (kind === 'postgres' ? ['$1', '$2'] : ['?1', '?2']);
 
 // Points the inputs of a window at their output. Only where the output is stored and holds
 // exactly the asset rows of the input's copy, so the input reads the same assets afterwards.
@@ -58,13 +60,14 @@ export function referenceStatement(kind: string): string | null {
     `AND (SELECT count(*) FROM ${COPIES} AS c WHERE ${copy}) = (SELECT count(*) FROM ${OUTPUT_ASSETS} AS a WHERE ${spent})`;
 }
 
-/** Deletes the copies of the inputs of a window that have a reference. */
+// Deletes the copies of the inputs of a window that have a reference. The inputs carry the window
+// bounds too: without them the database may read every input to find those with a reference.
 export function deleteCopiesStatement(kind: string): string | null {
   if (!supported(kind)) return null;
   const [lo, hi] = bounds(kind);
   return `DELETE FROM ${COPIES} WHERE input_txSeq >= ${lo} AND input_txSeq < ${hi} AND EXISTS (` +
     `SELECT 1 FROM ${INPUTS} AS i WHERE i.txSeq = ${COPIES}.input_txSeq AND i.inputIndex = ${COPIES}.input_inputIndex ` +
-    `AND i.spentTxSeq IS NOT NULL)`;
+    `AND i.spentTxSeq IS NOT NULL AND i.txSeq >= ${lo} AND i.txSeq < ${hi})`;
 }
 
 /** Counts the inputs of a window that have no reference. */
@@ -107,8 +110,6 @@ async function assertOneSource(tx: CapTransaction, check: string, window: [numbe
   if (both > 0) throw new Error(`${both} inputs between txSeq ${window[0]} and ${window[1]} would have copies and a reference; the window is left unchanged`);
 }
 
-const dbKind = (): string => (cds.db as { kind?: string } | undefined)?.kind ?? '';
-
 /** Rows a plain statement changed; the drivers answer with their own result object. */
 function changed(result: unknown): number {
   const r = result as { changes?: number; rowCount?: number } | number | undefined;
@@ -116,44 +117,31 @@ function changed(result: unknown): number {
 }
 
 function statementFor(build: (kind: string) => string | null): string {
-  const sql = build(dbKind());
-  if (!sql) throw new Error(`Input asset copies are pruned and restored on PostgreSQL and SQLite only (database kind: ${dbKind() || 'none'})`);
+  const sql = build(connectedDbKind());
+  if (!sql) throw new Error(`Input asset copies are pruned and restored on PostgreSQL and SQLite only (database kind: ${connectedDbKind() || 'none'})`);
   return sql;
 }
 
-/** The asked slots cut to the slots that hold a stored input. Null when there is nothing to walk. */
-async function slotRange(opts: { fromSlot: number; toSlot: number }): Promise<{ from: number; to: number } | null> {
-  const stored = (await cds.tx((tx: CapTransaction) => tx.run(
-    SELECT.one.from(TransactionInputs).columns('min(txSeq) as lo', 'max(txSeq) as hi')
-  ))) as { lo?: number | string | null; hi?: number | string | null } | undefined;
-  if (stored?.lo == null || stored.hi == null) return null;
-  const from = Math.max(opts.fromSlot, Math.floor(Number(stored.lo) / TX_SEQ_SLOT_FACTOR));
-  const to = Math.min(opts.toSlot, Math.floor(Number(stored.hi) / TX_SEQ_SLOT_FACTOR));
-  return from <= to ? { from, to } : null;
-}
-
-/** Calls `step` with the txSeq bounds of each slot window, each in a transaction of its own. */
+/** Walks the windows of the asked slots that hold stored inputs. Null when there is none. */
 async function walk<P extends { atSlot: number; toSlot: number }>(
-  opts: SlotWalkOptions<P>,
+  opts: CopyWalkOptions<P>,
   progress: P,
   step: (tx: CapTransaction, window: [number, number]) => Promise<void>
-): Promise<{ from: number; to: number } | null> {
-  const slotWindow = opts.slotWindow ?? 20_000;
-  const range = await slotRange(opts);
+): Promise<SlotRange | null> {
+  const range = await slotRangeOf(TransactionInputs, opts);
   if (!range) return null;
   progress.toSlot = range.to;
-  for (let slot = range.from; slot <= range.to; slot += slotWindow) {
-    const window: [number, number] = [slot * TX_SEQ_SLOT_FACTOR, Math.min(slot + slotWindow, range.to + 1) * TX_SEQ_SLOT_FACTOR];
-    await cds.tx((tx: CapTransaction) => step(tx, window));
-    progress.atSlot = Math.min(slot + slotWindow - 1, range.to);
-    opts.onProgress?.({ ...progress });
-  }
+  await walkSlotWindows(range, {
+    slotWindow: opts.slotWindow,
+    shouldStop: opts.shouldStop,
+    afterWindow: (atSlot) => { progress.atSlot = atSlot; opts.onProgress?.({ ...progress }); },
+  }, step);
   return range;
 }
 
 // Moves the inputs of the slot range from copies to the reference. Per window, in one transaction:
 // set the reference where the output's assets equal the copy, then delete the copies of those inputs.
-export async function pruneInputAssetCopies(opts: SlotWalkOptions<InputCopyPruneProgress>): Promise<InputCopyPruneProgress> {
+export async function pruneInputAssetCopies(opts: CopyWalkOptions<InputCopyPruneProgress>): Promise<InputCopyPruneProgress> {
   const reference = statementFor(referenceStatement);
   const remove = statementFor(deleteCopiesStatement);
   const count = statementFor(keptStatement);
@@ -174,7 +162,7 @@ export async function pruneInputAssetCopies(opts: SlotWalkOptions<InputCopyPrune
 
 // Moves the inputs of the slot range back to copies. Per window, in one transaction: write the
 // copies from the outputs, then take the reference from those inputs.
-export async function restoreInputAssetCopies(opts: SlotWalkOptions<InputCopyRestoreProgress>): Promise<InputCopyRestoreProgress> {
+export async function restoreInputAssetCopies(opts: CopyWalkOptions<InputCopyRestoreProgress>): Promise<InputCopyRestoreProgress> {
   const write = statementFor(restoreCopiesStatement);
   const release = statementFor(dropReferenceStatement);
   const check = statementFor(bothStatement);

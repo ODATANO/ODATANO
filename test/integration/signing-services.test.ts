@@ -11,7 +11,7 @@ const { TransactionAlreadySubmittedError } =
   require('../../srv/utils/errors') as typeof import('../../srv/utils/errors');
 const { setHsmSigner } =
   require('../../srv/blockchain/signing/hsm-signer') as typeof import('../../srv/blockchain/signing/hsm-signer');
-import { TEST_FIXTURES } from './test-fixtures';
+import { TEST_FIXTURES, TEST_SIGNER } from './test-fixtures';
 import { resetKoiosMocks, setupNocks, setupKoiosMocks, setupTxResponseMock, teardownKoiosMocks } from './mock-helpers';
 
 const { INSERT, UPDATE } = cds.ql;
@@ -50,8 +50,8 @@ describe('Signing Services Integration Tests', () => {
         id: testBuildId,
         network: TEST_FIXTURES.network,
         // Fee-payer key binding: the senderAddress' payment credential must match a witness;
-        // addressWithFunds' cred is the key signedTxCbor1/witnessSetCbor sign with.
-        senderAddress: TEST_FIXTURES.addressWithFunds,
+        // signerAddress is the key signedTxCbor1/witnessSetCbor sign with.
+        senderAddress: TEST_FIXTURES.signerAddress,
         unsignedTxCbor: TEST_FIXTURES.unsignedTxCbor,
         txBodyHash: TEST_FIXTURES.txBodyHash,
         status: 'built',
@@ -410,7 +410,7 @@ describe('Signing Services Integration Tests', () => {
       });
       const signingRequestId = createData.id;
 
-      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.addressWithFunds}'`);
+      const { status, data } = await test.get(`/odata/v4/cardano-sign/AddressSigningRequests?$filter=address_address eq '${TEST_FIXTURES.signerAddress}'`);
 
       expect(status).to.equal(200);
       expect(data.value).to.be.an('array');
@@ -645,14 +645,14 @@ describe('Signing Services Integration Tests', () => {
 
       const badSigner = {
         isConnected: () => true,
-        getAddress: () => TEST_FIXTURES.addressWithFunds,
+        getAddress: () => TEST_FIXTURES.signerAddress,
         getPublicKeyHash: () => Buffer.alloc(28, 0xcc).toString('hex'),
         getStatus: () => ({
           connected: true,
           keyId: '0x0001',
           keyLabel: 'test-key',
           publicKeyHash: Buffer.alloc(28, 0xcc).toString('hex'),
-          address: TEST_FIXTURES.addressWithFunds,
+          address: TEST_FIXTURES.signerAddress,
         }),
         sign: () => ({
           signatureHex: Buffer.alloc(64, 0xbb).toString('hex'),
@@ -705,7 +705,7 @@ describe('Signing Services Integration Tests', () => {
       expect(data.keyId).to.equal('0x0001');
       expect(data.keyLabel).to.equal('test-key');
       expect(data.publicKeyHash).to.exist;
-      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.addressWithFunds);
+      expect(data.cardanoAddress).to.equal(TEST_FIXTURES.signerAddress);
     });
 
     it('should return disconnected status when HSM is not configured', async () => {
@@ -744,7 +744,9 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       }).catch((err: any) => err.response);
 
-      expect(response.status).to.equal(400);
+      // the request is valid; the server lacks the signer
+      expect(response.status).to.equal(503);
+      expect(response.data.error.code).to.equal('ODATANO_HSM_NOT_CONFIGURED');
       expect(response.data.error.message).to.include('HSM');
     });
 
@@ -755,7 +757,8 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       }).catch((err: any) => err.response);
 
-      expect(response.status).to.equal(400);
+      expect(response.status).to.equal(503);
+      expect(response.data.error.code).to.equal('ODATANO_HSM_NOT_CONFIGURED');
       expect(response.data.error.message).to.include('not configured or not connected');
     });
 
@@ -818,7 +821,9 @@ describe('Signing Services Integration Tests', () => {
         buildId: testBuildId,
       }).catch((err: any) => err.response);
 
-      expect(response.status).to.equal(400);
+      // the request is valid; the server lacks the signer
+      expect(response.status).to.equal(503);
+      expect(response.data.error.code).to.equal('ODATANO_HSM_NOT_CONFIGURED');
       expect(response.data.error.message).to.include('HSM');
     });
 
@@ -909,30 +914,24 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
 
   const { Cbor, CborArray, CborBytes, CborMap, CborUInt } = require('@harmoniclabs/cbor');
   const { fromHex, toHex } = require('@harmoniclabs/uint8array-utils');
-  const { deriveEd25519PublicKey_sync, getEd25519Signature_sync, blake2b_224 } = require('@harmoniclabs/crypto');
-  const { randomBytes } = require('crypto');
-
-  // Generate a real Ed25519 keypair so signatures pass verification
-  const privateKey = Uint8Array.from(randomBytes(32));
-  const realPublicKeyBytes = deriveEd25519PublicKey_sync(privateKey);
-  const realKeyHash = toHex(blake2b_224(realPublicKeyBytes));
+  // The HSM holds the test signer key; its address is the fee payer of the test build.
+  const realPublicKeyBytes = fromHex(TEST_SIGNER.vkey);
+  const realKeyHash = TEST_SIGNER.keyHash;
 
   return {
     isConnected: () => connected,
-    // The HSM flow only gates on senderAddress === getAddress() and then checks the
-    // signature's crypto validity, so a random real keypair passes.
-    getAddress: () => TEST_FIXTURES.addressWithFunds,
+    getAddress: () => TEST_SIGNER.address,
     getPublicKeyHash: () => realKeyHash,
     getStatus: () => ({
       connected,
       keyId: '0x0001',
       keyLabel: 'test-key',
       publicKeyHash: connected ? realKeyHash : undefined,
-      address: connected ? TEST_FIXTURES.addressWithFunds : undefined,
+      address: connected ? TEST_SIGNER.address : undefined,
     }),
     sign: (txBodyHash: Buffer) => {
       if (signError) throw signError;
-      const sigBytes = getEd25519Signature_sync(Uint8Array.from(txBodyHash), privateKey);
+      const sigBytes = TEST_SIGNER.sign(Uint8Array.from(txBodyHash));
       return {
         signatureHex: toHex(sigBytes),
         publicKeyHex: toHex(realPublicKeyBytes),
@@ -943,7 +942,7 @@ function createMockHsmSigner(options?: { connected?: boolean; signError?: Error 
       if (signError) throw signError;
 
       // Sign the tx body hash with the real private key
-      const sigBytes = getEd25519Signature_sync(fromHex(txBodyHash), privateKey);
+      const sigBytes = TEST_SIGNER.sign(fromHex(txBodyHash));
 
       const txObj = Cbor.parse(fromHex(unsignedTxCbor));
       const vkeyWitness = new CborArray([

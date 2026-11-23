@@ -41,16 +41,6 @@ function readVkeyWitnesses(txBytes: Uint8Array): { witnesses: VkeyWitness[]; mal
   return { witnesses, malformed };
 }
 
-/** Well-formed vkey witnesses; [] when the tx has none. Malformed entries are skipped with a warning. */
-function extractVkeyWitnesses(txBytes: Uint8Array): VkeyWitness[] {
-  const { witnesses, malformed } = readVkeyWitnesses(txBytes);
-  if (malformed > 0) {
-    // Not fatal, but a malformed witness in a signed tx is suspicious.
-    logger.warn(`Skipped ${malformed} malformed vkey witness entr${malformed === 1 ? 'y' : 'ies'} while verifying (expected [vkey, signature] byte pairs)`);
-  }
-  return witnesses;
-}
-
 /** Ed25519 check of one witness over the body hash; false for a key or signature of the wrong length. */
 function signatureValid(w: VkeyWitness, bodyHashBytes: Uint8Array): boolean {
   try {
@@ -112,9 +102,15 @@ export class SignatureVerifier {
         logger.debug('Transaction body hash verified successfully');
       }
 
-      // Extract vkey witnesses (raw pubkey + signature bytes)
-      const vkeyWitnesses = extractVkeyWitnesses(txBytes);
+      // Extract vkey witnesses (raw pubkey + signature bytes). The node refuses a transaction with a
+      // malformed entry, so it never verifies here either.
+      const { witnesses: vkeyWitnesses, malformed } = readVkeyWitnesses(txBytes);
       result.witnessCount = vkeyWitnesses.length;
+      if (malformed > 0) {
+        result.errorMessage = `${malformed} vkey witness entr${malformed === 1 ? 'y is' : 'ies are'} not a [vkey, signature] byte pair`;
+        logger.warn(result.errorMessage);
+        return result;
+      }
 
       if (vkeyWitnesses.length > 0) {
         // signer key hash = blake2b-224 of the Ed25519 public key
@@ -206,7 +202,7 @@ export class SignatureVerifier {
   /** True when the tx carries at least one vkey witness. */
   public isSigned(txCbor: string): boolean {
     try {
-      return extractVkeyWitnesses(fromHex(txCbor)).length > 0;
+      return readVkeyWitnesses(fromHex(txCbor)).witnesses.length > 0;
     } catch {
       return false;
     }
@@ -215,7 +211,7 @@ export class SignatureVerifier {
   /** Number of vkey witnesses in the tx (0 on invalid CBOR). */
   public getWitnessCount(txCbor: string): number {
     try {
-      return extractVkeyWitnesses(fromHex(txCbor)).length;
+      return readVkeyWitnesses(fromHex(txCbor)).witnesses.length;
     } catch {
       return 0;
     }

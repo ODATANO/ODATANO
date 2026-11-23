@@ -1,6 +1,6 @@
 /**
- * isTransactionOnChain: the local index answers first, then the backends. Not found on every
- * backend is absence, a failed lookup proves nothing, and no capable backend is its own answer.
+ * findOnChain: the crawled chain answers first, then the backends. Not found on every backend is
+ * absence, a failed lookup proves nothing, and no capable backend is its own answer.
  */
 export {};
 
@@ -10,38 +10,38 @@ vi.mock('@sap/cds', () => {
 });
 vi.mock('../../srv/utils/tx-utils', () => ({ runWithoutAmbientTx: (fn: () => unknown) => fn() }));
 
-import { isTransactionOnChain } from '../../srv/blockchain/transaction-presence';
+import { findOnChain } from '../../srv/blockchain/transaction-presence';
 import { AllBackendsFailedError, NotFoundError, ProviderUnavailableError } from '../../srv/utils/errors';
 
 function makeDeps() {
   return {
-    indexer: { findIndexedTransaction: vi.fn(async (): Promise<unknown> => null) },
+    indexer: { findCrawledTransaction: vi.fn(async (): Promise<unknown> => null) },
     client: { getTransaction: vi.fn(), supports: vi.fn(() => true) },
   };
 }
-const lookup = (deps: ReturnType<typeof makeDeps>) => isTransactionOnChain(deps.indexer as never, deps.client as never, 'h');
+const lookup = (deps: ReturnType<typeof makeDeps>) => findOnChain(deps.indexer as never, deps.client as never, 'h');
 
-describe('isTransactionOnChain', () => {
-  it('is true from the local index without asking a backend', async () => {
+describe('findOnChain', () => {
+  it('answers from the crawled chain without asking a backend', async () => {
     const deps = makeDeps();
-    deps.indexer.findIndexedTransaction.mockResolvedValue({ slot: 1, blockHeight: 1, blockHash: 'b' });
+    deps.indexer.findCrawledTransaction.mockResolvedValue({ slot: 1, blockHeight: 7, blockHash: 'b', tipHeight: 9, spendsCollaterals: false });
 
-    await expect(lookup(deps)).resolves.toBe(true);
+    await expect(lookup(deps)).resolves.toEqual({ slot: 1, height: 7, scriptFailed: false });
     expect(deps.client.getTransaction).not.toHaveBeenCalled();
   });
 
-  it('is true when a backend returns the transaction', async () => {
+  it('answers from a backend, with a failed script phase as the backend reports it', async () => {
     const deps = makeDeps();
-    deps.client.getTransaction.mockResolvedValue({ hash: 'h' });
+    deps.client.getTransaction.mockResolvedValue({ hash: 'h', slot: 5, blockHeight: 3, spendsCollaterals: true });
 
-    await expect(lookup(deps)).resolves.toBe(true);
+    await expect(lookup(deps)).resolves.toEqual({ slot: 5, height: 3, scriptFailed: true, validityKnown: true });
   });
 
-  it('is false when every backend answers not found', async () => {
+  it('is null when every backend answers not found', async () => {
     const deps = makeDeps();
     deps.client.getTransaction.mockRejectedValue(new AllBackendsFailedError([new NotFoundError('Transaction', 'koios')]));
 
-    await expect(lookup(deps)).resolves.toBe(false);
+    await expect(lookup(deps)).resolves.toBeNull();
   });
 
   it('throws when the lookup fails, also when only one backend failed', async () => {
@@ -52,11 +52,11 @@ describe('isTransactionOnChain', () => {
     await expect(lookup(deps)).rejects.toBe(mixed);
   });
 
-  it('is null when no backend can look transactions up', async () => {
+  it('is undefined when no backend can look transactions up', async () => {
     const deps = makeDeps();
     deps.client.supports.mockReturnValue(false);
 
-    await expect(lookup(deps)).resolves.toBeNull();
+    await expect(lookup(deps)).resolves.toBeUndefined();
     expect(deps.client.supports).toHaveBeenCalledWith('getTransaction');
     expect(deps.client.getTransaction).not.toHaveBeenCalled();
   });

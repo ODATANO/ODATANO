@@ -879,16 +879,20 @@ describe('BuildooorTxBuilder', () => {
       expect(buildInputRefScript(makeUtxo(hashOnly))).toBeUndefined();
     });
 
-    it('parses full-bytes scriptRef into a Script — Koios case', () => {
-      const script = buildInputRefScript(makeUtxo(VALID_PLUTUS_SCRIPT));
+    it('parses the script bytes of scriptRefCbor into a Script', () => {
+      const script = buildInputRefScript({ ...makeUtxo('ab'.repeat(28)), scriptRefCbor: VALID_PLUTUS_SCRIPT });
       expect(script).toBeDefined();
       expect(script.hash.toString()).toHaveLength(56);
     });
 
-    it('returns undefined (no throw) on malformed scriptRef', () => {
-      const malformed = 'zz' + VALID_PLUTUS_SCRIPT.slice(2);
-      expect(() => buildInputRefScript(makeUtxo(malformed))).not.toThrow();
-      expect(buildInputRefScript(makeUtxo(malformed))).toBeUndefined();
+    it('never reads script bytes from scriptRef, which holds the hash', () => {
+      expect(buildInputRefScript(makeUtxo(VALID_PLUTUS_SCRIPT))).toBeUndefined();
+    });
+
+    it('returns undefined (no throw) on malformed scriptRefCbor', () => {
+      const malformed = { ...makeUtxo('ab'.repeat(28)), scriptRefCbor: 'zz' + VALID_PLUTUS_SCRIPT.slice(2) };
+      expect(() => buildInputRefScript(malformed)).not.toThrow();
+      expect(buildInputRefScript(malformed)).toBeUndefined();
     });
   });
 
@@ -963,9 +967,14 @@ describe('BuildooorTxBuilder', () => {
       }
     });
 
-    it('returns empty object in passthrough mode when no bounds are provided', () => {
-      const result = resolve({}, 'passthrough');
-      expect(result).toEqual({});
+    it('gives a plain transfer an expiry one hour ahead and no start when no bounds are provided', () => {
+      const frozen = 1700000000000;
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(frozen);
+      try {
+        expect(resolve({}, 'passthrough')).toEqual({ invalidAfter: BigInt(fakePosixToSlot(frozen + 3_600_000)) });
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('applies bounds in passthrough mode only when explicitly set', () => {
@@ -974,13 +983,24 @@ describe('BuildooorTxBuilder', () => {
       expect(invalidAfter).toBeDefined();
     });
 
-    // Passthrough must not default the unspecified bound: `validityStartMs` alone would
-    // otherwise yield invalidBefore > invalidAfter and the ledger rejects on submit.
-    it('emits only invalidBefore when passthrough supplies just validityStartMs', () => {
-      const startMs = 1700000000000;
-      const result = resolve({ validityStartMs: String(startMs) }, 'passthrough');
-      expect(result.invalidBefore).toBe(BigInt(fakePosixToSlot(startMs)));
-      expect(result.invalidAfter).toBeUndefined();
+    it('refuses an expiry more than 24 hours from now, also one a far start pushes there', () => {
+      const now = Date.now();
+      expect(() => resolve({ validityEndMs: String(now + 25 * 3_600_000) }, 'passthrough')).toThrow(/more than 24 hours/);
+      expect(() => resolve({ validityStartMs: String(now + 24 * 3_600_000) }, 'script')).toThrow(/more than 24 hours/);
+    });
+
+    // A start in the future moves the default expiry with it; the range must never invert.
+    it.each(['passthrough', 'script'] as const)('puts the default expiry one hour after a future start (%s)', (mode) => {
+      const frozen = 1700000000000;
+      const startMs = frozen + 5 * 3_600_000;
+      const spy = vi.spyOn(Date, 'now').mockReturnValue(frozen);
+      try {
+        const result = resolve({ validityStartMs: String(startMs) }, mode);
+        expect(result.invalidBefore).toBe(BigInt(fakePosixToSlot(startMs)));
+        expect(result.invalidAfter).toBe(BigInt(fakePosixToSlot(startMs + 3_600_000)));
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it('emits only invalidAfter when passthrough supplies just validityEndMs', () => {
