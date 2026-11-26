@@ -45,6 +45,12 @@ export const ERROR_CODES = {
   /** 503: a submit failed without a verdict; the transaction may still reach the chain. */
   SUBMIT_OUTCOME_UNKNOWN: 'ODATANO_SUBMIT_OUTCOME_UNKNOWN',
 
+  /** 503: an API read ran longer than the read timeout and was cancelled. */
+  QUERY_TIMEOUT: 'ODATANO_QUERY_TIMEOUT',
+
+  /** 400: a read the indexes cannot answer without scanning a large table. */
+  QUERY_NOT_INDEXED: 'ODATANO_QUERY_NOT_INDEXED',
+
   /** 500: unexpected internal error. */
   INTERNAL_ERROR: 'ODATANO_INTERNAL_ERROR',
 

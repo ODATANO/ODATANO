@@ -49,7 +49,7 @@ let handlers: Record<string, Handler> = {};
 beforeAll(async () => {
   const mod: any = await import('../../srv/cardano-backend-service');
   const register = mod.default ?? mod;
-  register({ on: (event: string, h: Handler) => { handlers[event] = h; }, after: () => undefined });
+  register({ on: (event: string, h: Handler) => { handlers[event] = h; }, after: () => undefined, before: () => undefined, prepend: (fn: () => void) => fn() });
 });
 beforeEach(() => {
   vi.clearAllMocks();

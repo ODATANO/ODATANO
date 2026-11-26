@@ -90,11 +90,11 @@ function fakeClient(script: Array<[ReturnType<typeof block>, any[]]>, afterScrip
 beforeEach(() => { dbRun.mockReset(); });
 
 describe('intersectionBefore', () => {
-  it('reads the newest block in the order a plain index on slot serves', async () => {
+  it('reads the newest block in the order the slot index serves read backwards', async () => {
     fakeIndex({ a: 300 });
     await intersectionBefore(fakeDb as never, 500);
     const q = dbRun.mock.calls.map(([c]) => c as any).find((c) => c._op === 'SELECT.one' && c.entity === 'odatano.cardano.Blocks');
-    expect(q?.SELECT.orderBy).toEqual([{ ref: ['slot'], sort: 'desc', nulls: 'first' }]);
+    expect(q?.SELECT.orderBy).toEqual([{ ref: ['slot'], sort: 'desc', nulls: 'last' }]);
   });
 
   it('takes the newest indexed block below the slot, else the crawl start point', async () => {

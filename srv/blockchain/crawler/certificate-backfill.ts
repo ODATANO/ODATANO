@@ -62,8 +62,8 @@ export async function intersectionBefore(db: CapTransaction, slot: number): Prom
   let row: Row | null = null;
   if (floor == null || slot - 1 >= floor) {
     const q = SELECT.one.from(Block).columns('hash', 'slot', 'height').where({ slot: range });
-    // nulls first is the order a plain index on slot is read backwards in; the range excludes null
-    q.SELECT.orderBy = [{ ref: ['slot'], sort: 'desc', nulls: 'first' }];
+    // nulls last is the order the slot index (NULLS FIRST) is read backwards in; the range excludes null
+    q.SELECT.orderBy = [{ ref: ['slot'], sort: 'desc', nulls: 'last' }];
     row = (await db.run(q)) as Row | null;
   }
   if (row?.hash && row.slot != null) return { slot: Number(row.slot), hash: row.hash, height: row.height == null ? undefined : Number(row.height) };

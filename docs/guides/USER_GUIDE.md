@@ -334,9 +334,33 @@ request give one 400 with both in `details`.
 - `GetAssetHistory` and `GetLatestTransactionsByAddress` read the newest 100 entries of a provider. Older
   entries are in the entity sets `AssetHistory` and `AddressTransactions`.
 - Entity sets page with `$top` and `$skip`, at most 1000 rows per page.
+- The large entity sets answer only reads an index serves; see "Reads on the large entity sets" below.
 - Heights, slots, epochs and output indexes must be 0 or more.
 - An enum parameter refuses any other value with a 400: `network` (`mainnet`, `preview`, `preprod`), `kind`
   of a wallet job, `source` of `importUtxoSet`.
+
+### Reads on the large entity sets
+
+`Blocks`, `Transactions`, `TransactionInputs`, `TransactionOutputs`, `TransactionInputAssets`,
+`TransactionOutputAssets`, `TransactionMetadata`, `TransactionCertificates`, `TransactionWithdrawals`,
+`TransactionRedeemers`, `TransactionDatums`, `AssetHistory`, `Assets`, `LedgerUTxOs`, `LedgerUTxOAssets`,
+`LedgerAddresses` and `LedgerAddressAssets` grow with the chain. A read on them that no index serves is
+refused with 400 `ODATANO_QUERY_NOT_INDEXED`. The message names the fields a filter can start with.
+
+- `$filter` uses fields that start an index or the key, for example `hash`, `height`, `slot`, `time` and
+  `epochNumber` on `Blocks`. The second field of an index counts once the filter fixes the first with `eq`:
+  `utxo_paymentCredential eq '…' and txSeq ge …` on `TransactionOutputs`.
+- `$orderby` follows an `eq` filter, or runs in index order without one: `$orderby=height desc` on
+  `Blocks`.
+- `$count` needs a `$filter`.
+- `$search`, `$apply` and functions such as `contains` are refused.
+- Reads by key, navigations such as `Transactions('…')/outputs` and `$expand` are not checked.
+- `TransactionMetadata` is filtered by `id`, the label as a number. `TransactionOutputAssets` is filtered by
+  `output_txSeq`. The holders of an asset are in `LedgerUTxOAssets` and `LedgerAddressAssets`, its mints
+  and burns in `AssetHistory`.
+
+On PostgreSQL a read that runs longer than the read timeout (default 15 s) is cancelled with 503
+`ODATANO_QUERY_TIMEOUT`.
 
 ---
 
@@ -392,7 +416,7 @@ curl -X POST http://localhost:4004/odata/v4/cardano/GetAddressByBech32 \
 GET /Blocks?$orderby=height desc&$top=1
 
 # Filter
-GET /Transactions?$filter=slot gt 12345678&$top=10
+GET /Transactions?$filter=blockHeight gt 2000000&$top=10
 
 # Select fields
 GET /Addresses?$select=address,totalLovelace
@@ -418,6 +442,7 @@ message starts with the code in brackets.
 | Status | `error.code` | Meaning | What to do |
 |---|---|---|---|
 | 400 | `ODATANO_INVALID_INPUT` | A parameter is missing, malformed or out of range | Fix the request |
+| 400 | `ODATANO_QUERY_NOT_INDEXED` | A read on a large entity set that no index serves | Filter on an indexed field |
 | 400 | `ODATANO_TX_VALIDATION_FAILED`, `ODATANO_TX_PARSE_FAILED`, `ODATANO_INSUFFICIENT_FUNDS`, `ODATANO_SCRIPT_VALIDATION_FAILURE` | A transaction cannot be built, decoded or accepted | See the [Transaction Workflow Guide](TRANSACTION_WORKFLOW.md) |
 | 401 | | No login | Send credentials |
 | 403 | `ODATANO_FORBIDDEN` for a wallet or HSM role | The login lacks a role | Use a login with the role |
@@ -427,6 +452,7 @@ message starts with the code in brackets.
 | 500 | `ODATANO_INTERNAL_ERROR` | Unexpected error | Report it |
 | 503 | `ODATANO_PROVIDER_UNAVAILABLE` | No backend answered in time | Retry |
 | 503 | `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | A submit got no verdict from the node | Do not build again; read the record |
+| 503 | `ODATANO_QUERY_TIMEOUT` | A read ran longer than the read timeout | Narrow the filter |
 
 [Error Handling](../concepts%20&%20architecture/ERROR_HANDLING.md) lists every code.
 

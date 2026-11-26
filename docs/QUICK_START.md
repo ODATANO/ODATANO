@@ -55,6 +55,7 @@ Options of `odatano-core`:
 | `fallbackTimeoutMs` | `60000` | Timeout for fallback backends |
 | `indexTtlMs` | `3600000` | Cache TTL (1 hour) |
 | `poolMetadataFetch` | `false` | Load pool names and tickers from the URL a pool registered. Needed with Ogmios alone |
+| `readTimeoutMs` | `15000` | PostgreSQL: statement timeout of API reads in milliseconds, `0` = off |
 
 The sections `crawler`, `walletWorker`, `hsm` and `agentGrants` are off by default. The
 [Crawler Guide](guides/CRAWLER_GUIDE.md), the [User Guide](guides/USER_GUIDE.md) and the

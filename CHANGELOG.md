@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.53] - read timeout and read guard for API reads
+
+Additive schema change: new indexes only, built at start.
+
+### Added
+
+- Read timeout: on PostgreSQL every statement of an HTTP request to `CardanoODataService` or
+  `CardanoBackendService` runs with `statement_timeout`, default 15000 ms (`readTimeoutMs` /
+  `READ_TIMEOUT_MS`, 0 = off). A cancelled read answers 503 `ODATANO_QUERY_TIMEOUT`. Crawler, backfills
+  and worker run without it.
+- Read guard on the large entity sets (Blocks, Transactions and their inputs, outputs, assets, metadata,
+  certificates, withdrawals, redeemers and datums, AssetHistory, Assets, Ledger UTxO and address sets):
+  `$filter` only on fields that start an index or continue one after fields the filter fixes with `eq`,
+  `$orderby` after an `eq` filter or in index order, `$count` only with a `$filter`; no `$search`,
+  `$apply` or filter functions. Keyed reads, navigations and expands are not checked. A refused read
+  answers 400 `ODATANO_QUERY_NOT_INDEXED` and names the indexed fields. `TransactionMetadata` filters by
+  `id`, not `label`; `TransactionOutputAssets` by `output_txSeq`.
+- Indexes on `PoolEpochSnapshots.epoch` and `DrepEpochSnapshots.epoch` for the snapshot of one epoch.
+
+### Changed
+
+- The slot index on `Blocks` is built `NULLS FIRST` on PostgreSQL (`odatano_cardano_blocks_slot_nf`,
+  replaces `odatano_cardano_blocks_slot`). It serves `$orderby=slot` in both directions as CAP renders it.
+- CI: the release workflow reuses the green Tests run of the tagged commit on `main` instead of running the
+  suite a second time. It runs the suite only when that run is missing, cancelled or skipped.
+
 ## [v2.0.0-rc.52] - validity descriptions of the build actions
 
 No schema change.

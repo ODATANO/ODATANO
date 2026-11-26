@@ -3,6 +3,7 @@ import { stringifyJson } from './utils/deep-json';
 import { handleRequest } from './utils/backend-request-handler';
 import { readOutside } from './utils/tx-utils';
 import { answerNumbersAsText } from './utils/result-numbers';
+import { limitApiReads } from './utils/read-limits';
 import { rejectInvalid, rejectMissing, ProviderUnavailableError, ChainPointMismatchError } from './utils/errors';
 import {
   isTxHash,
@@ -41,6 +42,7 @@ type Db = Parameters<Parameters<typeof handleRequest>[1]>[0];
 // Nothing is written here, so every database read runs outside the request transaction.
 module.exports = (srv: cds.Service) => {
   answerNumbersAsText(srv);
+  limitApiReads(srv);
   const client = () => getCardanoClient();
   const indexer = () => getCardanoIndexer();
 

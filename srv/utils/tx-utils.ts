@@ -2,6 +2,7 @@ import cds from '@sap/cds';
 import { BackendError } from './errors';
 import { detachedTxTimeoutMs } from '../config';
 import { ERROR_CODES } from './error-codes';
+import { isLimited, markLimited } from './read-limits';
 
 // @cap-js/sqlite has a single pooled connection held by the request transaction.
 // A new root transaction awaited by that request would wait forever.
@@ -32,8 +33,14 @@ export function holdsConnection(tx: unknown): boolean {
 // A transaction that already holds its connection does the read itself.
 export function readOutside<T>(tx: cds.Transaction, read: (db: cds.Transaction) => Promise<T>): Promise<T> {
   const idle = typeof (tx as { begin?: unknown }).begin === 'function' && !holdsConnection(tx);
+  if (!idle) return read(tx);
+  // the short transaction keeps the read timeout of an API request
+  const limited = isLimited((tx as { context?: unknown }).context) || isLimited(cds.context);
   // cds.tx resolves to what the callback resolves to; its typing wraps that in a second promise
-  return idle ? runWithoutAmbientTx(async () => await cds.tx(read)) : read(tx);
+  return runWithoutAmbientTx(async () => await cds.tx(async (db: cds.Transaction) => {
+    if (limited) markLimited((db as { context?: unknown }).context);
+    return read(db);
+  }));
 }
 
 /** Thrown inside an orphaned `cds.tx` callback after its caller already timed out. */

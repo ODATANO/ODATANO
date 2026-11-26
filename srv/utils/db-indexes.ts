@@ -23,7 +23,8 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   // CAP renders `$orderby=height desc` as DESC NULLS LAST, which the plain ASC NULLS LAST
   // index cannot serve backwards; the plain one stays for ASC and equality.
   { name: 'odatano_cardano_blocks_height_desc', table: 'odatano_cardano_Blocks', columns: 'height DESC', postgres: 'height DESC NULLS LAST' },
-  { name: 'odatano_cardano_blocks_slot', table: 'odatano_cardano_Blocks', columns: 'slot' },
+  // NULLS FIRST serves both orders CAP renders by default: ASC NULLS FIRST and, read backwards, DESC NULLS LAST
+  { name: 'odatano_cardano_blocks_slot_nf', table: 'odatano_cardano_Blocks', columns: 'slot', postgres: 'slot NULLS FIRST' },
   { name: 'odatano_cardano_blocks_epoch', table: 'odatano_cardano_Blocks', columns: 'epochNumber' },
   // the first block at or after a point in time (`$filter=time ge …&$orderby=time`)
   // CAP sorts a nullable column as ASC NULLS FIRST or DESC NULLS LAST on PostgreSQL; this serves both
@@ -53,6 +54,9 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   // rollback `snapshotSlot >`: the keys start with the epoch
   { name: 'odatano_cardano_poolepochsnapshots_slot', table: 'odatano_cardano_PoolEpochSnapshots', columns: 'snapshotSlot' },
   { name: 'odatano_cardano_drepepochsnapshots_slot', table: 'odatano_cardano_DrepEpochSnapshots', columns: 'snapshotSlot' },
+  // every pool or DRep of one epoch; the keys start with the pool or DRep
+  { name: 'odatano_cardano_poolepochsnapshots_epoch', table: 'odatano_cardano_PoolEpochSnapshots', columns: 'epoch' },
+  { name: 'odatano_cardano_drepepochsnapshots_epoch', table: 'odatano_cardano_DrepEpochSnapshots', columns: 'epoch' },
   { name: 'odatano_cardano_epochledgersnapshots_slot', table: 'odatano_cardano_EpochLedgerSnapshots', columns: 'snapshotSlot' },
   { name: 'odatano_cardano_addresstransactions_tx', table: 'odatano_cardano_AddressTransactions', columns: 'tx_hash' },
   { name: 'odatano_cardano_accounts_stake', table: 'odatano_cardano_Accounts', columns: 'stakeAddress' },
@@ -88,11 +92,12 @@ export const DB_INDEXES: readonly IndexSpec[] = Object.freeze([
   { name: 'odatano_cardano_cardanowalletjobs_next', table: 'odatano_cardano_CardanoWalletJobs', columns: 'walletId, status, priority, createdAt' },
 ]);
 
-/** Indexes a composite entry above replaces; dropped at start. */
+/** Indexes an entry above replaces; dropped at start. */
 export const DROPPED_DB_INDEXES: readonly string[] = Object.freeze([
   'odatano_cardano_transactions_block',
   'odatano_cardano_cardanowalletjobs_due',
   'odatano_cardano_cardanowalletjobs_wallet',
+  'odatano_cardano_blocks_slot',
 ]);
 
 /** The statement for one entry; exported so tests pin the shape. */

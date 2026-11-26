@@ -28,6 +28,7 @@ export interface OdatanoCoreCdsConfig {
   fallbackTimeoutMs?: number;
   indexTtlMs?: number;
   poolMetadataFetch?: CdsBoolean;
+  readTimeoutMs?: CdsNumber;
   hsm?: HsmCdsSection;
   crawler?: CrawlerCdsSection;
   walletWorker?: WalletWorkerCdsSection;
@@ -117,6 +118,22 @@ export function autoInitSkipped(): boolean {
 export function detachedTxTimeoutMs(): number | undefined {
   const fromEnv = Number(env.ODATANO_DETACHED_TX_TIMEOUT_MS);
   return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : undefined;
+}
+
+export const READ_TIMEOUT_MS_DEFAULT = 15_000;
+
+// Statement timeout for API reads on PostgreSQL. 0 turns it off; an invalid value logs a warning
+// and falls back to the default.
+export function loadReadTimeoutMs(vars: Record<string, string | undefined> = env): number {
+  const configured = coreCdsConfig().readTimeoutMs;
+  const raw = configured !== undefined ? configured : vars.READ_TIMEOUT_MS;
+  if (raw === undefined || raw === null || String(raw).trim() === '') return READ_TIMEOUT_MS_DEFAULT;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) {
+    logger.warn(`READ_TIMEOUT_MS "${String(raw)}" is not an integer >= 0; using ${READ_TIMEOUT_MS_DEFAULT}`);
+    return READ_TIMEOUT_MS_DEFAULT;
+  }
+  return n;
 }
 
 const VALID_BACKENDS: BackendName[] = ['blockfrost', 'koios', 'ogmios', 'odatano'];

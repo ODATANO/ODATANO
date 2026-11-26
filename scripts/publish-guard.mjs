@@ -24,7 +24,7 @@ if (!tags.includes(tag)) {
   fail(`HEAD is not tagged ${tag} (tags on HEAD: ${tags.join(', ') || 'none'}). Tag the release commit first`);
 }
 
-// The release run must have passed on this exact commit. It runs the test suite as one of its jobs,
+// The release run must have passed on this exact commit. It requires the test suite green on it,
 // besides the package checks, the image audit and the image smoke.
 const REQUIRED_WORKFLOWS = ['Release'];
 const sha = git('rev-parse HEAD');

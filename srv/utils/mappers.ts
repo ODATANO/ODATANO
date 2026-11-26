@@ -76,6 +76,7 @@ import type {
 
 import type { Request } from '@sap/cds';
 import { BackendError } from './errors';
+import { queryTimeoutError } from './read-limits';
 import { ASSET_UNIT_REGEX, BECH32_MAX_LENGTH } from './const';
 
 /** Key of a transaction's input/output rows: chain position, ascending, below 2^53 for any real slot. */
@@ -790,6 +791,8 @@ export function mapError(req: Request, err: unknown, ctx: string): never {
     if (err instanceof BackendError) {
       return req.reject({ status: err.statusCode, code: err.code, message: fmt(err.code, ctx, err.message), target: err.target });
     }
+    const timeout = queryTimeoutError(err);
+    if (timeout) return req.reject({ status: timeout.statusCode, code: timeout.code, message: fmt(timeout.code, ctx, timeout.message) });
     const internalMsg = err instanceof Error ? err.message : String(err);
     logger.error({ error: internalMsg }, `Unexpected error in ${ctx}`);
     return req.reject(500, fmt('INTERNAL_ERROR', ctx, 'An internal error occurred'));

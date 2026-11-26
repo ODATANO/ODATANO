@@ -63,6 +63,7 @@ An error from a handler carries its code in `error.code`.
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | The transaction failed validation |
 | `ODATANO_TX_PARSE_FAILED` | 400 | The transaction CBOR could not be decoded |
 | `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | The ledger refused the transaction in phase-2 script evaluation |
+| `ODATANO_QUERY_NOT_INDEXED` | 400 | A read on a large entity set that no index serves: `$filter` or `$orderby` on a field without an index, `$count` without a `$filter`. The message names the indexed fields |
 | `ODATANO_HSM_NOT_CONFIGURED` | 503 | `SignWithHsm` or `SignAndSubmitWithHsm` without a configured or connected HSM |
 | `ODATANO_FORBIDDEN` | 403 | Logged in, but without the role. The HSM actions need `hsm.requiresRole`. `SubmitWalletJob` needs the wallet's `requiresRole` and, for an HSM wallet, `hsm.requiresRole`. The message starts with `[ODATANO_FORBIDDEN] <Action>:` |
 | `ODATANO_NOT_FOUND` | 404 | The resource is not on chain |
@@ -75,6 +76,7 @@ An error from a handler carries its code in `error.code`.
 | `ODATANO_PROVIDER_UNAVAILABLE` | 503 | No provider answered |
 | `ODATANO_SUBMIT_OUTCOME_UNKNOWN` | 503 | A submit got no verdict from the node. The record stays open (`submitting` or `pending`) and the server resolves it |
 | `ODATANO_HSM_UNAVAILABLE` | 503 | HSM device or session not available |
+| `ODATANO_QUERY_TIMEOUT` | 503 | An API read on PostgreSQL ran longer than the read timeout (`READ_TIMEOUT_MS`, default 15000) and was cancelled |
 | `ODATANO_NESTED_TX_TIMEOUT` | 503 | A submit action got no database connection within 10 seconds, because the caller's own transaction holds it. See "From your own CAP handler: `deferSubmit`" in the User Guide |
 
 ## Failures That Are Not HTTP Errors

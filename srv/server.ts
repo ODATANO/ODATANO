@@ -9,6 +9,7 @@ import { setActiveNetwork } from './utils/network-context';
 import { installDbSanitizer } from './utils/db-sanitize';
 import { ensureDbIndexes } from './utils/db-indexes';
 import { installPostgresOrderNulls } from './utils/pg-order-nulls';
+import { installReadTimeout } from './utils/read-limits';
 import { installPostgresInlineJson } from './utils/pg-inline-json';
 import { startCrawler, stopCrawler } from './blockchain/crawler';
 import type { CrawlerConfig } from './blockchain/crawler/crawler';
@@ -44,6 +45,7 @@ async function initializeAppContext(
   // then the secondary indexes the model cannot declare.
   installPostgresOrderNulls();
   installPostgresInlineJson();
+  installReadTimeout();
   // PostgreSQL builds its indexes CONCURRENTLY, so the service answers while a large one builds.
   const indexes = ensureDbIndexes().catch((err: unknown) => { logger.warn('secondary indexes not ensured (non-fatal):', err); });
   if ((cds.db as { kind?: string } | undefined)?.kind !== 'postgres') await indexes;

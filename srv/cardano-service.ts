@@ -14,6 +14,8 @@ import {
 import { metadataIdFor, txSeqOf } from './utils/mappers';
 import { runWithoutAmbientTx, readOutside } from './utils/tx-utils';
 import { answerNumbersAsText } from './utils/result-numbers';
+import { limitApiReads } from './utils/read-limits';
+import { guardLargeReads } from './utils/read-guard';
 import { navigationOf, readKey, type NavigationRead } from './utils/navigation';
 import { accountAddressList, parseAccountAddressList, type CardanoIndexer, type FetchedAccount, type FetchedAddress } from './blockchain/cardano-indexer';
 import type { UTxO } from './utils/types';
@@ -271,6 +273,8 @@ function addressChildRead<F>(
 /** CardanoODataService handlers: blockchain read queries with index-on-miss. */
 module.exports = (srv: cds.Service) => {
   answerNumbersAsText(srv);
+  limitApiReads(srv);
+  guardLargeReads(srv);
   logger.debug('Module loaded - registering handlers');
 
   // For plural-shaped names (NetworkInformation, TransactionMetadata, AssetHistory) cds-typer

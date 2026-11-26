@@ -30,16 +30,23 @@ describe('OData Query Features', () => {
         expect(Array.isArray(data.value)).to.be.true;
       });
 
-      it('$filter on Transactions - fee comparison', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=fee gt 100000`);
+      it('$filter on Transactions - indexed blockHeight comparison', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight gt 100000`);
         expect(status).to.equal(200);
         expect(Array.isArray(data.value)).to.be.true;
 
         if (data.value.length > 0) {
           data.value.forEach((tx: any) => {
-            expect(Number(tx.fee)).to.be.greaterThan(100000);
+            expect(Number(tx.blockHeight)).to.be.greaterThan(100000);
           });
         }
+      });
+
+      it('$filter on an unindexed Transactions field is refused with 400', async () => {
+        const r = await test.get(`/odata/v4/cardano/Transactions?$filter=fee gt 100000`).catch((e: any) => e.response);
+        expect(r.status).to.equal(400);
+        expect(r.data.error.code).to.equal('ODATANO_QUERY_NOT_INDEXED');
+        expect(r.data.error.message).to.include('blockheight');
       });
 
       it('$filter on Addresses - totalLovelace range', async () => {
@@ -138,7 +145,7 @@ describe('OData Query Features', () => {
 
     describe('$count operations', () => {
       it('$count=true includes count in response', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$count=true&$top=5`);
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight ge 0&$count=true&$top=5`);
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {
@@ -146,6 +153,12 @@ describe('OData Query Features', () => {
           expect(typeof data['@odata.count']).to.be.oneOf(['number', 'string']);
           expect(Number(data['@odata.count'])).to.be.at.least(0);
         }
+      });
+
+      it('$count=true without a $filter on Transactions is refused with 400', async () => {
+        const r = await test.get(`/odata/v4/cardano/Transactions?$count=true&$top=5`).catch((e: any) => e.response);
+        expect(r.status).to.equal(400);
+        expect(r.data.error.code).to.equal('ODATANO_QUERY_NOT_INDEXED');
       });
 
       it('GET /$count returns count value', async () => {
@@ -160,26 +173,32 @@ describe('OData Query Features', () => {
     // ============================================================================
 
     describe('$orderby operations', () => {
-      it('$orderby on Transactions by fee ascending', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$orderby=fee asc&$top=3`);
+      it('$orderby on Transactions by blockHeight ascending', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$orderby=blockHeight asc&$top=3`);
         expect(status).to.equal(200);
 
         if (data.value.length >= 2) {
           for (let i = 0; i < data.value.length - 1; i++) {
-            expect(Number(data.value[i].fee)).to.be.at.most(Number(data.value[i + 1].fee));
+            expect(Number(data.value[i].blockHeight)).to.be.at.most(Number(data.value[i + 1].blockHeight));
           }
         }
       });
 
-      it('$orderby on Transactions by fee descending', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$orderby=fee desc&$top=3`);
+      it('$orderby on Transactions by blockHeight descending', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$orderby=blockHeight desc&$top=3`);
         expect(status).to.equal(200);
 
         if (data.value.length >= 2) {
           for (let i = 0; i < data.value.length - 1; i++) {
-            expect(Number(data.value[i].fee)).to.be.at.least(Number(data.value[i + 1].fee));
+            expect(Number(data.value[i].blockHeight)).to.be.at.least(Number(data.value[i + 1].blockHeight));
           }
         }
+      });
+
+      it('$orderby on an unindexed Transactions field without an eq filter is refused with 400', async () => {
+        const r = await test.get(`/odata/v4/cardano/Transactions?$orderby=fee desc&$top=3`).catch((e: any) => e.response);
+        expect(r.status).to.equal(400);
+        expect(r.data.error.code).to.equal('ODATANO_QUERY_NOT_INDEXED');
       });
 
       it('$orderby on Addresses by totalLovelace', async () => {
@@ -253,7 +272,7 @@ describe('OData Query Features', () => {
 
     describe('Combined query operations', () => {
       it('$filter + $select + $top combination', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=fee gt 100000&$select=hash,fee&$top=2`);
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight gt 100000&$select=hash,fee,blockHeight&$top=2`);
         expect(status).to.equal(200);
         expect(data.value.length).to.be.at.most(2);
 
@@ -261,7 +280,7 @@ describe('OData Query Features', () => {
           const tx = data.value[0];
           expect(tx).to.have.property('hash');
           expect(tx).to.have.property('fee');
-          expect(Number(tx.fee)).to.be.greaterThan(100000);
+          expect(Number(tx.blockHeight)).to.be.greaterThan(100000);
         }
       });
 
@@ -292,7 +311,7 @@ describe('OData Query Features', () => {
       });
 
       it('$filter + $expand + $count combination', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=fee gt 100000&$expand=outputs&$count=true&$top=2`);
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight gt 100000&$expand=outputs&$count=true&$top=2`);
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {

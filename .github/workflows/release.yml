@@ -6,8 +6,29 @@ on:
       - 'v*'
 
 jobs:
-  # Gate 1: the full test pipeline, the same workflow that guards main.
+  # Gate 1: the test pipeline passed on this commit. A green Tests run from main's push counts;
+  # without one, verify runs the same workflow here.
+  main-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      result: ${{ steps.find.outputs.result }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.x
+      - id: find
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: node scripts/main-tests-result.mjs
+
   verify:
+    needs: main-tests
+    if: needs.main-tests.outputs.result == 'none'
     uses: ./.github/workflows/test.yaml
     secrets: inherit
     permissions:
@@ -41,7 +62,11 @@ jobs:
       - run: node scripts/build/verify-btp-module.mjs
 
   build-and-release:
-    needs: [verify, package-check]
+    needs: [main-tests, verify, package-check]
+    # verify is skipped when main's Tests run passed; always() keeps this job from being skipped with it
+    if: >-
+      always() && needs.package-check.result == 'success' &&
+      (needs.main-tests.outputs.result == 'passed' || needs.verify.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: write

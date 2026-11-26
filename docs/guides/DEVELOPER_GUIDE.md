@@ -288,7 +288,9 @@ temp folder and image, also when it fails.
 | 4 | `scripts/build/verify-btp-module.mjs`: the BTP module built as `mta.yaml` does, installed, every service implementation loaded as JavaScript, and audited |
 | 5 | Where docker runs: the image is built and passes `scripts/smoke-image.mjs` (logins, the one SQLite writer, a restart, development users refused) |
 
-`.github/workflows/release.yml` runs the same gates on a tag and pushes the image it tested.
+`.github/workflows/release.yml` runs the same gates on a tag and pushes the image it tested. For the test suite it
+uses the Tests run that the push to `main` started for the tagged commit and waits for it. It runs the suite itself
+only when that run is missing, cancelled or skipped; a failed run fails the release.
 
 ### Configuration (`srv/config.ts`)
 

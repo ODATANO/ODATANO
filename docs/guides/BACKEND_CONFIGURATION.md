@@ -53,6 +53,9 @@ OGMIOS_URL=ws://localhost:1337
 # Timeouts in milliseconds (defaults shown)
 PRIMARY_TIMEOUT_MS=30000
 FALLBACK_TIMEOUT_MS=60000
+
+# PostgreSQL: statement timeout of API reads, 0 = off (crawler, backfills and worker have none)
+READ_TIMEOUT_MS=15000
 ```
 
 A CAP project sets the same values as keys of `cds.requires.odatano-core`. The
