@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.52] - validity descriptions of the build actions
+
+No schema change.
+
+### Fixed
+
+- The `validityStartMs` and `validityEndMs` descriptions of `BuildSimpleAdaTransaction` and
+  `BuildMultiAssetTransaction` state the expiry: one hour ahead by default, at most 24 hours ahead.
+  They no longer say the bounds stay unset.
+- `validityEndMs` on `BuildMintTransaction`, `BuildPlutusSpendTransaction` and `BuildPlutusTransaction`
+  names the 24-hour maximum and the later default when `validityStartMs` lies in the future.
+- `BuildTransactionWithMetadata` states that the transaction expires one hour after the build.
+
 ## [v2.0.0-rc.51] - hardening: submit outcomes with proof, safe rollbacks, upgrade path, shipped artifacts
 
 Schema: additive columns `Blocks.previousHash`, `Blocks.withdrawalsReported`, `Epochs.final`,

@@ -474,7 +474,7 @@ export type TxBuildRequest = {
   referenceScript?: string;
   /** Validity start in Posix ms (`invalidBefore`); builder default `now - 120_000` for script builds. */
   validityStartMs?: string;
-  /** Validity end in Posix ms (`invalidAfter`, ledger TTL); builder default `now + 3_600_000` for script builds. */
+  /** Validity end in Posix ms (`invalidAfter`, ledger TTL); builder default `now + 3_600_000`, at most 24 h ahead. */
   validityEndMs?: string;
 };
 

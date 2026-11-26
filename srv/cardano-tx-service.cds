@@ -132,14 +132,14 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                      @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA; lovelaceAmount must cover the inflated requirement.'
                                      referenceScriptHex: String,
                                      @title: 'Validity Start (Posix ms)'
-                                     @description: 'Optional. Validity-interval start in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                     @description: 'Optional. Validity-interval start in Posix milliseconds. No start is set when omitted.'
                                      validityStartMs: String,
                                      @title: 'Validity End (Posix ms)'
-                                     @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                     @description: 'Optional. Validity-interval end in Posix milliseconds. Defaults to now + 3 600 000 ms, or to validityStartMs + 3 600 000 ms when that start lies in the future. At most 24 hours ahead, else 400.'
                                      validityEndMs: String)   returns TransactionBuilds;
 
     @title      : 'Build Transaction with Metadata'
-    @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address'
+    @description: 'Build a transaction with custom metadata from sender to recipient with specified amount and change address. The transaction expires one hour after the build.'
     @odatano.agent: 'grant'
     action BuildTransactionWithMetadata(
                                         @title: 'Sender Address'
@@ -190,10 +190,10 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                       @description: 'Optional Plutus V3 validator CBOR hex to attach as referenceScript on the primary recipient output (CIP-33 reference script deploy). Significantly increases the output min-ADA; lovelaceAmount must cover the inflated requirement.'
                                       referenceScriptHex: String,
                                       @title: 'Validity Start (Posix ms)'
-                                      @description: 'Optional. Validity-interval start in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                      @description: 'Optional. Validity-interval start in Posix milliseconds. No start is set when omitted.'
                                       validityStartMs: String,
                                       @title: 'Validity End (Posix ms)'
-                                      @description: 'Optional. Validity-interval end in Posix milliseconds. Passed through to the builder only; for non-script transfers the builder leaves bounds unset unless provided.'
+                                      @description: 'Optional. Validity-interval end in Posix milliseconds. Defaults to now + 3 600 000 ms, or to validityStartMs + 3 600 000 ms when that start lies in the future. At most 24 hours ahead, else 400.'
                                       validityEndMs: String)  returns TransactionBuilds;
 
     @title      : 'Build Minting Transaction'
@@ -255,7 +255,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                 @description: 'Optional. Sets the transaction validity-interval start in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(lower) on tx.validity_range.lower_bound. Defaults to now − 120 000 ms when omitted.'
                                 validityStartMs: String,
                                 @title: 'Validity End (Posix ms)'
-                                @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
+                                @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms, or to validityStartMs + 3 600 000 ms when that start lies in the future. At most 24 hours ahead, else 400.'
                                 validityEndMs: String)        returns TransactionBuilds;
 
     @title      : 'Get Build Details'
@@ -360,7 +360,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                        @description: 'Optional. Sets the transaction validity-interval start in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(lower) on tx.validity_range.lower_bound. Defaults to now − 120 000 ms when omitted.'
                                        validityStartMs: String,
                                        @title: 'Validity End (Posix ms)'
-                                       @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms when omitted.'
+                                       @description: 'Optional. Sets the transaction validity-interval end in Posix milliseconds. Required finite value for Plutus validators that call expect Finite(upper) on tx.validity_range.upper_bound. Defaults to now + 3 600 000 ms, or to validityStartMs + 3 600 000 ms when that start lies in the future. At most 24 hours ahead, else 400.'
                                        validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Build Plutus Transaction'
@@ -404,7 +404,7 @@ service CardanoTransactionService @(impl: './cardano-tx-service') {
                                   @description: 'Optional validity-interval start in Posix milliseconds; defaults to now - 120 000 ms.'
                                   validityStartMs: String,
                                   @title: 'Validity End (Posix ms)'
-                                  @description: 'Optional validity-interval end in Posix milliseconds; defaults to now + 3 600 000 ms.'
+                                  @description: 'Optional validity-interval end in Posix milliseconds; defaults to now + 3 600 000 ms, or to validityStartMs + 3 600 000 ms when that start lies in the future. At most 24 hours ahead, else 400.'
                                   validityEndMs: String) returns TransactionBuilds;
 
     @title      : 'Set Collateral'
