@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.56] - registry fields on crawled assets
+
+No schema change.
+
+### Fixed
+
+- `Assets` answered from the crawled chain keep the CIP-26 registry fields (name, ticker, decimals,
+  description, URL, logo) of the newest stored slice that has them. Before, such a read wrote a slice
+  without them, so a refresh lost what the lazy path or `backfillAssetRegistry` had stored.
+
 ## [v2.0.0-rc.55] - stored sums without blocking the start
 
 No schema change.

@@ -47,6 +47,7 @@ vi.mock('@sap/cds', () => {
   const many = (entity: string) => {
     const finish = (q: Record<string, unknown>) => ({
       ...q,
+      SELECT: {} as { orderBy?: unknown },
       orderBy: (orderBy: string) => ({ ...q, orderBy, limit: (limit: number) => ({ ...q, orderBy, limit }) }),
       // a query whose order carries a NULLS placement sets SELECT.orderBy itself
       limit: (limit: number) => ({ ...q, limit, SELECT: {} as { orderBy?: unknown } }),
@@ -686,6 +687,22 @@ describe('crawled chain as the authority (crawler.authoritative)', () => {
     expect(JSON.stringify(asset)).toContain('ipfs://x');
     // no read of every mint and burn row of the unit
     expect(runs.filter(r => r.entity === 'AssetHistory' && r._op === 'SELECT.many')).toHaveLength(0);
+  });
+
+  it('keeps the registry fields of the newest stored slice that has them', async () => {
+    supplySums = { unit: UNIT, totalSupply: '75', mintOrBurnCount: 3 };
+    const empty = { registryName: null, registryTicker: null, registryDecimals: null, registryDescription: null, registryUrl: null, registryLogo: null };
+    answer = (q) => {
+      if (q.entity === 'AssetsTable' && q._op === 'SELECT.many') {
+        expect((q as unknown as { SELECT: { orderBy: unknown } }).SELECT.orderBy).toEqual([{ ref: ['validFrom'], sort: 'desc' }]);
+        return [empty, { ...empty, registryName: 'Token', registryTicker: 'TKN', registryDecimals: 6, registryLogo: 'iVBO' }];
+      }
+      return undefined;
+    };
+    const { indexer } = authoritative();
+    const asset = await indexer.indexAsset(mockTx as never, UNIT) as unknown as Record<string, unknown>;
+    expect(asset).toMatchObject({ registryName: 'Token', registryTicker: 'TKN', registryDecimals: 6, registryLogo: 'iVBO', registryUrl: null });
+    expect(asset.decimals).toBe(6); // no CIP-68 datum: the registry value applies
   });
 
   it('answers 404 for an asset the crawled chain never minted', async () => {

@@ -620,7 +620,7 @@ then answers a lookup the database misses with 404 and does not ask Blockfrost o
 | `Blocks`, `GetBlockByHash` | 404 `not in the crawled chain up to slot …` |
 | `Transactions`, `GetTransactionByHash` | same |
 | `GetMetadataByTxHash` | empty list for a crawled transaction without metadata; 404 for an unknown one |
-| `Assets`, `GetAssetInfo` | supply = mints − burns and the mint count from `AssetSupply`, which the crawler keeps per block (computed once at the first crawler start, in the background before the first block; until then the backend answers), first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty, `decimals` from the CIP-68 reference datum when the chain holds one. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
+| `Assets`, `GetAssetInfo` | supply = mints − burns and the mint count from `AssetSupply`, which the crawler keeps per block (computed once at the first crawler start, in the background before the first block; until then the backend answers), first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields from the stored `Assets` rows (filled by the lazy path or `backfillAssetRegistry`), `decimals` from the CIP-68 reference datum when the chain holds one. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
 | `GetAssetHistory` | the crawled `AssetHistory` rows, newest first |
 
 - The same answers apply without the knob when no configured backend can serve the lookup at all, as on a

@@ -237,6 +237,9 @@ function utxoDataOf(o: TxOutputLine): SpentUtxoData {
   };
 }
 
+const REGISTRY_COLUMNS = ['registryName', 'registryTicker', 'registryDecimals', 'registryDescription', 'registryUrl', 'registryLogo'] as const;
+type RegistryFields = Pick<AssetInfo, typeof REGISTRY_COLUMNS[number]>;
+
 interface LocalCoverage {
   fromSlot: number;
   lastSlot: number;
@@ -391,7 +394,7 @@ export class CardanoIndexer {
     if (coverage) throw new NotFoundError(`${what} (not in the crawled chain up to slot ${coverage.lastSlot})`);
   }
 
-  // Asset from the crawled supply sums and its first and latest mint. Registry fields stay null.
+  // Asset from the crawled supply sums and its first and latest mint, registry fields from the stored rows.
   // Null when the crawled chain does not answer or the sums are not computed yet.
   private async localAssetInfo(tx: CapTransaction, unit: string): Promise<AssetInfo | null> {
     if (!this.crawlAssetHistory || !(await this.crawlAnswers(tx, 'getAssetInfo'))) return null;
@@ -431,13 +434,18 @@ export class CardanoIndexer {
       initialMintTxHash: first?.txHash ?? null,
       initialMintTime: first?.blockTime == null ? null : Number(first.blockTime),
       onchainMetadata,
-      registryName: null,
-      registryTicker: null,
-      registryDecimals: null,
-      registryDescription: null,
-      registryUrl: null,
-      registryLogo: null,
+      ...(await this.storedRegistryFields(tx, unit)),
     };
+  }
+
+  // The chain holds no CIP-26 registry data, so a crawled asset keeps what the stored rows
+  // carry: the newest slice with a registry value, else none.
+  private async storedRegistryFields(tx: CapTransaction, unit: string): Promise<RegistryFields> {
+    const q = SELECT.from(AssetsTable).columns(...REGISTRY_COLUMNS).where({ unit });
+    q.SELECT.orderBy = [{ ref: ['validFrom'], sort: 'desc' }];
+    const slices = await tx.run(q) as RegistryFields[] | undefined;
+    const found = (slices ?? []).find(r => REGISTRY_COLUMNS.some(c => r[c] != null));
+    return Object.fromEntries(REGISTRY_COLUMNS.map(c => [c, found?.[c] ?? null])) as unknown as RegistryFields;
   }
 
   /** Address from the crawled UTxO set when it answers, else from the backend. */
