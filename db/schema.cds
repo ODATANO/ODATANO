@@ -581,6 +581,23 @@ entity AssetHistory {
         blockHeight : Integer;
 }
 
+@title      : 'Asset Supply'
+@description: 'Per-unit sums over the AssetHistory rows up to CardanoSyncState.assetSupplyHeight, kept by the crawler block by block'
+entity AssetSupply {
+
+        @title      : 'Asset Unit (Key)'
+        @description: 'policyId + assetNameHex (concatenated hex)'
+    key unit            : AssetUnit;
+
+        @title      : 'Total Supply'
+        @description: 'Minted minus burned quantity'
+        totalSupply     : Decimal(38, 0);
+
+        @title      : 'Mint Or Burn Count'
+        @description: 'Number of AssetHistory rows of the unit'
+        mintOrBurnCount : Integer;
+}
+
 @title      : 'Drep Entity'
 @description: 'Drep information entity definition'
 entity Dreps : temporal {
@@ -2141,6 +2158,14 @@ entity CardanoSyncState {
         @title      : 'UTxO Set Applied Slot'
         @description: 'Slot of the last block applied to the ledger tables; a cursor ahead of it means blocks were crawled without the set (mode off, invalidated) and the set is stale'
         utxoAppliedSlot   : Integer64;
+
+        @title      : 'UTxO Set Lovelace'
+        @description: 'Sum of lovelace over the unspent LedgerUTxOs rows, kept by the import and every applied or rolled-back block; null until computed'
+        utxoSetLovelace   : Lovelace;
+
+        @title      : 'Asset Supply Height'
+        @description: 'Block height up to which AssetSupply counts the AssetHistory rows; null until computed'
+        assetSupplyHeight : Integer64;
 
         @title      : 'UTxO Set Error'
         @description: 'Why the set is invalid (reorg past the anchor, failed import)'

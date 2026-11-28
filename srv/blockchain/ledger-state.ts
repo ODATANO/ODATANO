@@ -6,12 +6,14 @@ import {
   LedgerAddresses,
   LedgerAddressAssets,
   LedgerAccounts,
+  CardanoSyncState,
   type LedgerUTxO,
   type LedgerUTxOAsset,
 } from '#cds-models/odatano/cardano';
 import type { Amount, BlockData, Transaction as ProviderTransaction, TxOutputLine, ReferenceScriptType } from '../utils/types';
 import { decodeShelleyAddress, assetSlice } from '../utils/mappers';
 import { chunk, IN_CHUNK } from '../utils/collections';
+import { addUtxoSetLovelace, SINGLETON_ID } from './crawler/sync-state';
 
 const { SELECT, UPSERT, UPDATE, DELETE } = cds.ql;
 const logger = cds.log('LedgerState');
@@ -116,6 +118,12 @@ interface AddressDelta {
   stakeAddress: string | null;
   addressType: string;
   isScript: boolean;
+}
+
+function netLovelace(deltas: Map<string, AddressDelta>): bigint {
+  let net = 0n;
+  for (const d of deltas.values()) net += d.lovelace;
+  return net;
 }
 
 function deltaFor(map: Map<string, AddressDelta>, row: LedgerUtxoRow): AddressDelta {
@@ -246,6 +254,7 @@ export async function applyBlockToLedger(
   for (const row of spentRows) {
     applyDelta(deltaFor(deltas, row), row, dbAssets.get(outpoint(row.txHash, row.outputIndex)), -1n);
   }
+  await addUtxoSetLovelace(tx, netLovelace(deltas));
 
   // 4) UTxO rows
   const createdRows = [...created.values()];
@@ -390,6 +399,7 @@ export async function undoLedgerForTransactions(tx: CapTransaction, txHashes: st
     for (const r of openCreated) applyDelta(deltaFor(deltas, r), r, assets.get(outpoint(r.txHash, num(r.outputIndex))), -1n);
     for (const r of reopened) applyDelta(deltaFor(deltas, r), r, assets.get(outpoint(r.txHash, num(r.outputIndex))), 1n);
   }
+  await addUtxoSetLovelace(tx, netLovelace(deltas));
   for (const hashChunk of hashChunks) {
     await tx.run(DELETE.from(LedgerUTxOAssets).where({ utxo_txHash: { in: hashChunk } }));
     await tx.run(DELETE.from(LedgerUTxOs).where({ txHash: { in: hashChunk } }));
@@ -507,6 +517,7 @@ export async function recountLedgerAddresses(tx: CapTransaction, addresses: stri
       }
     }
     const prev = await tx.run(SELECT.one.from(LedgerAddresses).where({ address })) as Record<string, unknown> | undefined;
+    await addUtxoSetLovelace(tx, total - big(prev?.totalLovelace));
     const decoded = decodeShelleyAddress(address);
     const stakeAddress = (prev?.stakeAddress as string | null) ?? open?.[0]?.stakeAddress ?? decoded.stakeAddress;
     await tx.run(UPSERT.into(LedgerAddresses).entries({
@@ -530,6 +541,15 @@ export async function recountLedgerAddresses(tx: CapTransaction, addresses: stri
     if (stakeAddress) stakes.add(stakeAddress);
   }
   await recountLedgerAccounts(tx, [...stakes]);
+}
+
+// Computes the set total once for a set imported before the total was kept. One scan of
+// LedgerAddresses; the caller runs it before the crawler applies blocks.
+export async function computeUtxoSetLovelace(tx: CapTransaction): Promise<string> {
+  const row = await tx.run(SELECT.one.from(LedgerAddresses).columns('sum(totalLovelace) as total')) as { total?: unknown } | undefined;
+  const total = big(row?.total == null ? null : String(row.total).split('.')[0]).toString();
+  await tx.run(UPDATE.entity(CardanoSyncState).set({ utxoSetLovelace: total }).where({ ID: SINGLETON_ID, utxoSetLovelace: null }));
+  return total;
 }
 
 /** Recount `LedgerAccounts` for the given stake keys from `LedgerAddresses`. */

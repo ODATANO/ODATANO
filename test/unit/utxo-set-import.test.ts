@@ -47,6 +47,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   Blocks: 'Blocks',
 }));
 vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
+  SINGLETON_ID: 'SINGLETON',
   readCursor: vi.fn(async () => cursorState.cursor),
   isCrawlerLeaseActive: (cursor: { leaseUntil?: string } | null) => Boolean(cursor?.leaseUntil && Date.parse(cursor.leaseUntil) > Date.now()),
   setUtxoSetState: vi.fn(async (_tx: unknown, state: Record<string, unknown>) => { utxoSetStates.push(state); }),
@@ -150,8 +151,9 @@ describe('readUtxoSetFile', () => {
 });
 
 describe('aggregateStatements', () => {
-  it('derives addresses, address assets and accounts from the imported rows with portable SQL', () => {
-    const [addresses, assets, accounts] = aggregateStatements();
+  it('derives addresses, address assets, accounts and the set total from the imported rows with portable SQL', () => {
+    const [addresses, assets, accounts, total] = aggregateStatements();
+    expect(total).toBe("UPDATE odatano_cardano_CardanoSyncState SET utxoSetLovelace = (SELECT COALESCE(SUM(totalLovelace), 0) FROM odatano_cardano_LedgerAddresses) WHERE ID = 'SINGLETON'");
     expect(addresses).toMatch(/^INSERT INTO odatano_cardano_LedgerAddresses .* FROM odatano_cardano_LedgerUTxOs WHERE spentTxHash IS NULL GROUP BY address$/);
     expect(assets).toContain('WHERE u.spentTxHash IS NULL GROUP BY u.address, a.unit');
     // every slice column the ledger rows carry, the fingerprint included
@@ -238,7 +240,7 @@ describe('importUtxoSet preconditions', () => {
     expect(upserts.map(q => (q.entries as unknown[]).length)).toEqual([2, 2, 1]);
     // aggregates run through the lease-checked transaction, not the bare db service
     expect(rawSql).toHaveLength(0);
-    expect(txRuns.filter(q => typeof q === 'string')).toHaveLength(3);
+    expect(txRuns.filter(q => typeof q === 'string')).toHaveLength(4);
     // state write + 3 batches + aggregates/activation = 5 lease-checked transactions
     expect(lease.renewCalls).toBe(5);
     expect(utxoSetStates.map(s => s.status)).toEqual(['importing', 'active']);
@@ -341,8 +343,8 @@ describe('rebuildUtxoSetAggregates', () => {
     const ops = txRuns.map(q => (typeof q === 'string' ? 'SQL' : String(q._op)));
     const firstDelete = ops.indexOf('DELETE');
     const tail = ops.slice(firstDelete);
-    // deletes and the three statements first; cursor reset and lease re-take are the last statements
-    expect(tail).toEqual(['DELETE', 'DELETE', 'DELETE', 'SQL', 'SQL', 'SQL', 'RESET', 'RENEW']);
+    // deletes and the three sums first; the set total, cursor reset and lease re-take touch the cursor row last
+    expect(tail).toEqual(['DELETE', 'DELETE', 'DELETE', 'SQL', 'SQL', 'SQL', 'SQL', 'RESET', 'RENEW']);
     expect(utxoSetStates[0]).toEqual({ error: null }); // the old failure text is cleared at the start
     expect(utxoSetStates.at(-1)).toMatchObject({ status: 'active' });
   });

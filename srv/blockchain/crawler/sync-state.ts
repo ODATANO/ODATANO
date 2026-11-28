@@ -38,6 +38,8 @@ export interface UtxoSetState {
   importedAt: string | null;
   /** Slot of the last block applied to the ledger tables (null = nothing applied since the import). */
   appliedSlot: number | null;
+  /** Lovelace over the unspent rows, as text (null = not computed yet). */
+  lovelace: string | null;
   error: string | null;
 }
 
@@ -96,6 +98,7 @@ function toCursor(row: Record<string, unknown>): SyncCursor {
       anchorHash: (row.utxoAnchorHash as string) ?? null,
       importedAt: timestamp(row.utxoSetImportedAt),
       appliedSlot: optionalNum(row.utxoAppliedSlot),
+      lovelace: row.utxoSetLovelace == null ? null : String(row.utxoSetLovelace),
       error: (row.utxoSetError as string) ?? null,
     },
   };
@@ -138,6 +141,7 @@ export async function ensureSyncStateSingleton(
     utxoAnchorHash: null,
     utxoSetImportedAt: null,
     utxoAppliedSlot: null,
+    utxoSetLovelace: null,
     utxoSetError: null,
   };
   await db.run(INSERT.into(CardanoSyncState).entries(row));
@@ -273,9 +277,17 @@ export async function setUtxoSetState(db: CapTransaction, state: Partial<UtxoSet
   if (state.anchorHash !== undefined) set.utxoAnchorHash = state.anchorHash;
   if (state.importedAt !== undefined) set.utxoSetImportedAt = state.importedAt;
   if (state.appliedSlot !== undefined) set.utxoAppliedSlot = state.appliedSlot;
+  if (state.lovelace !== undefined) set.utxoSetLovelace = state.lovelace;
   if (state.error !== undefined) set.utxoSetError = state.error;
   if (!Object.keys(set).length) return;
   await db.run(UPDATE.entity(CardanoSyncState).set(set).where({ ID: SINGLETON_ID }));
+}
+
+// Adds a block's net lovelace change to the set total. A null total stays null until computed.
+export async function addUtxoSetLovelace(db: CapTransaction, delta: bigint): Promise<void> {
+  if (delta === 0n) return;
+  const by = Number.isSafeInteger(Number(delta)) ? Number(delta) : delta.toString();
+  await db.run(UPDATE.entity(CardanoSyncState).set({ utxoSetLovelace: { '+=': by } }).where({ ID: SINGLETON_ID }));
 }
 
 /** Reset the cursor to a rollback point (used by reorg handling). */

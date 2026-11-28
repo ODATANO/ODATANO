@@ -8,7 +8,6 @@ type Q = { _op: string; entity: string; columns?: string; where?: Record<string,
 const runs: Q[] = [];
 let blockCounts: { sinceEpochStart: number; total: number } = { sinceEpochStart: 0, total: 0 };
 let ledgerControlled: unknown = undefined;
-let ledgerTotal: unknown = undefined;
 /** What the epoch aggregate over crawled Blocks returns (cds.db.run). */
 let epochTotals: Record<string, unknown> | undefined;
 const dbRuns: Q[] = [];
@@ -30,7 +29,6 @@ const mockTx = {
       return { n: slot === 0 ? blockCounts.total : blockCounts.sinceEpochStart };
     }
     if (q._op === 'SELECT.one' && q.entity === 'LedgerAccounts') return ledgerControlled === undefined ? undefined : { controlledAmount: ledgerControlled };
-    if (q._op === 'SELECT.one' && q.entity === 'LedgerAddresses') return { total: ledgerTotal };
     return undefined;
   }),
 };
@@ -40,7 +38,7 @@ vi.mock('@sap/cds', () => {
     columns: (columns: string) => {
       const q: Q = { _op: 'SELECT.one', entity, columns };
       return Object.assign(q, {
-        where: (where: Record<string, unknown>) => ({ ...q, where, groupBy: (by: string) => ({ ...q, where, groupBy: by }) }),
+        where: (where: Record<string, unknown>) => ({ ...q, where, SELECT: {} as { orderBy?: unknown }, groupBy: (by: string) => ({ ...q, where, groupBy: by }) }),
       });
     },
     where: (where: Record<string, unknown>) => ({ _op: 'SELECT.one', entity, where }),
@@ -97,6 +95,14 @@ vi.mock('#cds-models/CardanoODataService', () => ({
   LedgerProtocolParameter: 'LedgerProtocolParameter', AddressTransactions: 'AddressTransactions',
   TransactionCertificates: 'TransactionCertificates', TransactionWithdrawals: 'TransactionWithdrawals',
   LedgerAddresses: 'LedgerAddresses', LedgerAccounts: 'LedgerAccounts',
+}));
+/** Stored supply sums (asset-supply module); height null = not computed. */
+let supplyHeight: number | null = 100;
+let supplySums: { unit: string; totalSupply: string; mintOrBurnCount: number } | undefined;
+vi.mock('../../srv/blockchain/asset-supply', () => ({
+  applyBlockAssetSupply: vi.fn(async () => undefined),
+  assetSupplyHeight: vi.fn(async () => supplyHeight),
+  readAssetSupply: vi.fn(async () => supplySums),
 }));
 vi.mock('#cds-models/odatano/cardano', () => ({
   // the account row is written to the table, under the name the assertions use
@@ -167,6 +173,8 @@ const upserted = (entity: string) => runs.find(q => q._op === 'UPSERT' && q.enti
 beforeEach(() => {
   runs.length = 0;
   dbRuns.length = 0;
+  supplyHeight = 100;
+  supplySums = undefined;
   // first and last crawled slot of the epoch; preview time = 1666656000 + slot
   epochTotals = { blockCount: 4, txCount: '9', fees: '1700000', firstSlot: '123638406', lastSlot: 123_724_700 };
   mockTx.run.mockClear();
@@ -174,7 +182,6 @@ beforeEach(() => {
   leaseActive = true;
   blockCounts = { sinceEpochStart: 3, total: 812 };
   ledgerControlled = '5000000';
-  ledgerTotal = '29984126226016860';
   blocksByPool = [];
   previousLive = [];
   answer = null;
@@ -299,10 +306,19 @@ describe('account controlled amount from the crawled UTxO set', () => {
 });
 
 describe('circulating supply from the crawled UTxO set', () => {
-  it('replaces circulating with the UTxO total', async () => {
+  it('replaces circulating with the stored set total, without a sum over the address table', async () => {
+    cursor = synced({ utxoSet: { status: 'active', lovelace: '29984126226016860' } });
     const { indexer } = makeIndexer();
     await indexer.indexNetworkInformation(mockTx as never);
     expect(upserted('NetworkInformation')).toMatchObject({ circulatingSupply: '29984126226016860', treasurySupply: '7' });
+    expect(dbRuns.filter((q) => q.entity === 'LedgerAddresses')).toHaveLength(0);
+  });
+
+  it('keeps the backend figure while the set total is not computed yet', async () => {
+    cursor = synced({ utxoSet: { status: 'active', lovelace: null } });
+    const { indexer } = makeIndexer();
+    await indexer.indexNetworkInformation(mockTx as never);
+    expect(upserted('NetworkInformation')).toMatchObject({ circulatingSupply: '0' });
   });
 
   it('keeps the backend figure without an active UTxO set', async () => {
@@ -641,14 +657,17 @@ describe('crawled chain as the authority (crawler.authoritative)', () => {
     expect(getTransactionMetadata).not.toHaveBeenCalled();
   });
 
-  it('builds the asset from crawled mint/burn rows and the CIP-25 payload of the latest mint', async () => {
+  it('builds the asset from the stored sums, its first mint and the CIP-25 payload of the latest mint', async () => {
     const cip25 = { [('b').repeat(56)]: { token: { name: 'Token', image: 'ipfs://x' } } };
+    supplySums = { unit: UNIT, totalSupply: '75', mintOrBurnCount: 3 };
+    const mints = { asc: { txHash: 'm1', blockTime: 1_700_000_000 }, desc: { txHash: 'm2', blockTime: 1_700_000_200 } };
     answer = (q) => {
-      if (q.entity === 'AssetHistory') return [
-        { txHash: 'm1', action: 'mint', quantity: '100', blockTime: 1_700_000_000, blockHeight: 10 },
-        { txHash: 'b1', action: 'burn', quantity: '30', blockTime: 1_700_000_100, blockHeight: 20 },
-        { txHash: 'm2', action: 'mint', quantity: '5', blockTime: 1_700_000_200, blockHeight: 30 },
-      ];
+      if (q.entity === 'AssetHistory') {
+        const order = (q as unknown as { SELECT: { orderBy: Array<{ sort: 'asc' | 'desc'; nulls: string }> } }).SELECT.orderBy[0];
+        expect(order.nulls).toBe(order.sort === 'asc' ? 'first' : 'last');
+        expect(q.where).toEqual({ unit: UNIT, action: 'mint' });
+        return mints[order.sort];
+      }
       if (q.entity === 'TransactionMetadata') return (q.where as Record<string, unknown>).tx_hash === 'm2' ? { payload: JSON.stringify(cip25) } : undefined;
       return undefined;
     };
@@ -665,12 +684,22 @@ describe('crawled chain as the authority (crawler.authoritative)', () => {
     });
     expect(String(asset.fingerprint)).toMatch(/^asset1/);
     expect(JSON.stringify(asset)).toContain('ipfs://x');
+    // no read of every mint and burn row of the unit
+    expect(runs.filter(r => r.entity === 'AssetHistory' && r._op === 'SELECT.many')).toHaveLength(0);
   });
 
   it('answers 404 for an asset the crawled chain never minted', async () => {
-    answer = (q) => (q.entity === 'AssetHistory' ? [] : undefined);
+    supplySums = undefined;
     const { indexer } = authoritative();
     await expect(indexer.indexAsset(mockTx as never, UNIT)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it('asks the provider while the supply sums are not computed yet', async () => {
+    supplyHeight = null;
+    const { client, indexer } = authoritative();
+    const getAssetInfo = vi.fn(async () => { throw new Error('provider asked'); });
+    Object.assign(client, { getAssetInfo });
+    await expect(indexer.indexAsset(mockTx as never, UNIT)).rejects.toThrow('provider asked');
   });
 
   it('serves the asset history from the crawled rows', async () => {

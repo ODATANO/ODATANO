@@ -127,6 +127,7 @@ import { fetchPoolMetadata, type PoolMetadata } from './pool-metadata';
 import { epochOfSlot, epochStartSlot, rollbackHorizonSlots, slotToPosixSeconds } from '../utils/epoch-slots';
 import { CARDANO_DEFAULTS, EPOCH_CONFIG_BY_NETWORK, GENESIS_INFOS_BY_NETWORK, PROTOCOL_PARAMS_TTL_MS } from '../utils/const';
 import type { EpochStateBackend } from './backends/cardano-backend';
+import { applyBlockAssetSupply, assetSupplyHeight, readAssetSupply } from './asset-supply';
 import type { TxCacheTargets } from '../utils/tx-build-helper';
 
 const { UPSERT, INSERT, UPDATE, SELECT, DELETE } = cds.ql;
@@ -236,6 +237,14 @@ function utxoDataOf(o: TxOutputLine): SpentUtxoData {
   };
 }
 
+interface LocalCoverage {
+  fromSlot: number;
+  lastSlot: number;
+  tipHeight: number | null;
+  ledger: boolean;
+  ledgerLovelace: string | null; // null = not computed yet; lovelace over the unspent ledger rows
+}
+
 function lovelaceSum(value: unknown): string {
   if (value === null || value === undefined || value === '') return '0';
   return typeof value === 'number' ? BigInt(Math.trunc(value)).toString() : String(value).split('.')[0];
@@ -335,10 +344,17 @@ export class CardanoIndexer {
 
   // Range the crawled data answers authoritatively, only while a live crawler is at the tip.
   // ledger is true when the crawled UTxO set is active.
-  private async localCoverage(tx: CapTransaction): Promise<{ fromSlot: number; lastSlot: number; tipHeight: number | null; ledger: boolean } | null> {
+  private async localCoverage(tx: CapTransaction): Promise<LocalCoverage | null> {
     const cursor = await readCursor(tx);
     if (!cursor || cursor.syncStatus !== 'synced' || cursor.nodeBehindSince != null || cursor.startSlot == null || !isCrawlerLeaseActive(cursor)) return null;
-    return { fromSlot: cursor.startSlot, lastSlot: cursor.lastSlot, tipHeight: cursor.tipHeight, ledger: cursor.utxoSet.status === 'active' };
+    const ledger = cursor.utxoSet.status === 'active';
+    return {
+      fromSlot: cursor.startSlot,
+      lastSlot: cursor.lastSlot,
+      tipHeight: cursor.tipHeight,
+      ledger,
+      ledgerLovelace: ledger ? cursor.utxoSet.lovelace : null,
+    };
   }
 
   // Block counts of a pool from crawled blocks. The epoch count needs the whole current epoch
@@ -375,21 +391,23 @@ export class CardanoIndexer {
     if (coverage) throw new NotFoundError(`${what} (not in the crawled chain up to slot ${coverage.lastSlot})`);
   }
 
-  // Asset from crawled mint and burn rows. Registry fields stay null.
-  // Null when the crawled chain does not answer.
+  // Asset from the crawled supply sums and its first and latest mint. Registry fields stay null.
+  // Null when the crawled chain does not answer or the sums are not computed yet.
   private async localAssetInfo(tx: CapTransaction, unit: string): Promise<AssetInfo | null> {
     if (!this.crawlAssetHistory || !(await this.crawlAnswers(tx, 'getAssetInfo'))) return null;
-    const events = await tx.run(
-      SELECT.from(AssetHistory).columns('txHash', 'action', 'quantity', 'blockTime', 'blockHeight').where({ unit })
-    ) as Array<{ txHash: string; action: string; quantity: unknown; blockTime?: number | string | null; blockHeight?: number | string | null }>;
-    if (!events?.length) throw new NotFoundError(`Asset ${unit} (never minted in the crawled chain)`);
+    if ((await assetSupplyHeight(tx)) == null) return null;
+    const sums = await readAssetSupply(tx, unit);
+    if (!sums) throw new NotFoundError(`Asset ${unit} (never minted in the crawled chain)`);
+    const supply = BigInt(lovelaceSum(sums.totalSupply));
 
-    const ordered = [...events].sort((a, b) => Number(a.blockHeight ?? 0) - Number(b.blockHeight ?? 0));
-    let supply = 0n;
-    for (const e of ordered) supply += (e.action === 'burn' ? -1n : 1n) * BigInt(String(e.quantity ?? '0'));
-    const mints = ordered.filter(e => e.action !== 'burn');
-    const first = mints[0];
-    const latest = mints[mints.length - 1];
+    // the (unit, blockHeight) index serves both ends; a row without a height counts as the oldest
+    const mintAt = async (sort: 'asc' | 'desc') => {
+      const q = SELECT.one.from(AssetHistory).columns('txHash', 'blockTime').where({ unit, action: 'mint' });
+      q.SELECT.orderBy = [{ ref: ['blockHeight'], sort, nulls: sort === 'asc' ? 'first' : 'last' }];
+      return await tx.run(q) as { txHash: string; blockTime?: number | string | null } | undefined;
+    };
+    const first = await mintAt('asc');
+    const latest = await mintAt('desc');
 
     let onchainMetadata: JSONValue | null = null;
     if (latest) {
@@ -409,7 +427,7 @@ export class CardanoIndexer {
       assetName: slice.asset_assetName,
       fingerprint: slice.asset_fingerprint ?? computeCip14Fingerprint(unit.slice(0, 56), unit.slice(56)),
       totalSupply: supply.toString(),
-      mintOrBurnCount: ordered.length,
+      mintOrBurnCount: Number(sums.mintOrBurnCount ?? 0),
       initialMintTxHash: first?.txHash ?? null,
       initialMintTime: first?.blockTime == null ? null : Number(first.blockTime),
       onchainMetadata,
@@ -1330,9 +1348,8 @@ export class CardanoIndexer {
   /** Network information from the backend; circulating supply from the crawled UTxO set when current. */
   async resolveNetworkInformation(tx: CapTransaction): Promise<ProviderNetworkInformation> {
     const netInfo = await this.client.getNetworkInformation();
-    const circulating = (await this.localCoverage(tx))?.ledger
-      ? lovelaceSum((await tx.run(SELECT.one.from(LedgerAddresses).columns('sum(totalLovelace) as total')) as { total?: unknown } | undefined)?.total)
-      : null;
+    const total = (await this.localCoverage(tx))?.ledgerLovelace;
+    const circulating = total == null ? null : lovelaceSum(total);
     return circulating === null ? netInfo : { ...netInfo, supply: { ...netInfo.supply, circulating } };
   }
 
@@ -1491,7 +1508,10 @@ export class CardanoIndexer {
         }
       }
     }
-    if (assetHistoryRows.length) await tx.run(UPSERT.into(AssetHistory).entries(assetHistoryRows));
+    if (assetHistoryRows.length) {
+      await tx.run(UPSERT.into(AssetHistory).entries(assetHistoryRows));
+      if (blockData.height != null) await applyBlockAssetSupply(tx, assetHistoryRows, blockData.height);
+    }
 
     // Catalogue last; collecting the units is skipped entirely when the catalogue is off.
     const newAssets = this.crawlAssetCatalogue === 'off'

@@ -42,6 +42,12 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
+vi.mock('../../srv/blockchain/asset-supply', () => ({
+  assetSupplyHeight: vi.fn(async () => 0),
+  computeAssetSupply: vi.fn(async () => undefined),
+  undoAssetSupply: vi.fn(async () => undefined),
+  lowerAssetSupplyHeight: vi.fn(async () => undefined),
+}));
 vi.mock('#cds-models/odatano/cardano', () => ({
   Blocks: 'odatano.cardano.Blocks',
   Transactions: 'odatano.cardano.Transactions',

@@ -145,7 +145,7 @@ describe('OData Query Features', () => {
 
     describe('$count operations', () => {
       it('$count=true includes count in response', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight ge 0&$count=true&$top=5`);
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight eq 100000&$count=true&$top=5`);
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {
@@ -153,6 +153,18 @@ describe('OData Query Features', () => {
           expect(typeof data['@odata.count']).to.be.oneOf(['number', 'string']);
           expect(Number(data['@odata.count'])).to.be.at.least(0);
         }
+      });
+
+      it('$count=true over a range on Transactions is refused with 400', async () => {
+        const r = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight ge 0&$count=true&$top=5`).catch((e: any) => e.response);
+        expect(r.status).to.equal(400);
+        expect(r.data.error.code).to.equal('ODATANO_QUERY_NOT_INDEXED');
+      });
+
+      it('$count=true over a slot range on Blocks is answered', async () => {
+        const { status, data } = await test.get(`/odata/v4/cardano/Blocks?$filter=slot ge 0&$count=true&$top=1`);
+        expect(status).to.equal(200);
+        expect(Number(data['@odata.count'])).to.be.at.least(0);
       });
 
       it('$count=true without a $filter on Transactions is refused with 400', async () => {
@@ -311,7 +323,7 @@ describe('OData Query Features', () => {
       });
 
       it('$filter + $expand + $count combination', async () => {
-        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight gt 100000&$expand=outputs&$count=true&$top=2`);
+        const { status, data } = await test.get(`/odata/v4/cardano/Transactions?$filter=blockHeight eq 100000&$expand=outputs&$count=true&$top=2`);
         expect(status).to.equal(200);
 
         if (data['@odata.count'] !== undefined) {

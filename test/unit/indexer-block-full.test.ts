@@ -112,6 +112,11 @@ vi.mock('../../srv/blockchain/crawler/sync-state', () => ({
 }));
 
 // DB-level entity: the asset catalogue's existence check reads past the temporal filter
+vi.mock('../../srv/blockchain/asset-supply', () => ({
+  applyBlockAssetSupply: vi.fn(async () => undefined),
+  assetSupplyHeight: vi.fn(async () => null),
+  readAssetSupply: vi.fn(async () => undefined),
+}));
 vi.mock('#cds-models/odatano/cardano', () => ({
   Assets: 'AssetsTable',
   // the block row is written to the table, under the name the assertions use

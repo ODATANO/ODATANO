@@ -1,4 +1,5 @@
 import cds from '@sap/cds';
+import type { Transaction as CapTransaction } from '@sap/cds';
 import type { CardanoClient } from '../cardano-client';
 import type { CardanoIndexer } from '../cardano-indexer';
 import type { ChainSyncBackend, ChainSyncHandle, ChainPoint, PaginatingBackend } from '../backends/cardano-backend';
@@ -8,7 +9,8 @@ import { chunk, IN_CHUNK } from '../../utils/collections';
 import { EPOCH_CONFIG_BY_NETWORK } from '../../utils/const';
 import { epochOfSlot } from '../../utils/epoch-slots';
 import { emitBlockIndexed, emitReorg } from './hooks';
-import { undoLedgerForTransactions } from '../ledger-state';
+import { computeUtxoSetLovelace, undoLedgerForTransactions } from '../ledger-state';
+import { assetSupplyHeight, computeAssetSupply, lowerAssetSupplyHeight, undoAssetSupply } from '../asset-supply';
 import { deleteTransactionRows, type TxKey } from '../transaction-rows';
 import {
   Blocks,
@@ -37,6 +39,7 @@ import {
   recordError,
   tryAcquireCrawlerLease,
   renewCrawlerLease,
+  type SyncCursor,
   releaseCrawlerLease,
   latchPoisonBlock,
   markNodeBehind,
@@ -280,6 +283,13 @@ export class CardanoCrawler {
       this.indexer.setUtxoAnchor(null);
     }
     this.startLeaseHeartbeat();
+    try {
+      await this.computeMissingSums(cursor);
+    } catch (err) {
+      await this.halt(err instanceof CrawlerLeaseLostError ? 'stopped' : 'error');
+      if (!(err instanceof CrawlerLeaseLostError)) logger.error('Crawler start failed computing the stored sums:', err);
+      return;
+    }
 
     // A pipeline crash must show on the cursor, or the crawler looks healthy while idle.
     this.pipeline = this.runIngestPipeline().catch(async (err) => {
@@ -291,6 +301,25 @@ export class CardanoCrawler {
       const streak = await this.recordCrawlerError(err);
       await this.halt(streak < 0 ? 'stopped' : 'error');
     });
+  }
+
+  // Sums the crawler keeps per block, computed once where they are missing. Runs before the
+  // first block and commits only while the lease is held.
+  private async computeMissingSums(cursor: SyncCursor): Promise<void> {
+    const underLease = (work: (tx: CapTransaction) => Promise<void>) => cds.tx(async (tx) => {
+      await work(tx);
+      if (this.leaseOwner && !(await renewCrawlerLease(tx, this.leaseOwner))) throw new CrawlerLeaseLostError();
+    });
+    if (this.indexer.getUtxoAnchor() && cursor.utxoSet.lovelace == null) {
+      let total = '';
+      await underLease(async (tx) => { total = await computeUtxoSetLovelace(tx); });
+      logger.info(`UTxO set total computed: ${total} lovelace`);
+    }
+    if (this.config.assetHistory && (await cds.tx((tx) => assetSupplyHeight(tx))) == null) {
+      const started = Date.now();
+      await underLease((tx) => computeAssetSupply(tx, cursor.lastHeight));
+      logger.info(`Asset supply sums computed up to height ${cursor.lastHeight} in ${Date.now() - started} ms`);
+    }
   }
 
   /** Stop crawling and await the in-flight step, so callers can tear down backends and the DB. */
@@ -1161,8 +1190,8 @@ export class CardanoCrawler {
       // Blocks strictly after the fork, cut on the absolute-slot axis. Rows without a
       // slot (lazily indexed blocks from an older schema) are deliberately excluded.
       const staleBlocks = await tx.run(
-        SELECT.from(Blocks).columns('hash').where({ slot: { '>': forkSlot } })
-      ) as Array<{ hash: string }>;
+        SELECT.from(Blocks).columns('hash', 'height').where({ slot: { '>': forkSlot } })
+      ) as Array<{ hash: string; height?: number | string | null }>;
       const blockHashes = staleBlocks.map((b) => b.hash);
       blocksRolledBack = blockHashes.length;
 
@@ -1188,6 +1217,7 @@ export class CardanoCrawler {
           const history = await tx.run(SELECT.distinct.from(AssetHistory).columns('unit').where({ txHash: { in: txChunk } })) as Array<{ unit: string }>;
           for (const u of history ?? []) rolledBackUnits.add(u.unit);
         }
+        await undoAssetSupply(tx, txHashes);
         for (const txChunk of chunk(txHashes, IN_CHUNK)) {
           // These tables have no cascading delete. Remove them first so no orphans leak via OData.
           await tx.run(DELETE.from(UTxOAssets).where({ utxo_hash: { in: txChunk } }));
@@ -1197,6 +1227,10 @@ export class CardanoCrawler {
         }
         await deleteTransactionRows(tx, staleTxs);
         await tx.run(DELETE.from(Blocks).where({ hash: { in: blockChunk } }));
+      }
+      if (blocksRolledBack > 0) {
+        const lowest = staleBlocks.reduce((m, b) => (b.height == null ? m : Math.min(m, Number(b.height))), Infinity);
+        await lowerAssetSupplyHeight(tx, forkHeight ?? (Number.isFinite(lowest) ? lowest - 1 : null));
       }
 
       // Epoch snapshots read at a rolled-back block describe a chain that no longer exists.

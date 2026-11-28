@@ -11,8 +11,12 @@ export const GUARDED_ENTITIES: readonly string[] = Object.freeze([
   'Blocks', 'Transactions', 'TransactionInputs', 'TransactionOutputs', 'TransactionInputAssets',
   'TransactionOutputAssets', 'TransactionMetadata', 'TransactionCertificates', 'TransactionWithdrawals',
   'TransactionRedeemers', 'TransactionDatums', 'AssetHistory', 'Assets',
-  'LedgerUTxOs', 'LedgerUTxOAssets', 'LedgerAddresses', 'LedgerAddressAssets',
+  'LedgerUTxOs', 'LedgerUTxOAssets', 'LedgerAddresses', 'LedgerAddressAssets', 'LedgerAccounts',
+  'AccountEpochSnapshots', 'PoolEpochSnapshots', 'DrepEpochSnapshots',
 ]);
+
+// One row per block: counting a slot or height range reads only the index, and stays fast.
+const RANGE_COUNTS: ReadonlySet<string> = new Set(['Blocks']);
 
 const DB_NAMESPACE = 'odatano.cardano';
 
@@ -126,7 +130,8 @@ export function unindexedReason(entityName: string, select: Select, entity: Enti
   const head = ref?.[0] as { where?: unknown } | undefined;
   if ((ref?.length ?? 0) > 1 || (head && typeof head === 'object' && head.where)) return null;
   if (select.search) return '$search is not supported on this entity set';
-  if (select.groupBy?.length || select.having) return '$apply is not supported on this entity set';
+  const aggregated = select.columns?.some(c => c.func && c.func !== 'count') ?? false;
+  if (select.groupBy?.length || select.having || aggregated) return '$apply is not supported on this entity set';
 
   const lists = indexColumnLists(entityName, entity);
   const shape = whereShape(select.where);
@@ -137,6 +142,8 @@ export function unindexedReason(entityName: string, select: Select, entity: Enti
 
   const counted = select.count === true || (select.columns?.some(c => c.func === 'count') ?? false);
   if (counted && !select.where?.length) return '$count needs a $filter on an indexed field';
+  // a range on a large table counts every row in it
+  if (counted && shape.narrowing.size === 0 && !RANGE_COUNTS.has(entityName)) return '$count needs an eq $filter on an indexed field';
 
   const order = (select.orderBy ?? []).filter(o => !o.implicit);
   if (order.some(o => !columnOf(o.ref))) return '$orderby supports plain fields only';

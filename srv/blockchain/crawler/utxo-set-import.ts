@@ -18,6 +18,7 @@ import {
   releaseImportLease,
   resetCursorTo,
   CRAWLER_LEASE_TTL_MS,
+  SINGLETON_ID,
 } from './sync-state';
 import {
   LedgerUTxOs,
@@ -173,6 +174,7 @@ const T = {
   addresses: 'odatano_cardano_LedgerAddresses',
   addressAssets: 'odatano_cardano_LedgerAddressAssets',
   accounts: 'odatano_cardano_LedgerAccounts',
+  syncState: 'odatano_cardano_CardanoSyncState',
 };
 
 // Derive the running sums from the imported rows. Plain SQL, because millions of addresses
@@ -190,6 +192,8 @@ export function aggregateStatements(): string[] {
     `INSERT INTO ${T.accounts} (stakeAddress, controlledAmount, addressCount, utxoCount, lastActiveSlot) ` +
     `SELECT stakeAddress, SUM(totalLovelace), COUNT(*), SUM(utxoCount), NULL FROM ${T.addresses} ` +
     `WHERE stakeAddress IS NOT NULL GROUP BY stakeAddress`,
+    `UPDATE ${T.syncState} SET utxoSetLovelace = (SELECT COALESCE(SUM(totalLovelace), 0) FROM ${T.addresses}) ` +
+    `WHERE ID = '${SINGLETON_ID}'`,
   ];
 }
 
@@ -213,7 +217,7 @@ export async function importUtxoSet(opts: UtxoSetImportOptions): Promise<UtxoSet
     const { writeTx } = lease;
       opts.indexer.setUtxoAnchor(null);
       await writeTx(async (tx) => {
-        await setUtxoSetState(tx, { status: 'importing', anchorSlot: anchor.slot, anchorHash: anchor.hash, error: null, importedAt: null, appliedSlot: null });
+        await setUtxoSetState(tx, { status: 'importing', anchorSlot: anchor.slot, anchorHash: anchor.hash, error: null, importedAt: null, appliedSlot: null, lovelace: null });
         await tx.run(DELETE.from(LedgerUTxOAssets));
         await tx.run(DELETE.from(LedgerUTxOs));
         await tx.run(DELETE.from(LedgerAddressAssets));

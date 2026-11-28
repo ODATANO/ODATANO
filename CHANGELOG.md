@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.54] - stored supply sums and a stricter read guard
+
+Additive schema change: new columns and the `AssetSupply` table.
+
+### Changed
+
+- `Assets` from the crawled chain read supply and mint count from `AssetSupply`, one row per unit, instead of
+  every `AssetHistory` row of the unit. The crawler keeps it per block up to
+  `CardanoSyncState.assetSupplyHeight`; a reorg takes the rolled-back rows off. Computed once at the next
+  crawler start; until then the backend answers. First and latest mint are read through the
+  `(unit, blockHeight)` index.
+- Read guard: `$count` needs an `eq` filter on an indexed field (`Blocks` also counts a range), and
+  `$apply` with `aggregate` alone is refused. `LedgerAccounts`, `AccountEpochSnapshots`,
+  `PoolEpochSnapshots` and `DrepEpochSnapshots` are guarded.
+- `NetworkInformation.circulatingSupply` from the crawled UTxO set reads one stored total,
+  `CardanoSyncState.utxoSetLovelace`, instead of summing `LedgerAddresses` on every refresh. The import
+  sets it, every applied or rolled-back block moves it. A set imported earlier gets it once at the next
+  crawler start; until then the backend's figure stays.
+
 ## [v2.0.0-rc.53] - read timeout and read guard for API reads
 
 Additive schema change: new indexes only, built at start.

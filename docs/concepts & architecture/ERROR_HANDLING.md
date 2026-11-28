@@ -63,7 +63,7 @@ An error from a handler carries its code in `error.code`.
 | `ODATANO_TX_VALIDATION_FAILED` | 400 | The transaction failed validation |
 | `ODATANO_TX_PARSE_FAILED` | 400 | The transaction CBOR could not be decoded |
 | `ODATANO_SCRIPT_VALIDATION_FAILURE` | 400 | The ledger refused the transaction in phase-2 script evaluation |
-| `ODATANO_QUERY_NOT_INDEXED` | 400 | A read on a large entity set that no index serves: `$filter` or `$orderby` on a field without an index, `$count` without a `$filter`. The message names the indexed fields |
+| `ODATANO_QUERY_NOT_INDEXED` | 400 | A read on a large entity set that no index serves: `$filter` or `$orderby` on a field without an index, `$count` without an `eq` filter on an indexed field, `$apply`. The message names the indexed fields |
 | `ODATANO_HSM_NOT_CONFIGURED` | 503 | `SignWithHsm` or `SignAndSubmitWithHsm` without a configured or connected HSM |
 | `ODATANO_FORBIDDEN` | 403 | Logged in, but without the role. The HSM actions need `hsm.requiresRole`. `SubmitWalletJob` needs the wallet's `requiresRole` and, for an HSM wallet, `hsm.requiresRole`. The message starts with `[ODATANO_FORBIDDEN] <Action>:` |
 | `ODATANO_NOT_FOUND` | 404 | The resource is not on chain |

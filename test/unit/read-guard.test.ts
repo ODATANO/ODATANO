@@ -62,6 +62,10 @@ describe('reads that pass', () => {
     '/AssetHistory?$filter=unit eq \'ab\'&$orderby=blockTime desc',
     '/Transactions?$filter=blockHash eq \'ab\'&$count=true',
     '/TransactionOutputAssets?$filter=output_txSeq eq 5',
+    '/Blocks/$count?$filter=slot ge 0',
+    '/PoolEpochSnapshots?$filter=epoch eq 316&$orderby=liveStake desc&$count=true',
+    '/AccountEpochSnapshots?$filter=stakeAddress eq \'stake_test1x\'&$orderby=epoch desc',
+    '/LedgerAccounts(\'stake_test1x\')',
   ])('%s', (url) => {
     expect(reasonFor(url)).toBeNull();
   });
@@ -79,6 +83,13 @@ describe('reads that would scan the table', () => {
     ['/Blocks?$filter=height gt 100&$orderby=size', '$orderby on size'],
     ['/Blocks?$filter=contains(hash,\'ab\')', 'function contains'],
     ['/Transactions?$search=abc', '$search'],
+    ['/TransactionOutputs/$count?$filter=txSeq gt 0', '$count needs an eq $filter'],
+    ['/Transactions?$filter=blockHash ne \'ab\'&$count=true', '$count needs an eq $filter'],
+    ['/AccountEpochSnapshots/$count', '$count needs a $filter'],
+    ['/AccountEpochSnapshots?$filter=epoch ge 500&$count=true', '$count needs an eq $filter'],
+    ['/LedgerAccounts?$orderby=controlledAmount desc&$top=10', '$orderby on controlledamount'],
+    ['/PoolEpochSnapshots?$apply=aggregate(liveStake with sum as total)', '$apply'],
+    ['/TransactionOutputs?$apply=aggregate(lovelace with sum as total)', '$apply'],
   ])('%s', (url, reason) => {
     expect(reasonFor(url)).toContain(reason);
   });

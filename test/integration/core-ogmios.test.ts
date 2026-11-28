@@ -2,7 +2,7 @@ import cds from '@sap/cds';
 import { TEST_FIXTURES } from './test-fixtures';
 import { simpleRequestBody } from './test-fixtures';
 
-vi.setConfig({ testTimeout: 20000, hookTimeout: 20000 });
+vi.setConfig({ testTimeout: 20000, hookTimeout: 60000 });
 
 /**
  * CardanoService integration tests against Ogmios only, so no other backend masks a

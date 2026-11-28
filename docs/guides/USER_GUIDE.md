@@ -344,7 +344,8 @@ request give one 400 with both in `details`.
 `Blocks`, `Transactions`, `TransactionInputs`, `TransactionOutputs`, `TransactionInputAssets`,
 `TransactionOutputAssets`, `TransactionMetadata`, `TransactionCertificates`, `TransactionWithdrawals`,
 `TransactionRedeemers`, `TransactionDatums`, `AssetHistory`, `Assets`, `LedgerUTxOs`, `LedgerUTxOAssets`,
-`LedgerAddresses` and `LedgerAddressAssets` grow with the chain. A read on them that no index serves is
+`LedgerAddresses`, `LedgerAddressAssets`, `LedgerAccounts`, `AccountEpochSnapshots`, `PoolEpochSnapshots`
+and `DrepEpochSnapshots` grow with the chain. A read on them that no index serves is
 refused with 400 `ODATANO_QUERY_NOT_INDEXED`. The message names the fields a filter can start with.
 
 - `$filter` uses fields that start an index or the key, for example `hash`, `height`, `slot`, `time` and
@@ -352,8 +353,9 @@ refused with 400 `ODATANO_QUERY_NOT_INDEXED`. The message names the fields a fil
   `utxo_paymentCredential eq '…' and txSeq ge …` on `TransactionOutputs`.
 - `$orderby` follows an `eq` filter, or runs in index order without one: `$orderby=height desc` on
   `Blocks`.
-- `$count` needs a `$filter`.
-- `$search`, `$apply` and functions such as `contains` are refused.
+- `$count` needs an `eq` filter on an indexed field: `epoch eq 316` on `PoolEpochSnapshots`. `Blocks` also counts
+  a range: `Blocks/$count?$filter=slot ge 0`.
+- `$search`, `$apply` (also `aggregate` without `groupby`) and functions such as `contains` are refused.
 - Reads by key, navigations such as `Transactions('…')/outputs` and `$expand` are not checked.
 - `TransactionMetadata` is filtered by `id`, the label as a number. `TransactionOutputAssets` is filtered by
   `output_txSeq`. The holders of an asset are in `LedgerUTxOAssets` and `LedgerAddressAssets`, its mints

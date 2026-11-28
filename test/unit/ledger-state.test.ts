@@ -13,6 +13,7 @@ const KEYS: Record<string, string[]> = {
   LedgerAddresses: ['address'],
   LedgerAddressAssets: ['address_address', 'unit'],
   LedgerAccounts: ['stakeAddress'],
+  CardanoSyncState: ['ID'],
 };
 const tables = new Map<string, Row[]>();
 const table = (e: string): Row[] => { if (!tables.has(e)) tables.set(e, []); return tables.get(e)!; };
@@ -26,8 +27,10 @@ const matches = (r: Row, where: Where): boolean => {
     return String(r[k]) === String(v);
   });
 };
-/** `max(column) as slot` over the matching rows, the one aggregate the undo reads. */
+/** `max(column) as x` (undo) and `sum(column) as x` (set total) over the matching rows. */
 const aggregate = (found: Row[], columns: unknown[] | undefined): Row[] | undefined => {
+  const sum = (columns ?? []).map(String).map(c => /^sum\((\w+)\) as (\w+)$/.exec(c)).find(Boolean);
+  if (sum) return [{ [sum[2]]: found.length ? found.reduce((t, r) => t + BigInt(String(r[sum[1]] ?? 0)), 0n).toString() : null }];
   const max = (columns ?? []).map(String).map(c => /^max\((\w+)\) as (\w+)$/.exec(c)).find(Boolean);
   if (!max) return undefined;
   const values = found.map(r => r[max[1]]).filter(v => v != null).map(Number);
@@ -58,7 +61,19 @@ const fakeTx = {
         return found[0] ? { ...found[0] } : undefined;
       }
       case 'DELETE': { const t = table(e); const keep = t.filter(r => !matches(r, q.where as Where)); const n = t.length - keep.length; tables.set(e, keep); return n; }
-      case 'UPDATE': { let n = 0; for (const r of table(e)) if (matches(r, q.where as Where)) { Object.assign(r, q.set); n++; } return n; }
+      case 'UPDATE': {
+        let n = 0;
+        for (const r of table(e)) {
+          if (!matches(r, q.where as Where)) continue;
+          for (const [k, v] of Object.entries(q.set as Row)) {
+            const add = v && typeof v === 'object' ? (v as Row)['+='] : undefined;
+            // SQL: null + x stays null
+            r[k] = add === undefined ? v : r[k] == null ? null : (BigInt(String(r[k])) + BigInt(String(add))).toString();
+          }
+          n++;
+        }
+        return n;
+      }
       default: return undefined;
     }
   }),
@@ -76,7 +91,10 @@ vi.mock('@sap/cds', () => {
         one: {
           from: (entity: string) => ({
             where: (where: unknown) => ({ _op: 'SELECT.one', entity, where }),
-            columns: (...columns: unknown[]) => ({ where: (where: unknown) => ({ _op: 'SELECT.one', entity, where, columns }) }),
+            columns: (...columns: unknown[]) => {
+              const q = { _op: 'SELECT.one', entity, columns };
+              return { ...q, where: (where: unknown) => ({ ...q, where }) };
+            },
           }),
         },
         from: (entity: string) => ({
@@ -97,9 +115,10 @@ vi.mock('@sap/cds', () => {
 vi.mock('#cds-models/odatano/cardano', () => ({
   LedgerUTxOs: 'LedgerUTxOs', LedgerUTxOAssets: 'LedgerUTxOAssets',
   LedgerAddresses: 'LedgerAddresses', LedgerAddressAssets: 'LedgerAddressAssets', LedgerAccounts: 'LedgerAccounts',
+  CardanoSyncState: 'CardanoSyncState',
 }));
 
-import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
+import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, computeUtxoSetLovelace, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 import { computeCip14Fingerprint } from '../../srv/utils/mappers';
 
@@ -323,6 +342,50 @@ describe('undoLedgerForTransactions (reorg)', () => {
     expect(undone.a).toMatchObject({ totalLovelace: addr(ADDR_A)!.totalLovelace, utxoCount: addr(ADDR_A)!.utxoCount });
     expect(undone.acc).toMatchObject({ controlledAmount: account(STAKE_A)!.controlledAmount, utxoCount: account(STAKE_A)!.utxoCount });
     expect(undone.assets.map(r => [r.address_address, r.asset_quantity])).toEqual([[ADDR_A, '3']]);
+  });
+});
+
+describe('set total (CardanoSyncState.utxoSetLovelace)', () => {
+  const state = () => rows('CardanoSyncState').find(r => r.ID === 'SINGLETON');
+  const openSum = () => rows('LedgerUTxOs').filter(r => r.spentTxHash == null).reduce((t, r) => t + BigInt(String(r.lovelace)), 0n).toString();
+  const seed = (utxoSetLovelace: string | null) => rows('CardanoSyncState').push({ ID: 'SINGLETON', utxoSetLovelace });
+
+  it('follows every applied block and every undo, equal to the sum of the open rows', async () => {
+    seed('0');
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000'), out(T1, 1, ADDR_E, '700')] })]);
+    expect(state()!.utxoSetLovelace).toBe('5000700');
+    await applyBlockToLedger(fakeTx as never, block(110), [
+      tx(T2, { inputs: [inp(T1, 0)], outputs: [out(T2, 0, ADDR_E, '4800000')] }), // 200000 fee leaves the set
+    ]);
+    expect(state()!.utxoSetLovelace).toBe(openSum());
+    expect(state()!.utxoSetLovelace).toBe('4800700');
+    await applyBlockToLedger(fakeTx as never, block(120), [tx(T3, { inputs: [inp(T2, 0), inp(T1, 1)], outputs: [out(T3, 0, ADDR_A, '4700000')] })]);
+    expect(state()!.utxoSetLovelace).toBe(openSum());
+
+    await undoLedgerForTransactions(fakeTx as never, [T2, T3], 100);
+    expect(state()!.utxoSetLovelace).toBe('5000700');
+    expect(state()!.utxoSetLovelace).toBe(openSum());
+  });
+
+  it('stays null until computed, then is computed once from the address sums', async () => {
+    seed(null);
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000'), out(T1, 1, ADDR_E, '700')] })]);
+    expect(state()!.utxoSetLovelace).toBeNull();
+
+    expect(await computeUtxoSetLovelace(fakeTx as never)).toBe('5000700');
+    expect(state()!.utxoSetLovelace).toBe('5000700');
+    state()!.utxoSetLovelace = '1';
+    await computeUtxoSetLovelace(fakeTx as never);
+    expect(state()!.utxoSetLovelace).toBe('1'); // a computed total is never overwritten
+  });
+
+  it('a recount moves the total by the repaired difference', async () => {
+    seed('0');
+    await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000')] })]);
+    addr(ADDR_A)!.totalLovelace = '4000000';
+    state()!.utxoSetLovelace = '4000000';
+    await recountLedgerAddresses(fakeTx as never, [ADDR_A]);
+    expect(state()!.utxoSetLovelace).toBe('5000000');
   });
 });
 
