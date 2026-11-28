@@ -46,6 +46,12 @@ vi.mock('@sap/cds', () => {
   return { default: cdsMock, ...cdsMock };
 });
 
+vi.mock('../../srv/blockchain/asset-supply', () => ({
+  assetSupplyHeight: vi.fn(async () => 0),
+  computeAssetSupply: vi.fn(async () => undefined),
+  undoAssetSupply: vi.fn(async () => undefined),
+  lowerAssetSupplyHeight: vi.fn(async () => undefined),
+}));
 vi.mock('#cds-models/odatano/cardano', () => ({
   Blocks: 'odatano.cardano.Blocks',
   Transactions: 'odatano.cardano.Transactions',
@@ -651,7 +657,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
     await cbs().onError!(frameError());
-    await settle(() => !crawler.isRunning());
+    await settle(() => !crawler.isRunning() && updatesWith(s => s.syncStatus === 'error').length > 0, 2000);
 
     // 'ogmios' means chain-sync only — degrading to the weaker pagination reorg handling
     // behind the operator's back would defeat the setting
@@ -673,7 +679,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
     await callbacks!.onError!(frameError());
-    await settle(() => !crawler.isRunning());
+    await settle(() => !crawler.isRunning() && updatesWith(s => s.syncStatus === 'error').length > 0, 2000);
 
     expect(crawler.isRunning()).toBe(false);
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);
@@ -795,7 +801,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
     await cbs().onError!(socketClosed());
-    await settle(() => !crawler.isRunning());
+    await settle(() => !crawler.isRunning() && updatesWith(s => s.syncStatus === 'error').length > 0, 2000);
 
     expect(crawler.isRunning()).toBe(false);
     expect(openChainSync).toHaveBeenCalledTimes(1);
@@ -809,7 +815,7 @@ describe('CardanoCrawler chain-sync frame failure', () => {
     await crawler.start();
     await settle(() => openChainSync.mock.calls.length > 0);
     await cbs().onError!(frameError(null)); // no height → nothing to walk to
-    await settle(() => !crawler.isRunning());
+    await settle(() => !crawler.isRunning() && updatesWith(s => s.syncStatus === 'error').length > 0, 2000);
 
     expect(crawler.isRunning()).toBe(false);
     expect(updatesWith(s => s.syncStatus === 'error').length).toBeGreaterThan(0);

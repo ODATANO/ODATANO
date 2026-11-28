@@ -543,13 +543,20 @@ export async function recountLedgerAddresses(tx: CapTransaction, addresses: stri
   await recountLedgerAccounts(tx, [...stakes]);
 }
 
-// Computes the set total once for a set imported before the total was kept. One scan of
-// LedgerAddresses; the caller runs it before the crawler applies blocks.
-export async function computeUtxoSetLovelace(tx: CapTransaction): Promise<string> {
-  const row = await tx.run(SELECT.one.from(LedgerAddresses).columns('sum(totalLovelace) as total')) as { total?: unknown } | undefined;
-  const total = big(row?.total == null ? null : String(row.total).split('.')[0]).toString();
-  await tx.run(UPDATE.entity(CardanoSyncState).set({ utxoSetLovelace: total }).where({ ID: SINGLETON_ID, utxoSetLovelace: null }));
-  return total;
+/** Sets the UTxO set total from LedgerAddresses in SQL. The sum never passes through a JS number. */
+export function utxoSetTotalStatement(): string {
+  return 'UPDATE odatano_cardano_CardanoSyncState SET utxoSetLovelace = ' +
+    '(SELECT COALESCE(SUM(totalLovelace), 0) FROM odatano_cardano_LedgerAddresses) ' +
+    `WHERE ID = '${SINGLETON_ID}'`;
+}
+
+// Sets the set total from the address sums: one scan of LedgerAddresses. Runs before the
+// crawler applies blocks, so it also repairs a total that drifted.
+export async function computeUtxoSetLovelace(tx: CapTransaction): Promise<string | null> {
+  await (tx as unknown as { run: (sql: string) => Promise<unknown> }).run(utxoSetTotalStatement());
+  const row = await tx.run(SELECT.one.from(CardanoSyncState).columns('utxoSetLovelace').where({ ID: SINGLETON_ID })) as
+    { utxoSetLovelace?: unknown } | undefined;
+  return row?.utxoSetLovelace == null ? null : String(row.utxoSetLovelace);
 }
 
 /** Recount `LedgerAccounts` for the given stake keys from `LedgerAddresses`. */

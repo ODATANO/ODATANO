@@ -501,7 +501,7 @@ stays.
 | `Pools.blocksMinted` | all crawled `Blocks` of the pool | crawler at the tip, crawl started at or before the first Shelley slot |
 | `Accounts.controlledAmount` | `LedgerAccounts.controlledAmount` + the reward balance | crawler at the tip, UTxO set `active` |
 | `Accounts` → `Address` | `LedgerAddresses` of the stake key with their unspent `LedgerUTxOs`. Also on Ogmios alone, whose account has no address list | crawler at the tip, UTxO set `active` |
-| `NetworkInformation.circulatingSupply` | `SyncState.utxoSetLovelace`: the lovelace over the unspent `LedgerUTxOs`, set by the import and moved by every applied or rolled-back block. A set imported before this column existed gets it once at the next crawler start | crawler at the tip, UTxO set `active`, `utxoSetLovelace` not null |
+| `NetworkInformation.circulatingSupply` | `SyncState.utxoSetLovelace`: the lovelace over the unspent `LedgerUTxOs`, set by the import, moved by every applied or rolled-back block and recomputed at every crawler start before the first block | crawler at the tip, UTxO set `active`, `utxoSetLovelace` not null |
 | `GetUTxOsByCredential` | addresses from `LedgerAddresses.paymentCredential`, their unspent `LedgerUTxOs` checked at the node by output reference | crawler at the tip, UTxO set `active`, credential column filled |
 | `Addresses`, `GetAddressByBech32`, `GetAssetsByAddress`, `GetUTxOsByAddress` | the unspent `LedgerUTxOs` of the address checked at the node by output reference, balance summed over them, type and stake address decoded from the address | crawler at the tip, UTxO set `active` |
 | `GetLatestTransactionsByAddress`, `AddressTransactions` | outputs the address received and spent since the anchor, net amounts per transaction | crawler at the tip, UTxO set `active`; addresses older than the anchor ask a provider when fewer than `limit` crawled transactions exist |
@@ -620,7 +620,7 @@ then answers a lookup the database misses with 404 and does not ask Blockfrost o
 | `Blocks`, `GetBlockByHash` | 404 `not in the crawled chain up to slot …` |
 | `Transactions`, `GetTransactionByHash` | same |
 | `GetMetadataByTxHash` | empty list for a crawled transaction without metadata; 404 for an unknown one |
-| `Assets`, `GetAssetInfo` | supply = mints − burns and the mint count from `AssetSupply`, which the crawler keeps per block (computed once at the first crawler start, until then the backend answers), first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty, `decimals` from the CIP-68 reference datum when the chain holds one. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
+| `Assets`, `GetAssetInfo` | supply = mints − burns and the mint count from `AssetSupply`, which the crawler keeps per block (computed once at the first crawler start, in the background before the first block; until then the backend answers), first mint (transaction and time), CIP-25 payload (label 721) of the latest mint; registry fields empty, `decimals` from the CIP-68 reference datum when the chain holds one. 404 for a unit never minted. Needs `assetHistory` crawled since Shelley |
 | `GetAssetHistory` | the crawled `AssetHistory` rows, newest first |
 
 - The same answers apply without the knob when no configured backend can serve the lookup at all, as on a

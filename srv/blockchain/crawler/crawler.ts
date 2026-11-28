@@ -283,16 +283,10 @@ export class CardanoCrawler {
       this.indexer.setUtxoAnchor(null);
     }
     this.startLeaseHeartbeat();
-    try {
-      await this.computeMissingSums(cursor);
-    } catch (err) {
-      await this.halt(err instanceof CrawlerLeaseLostError ? 'stopped' : 'error');
-      if (!(err instanceof CrawlerLeaseLostError)) logger.error('Crawler start failed computing the stored sums:', err);
-      return;
-    }
 
     // A pipeline crash must show on the cursor, or the crawler looks healthy while idle.
-    this.pipeline = this.runIngestPipeline().catch(async (err) => {
+    // The sums run inside the pipeline, so a long first computation never delays the server start.
+    this.pipeline = this.computeMissingSums(cursor).then(() => this.runIngestPipeline()).catch(async (err) => {
       if (err instanceof CrawlerStoppedError || err instanceof CrawlerLeaseLostError) {
         await this.halt('stopped');
         return;
@@ -303,17 +297,19 @@ export class CardanoCrawler {
     });
   }
 
-  // Sums the crawler keeps per block, computed once where they are missing. Runs before the
-  // first block and commits only while the lease is held.
+  // Sums the crawler keeps per block. The UTxO set total is recomputed at every start, the asset
+  // sums only when missing. Runs before the first block and commits only while the lease is held.
   private async computeMissingSums(cursor: SyncCursor): Promise<void> {
     const underLease = (work: (tx: CapTransaction) => Promise<void>) => cds.tx(async (tx) => {
       await work(tx);
       if (this.leaseOwner && !(await renewCrawlerLease(tx, this.leaseOwner))) throw new CrawlerLeaseLostError();
     });
-    if (this.indexer.getUtxoAnchor() && cursor.utxoSet.lovelace == null) {
-      let total = '';
+    if (this.indexer.getUtxoAnchor()) {
+      let total: string | null = null;
       await underLease(async (tx) => { total = await computeUtxoSetLovelace(tx); });
-      logger.info(`UTxO set total computed: ${total} lovelace`);
+      const before = cursor.utxoSet.lovelace;
+      if (before != null && before !== total) logger.warn(`UTxO set total corrected from ${before} to ${total} lovelace`);
+      else logger.info(`UTxO set total computed: ${total} lovelace`);
     }
     if (this.config.assetHistory && (await cds.tx((tx) => assetSupplyHeight(tx))) == null) {
       const started = Date.now();

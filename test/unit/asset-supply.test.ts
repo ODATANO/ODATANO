@@ -1,6 +1,6 @@
 /**
- * Supply sums per unit (srv/blockchain/asset-supply.ts) on the real model in an in-memory SQLite:
- * the first computation, block by block counting under the height, and a rollback.
+ * Stored sums on the real model in an in-memory SQLite: supply per unit (srv/blockchain/asset-supply.ts)
+ * with its first computation, counting and rollback, and the first computation of the UTxO set total.
  */
 import cds from '@sap/cds';
 import type { Transaction as CapTransaction } from '@sap/cds';
@@ -8,11 +8,13 @@ import path from 'path';
 import {
   applyBlockAssetSupply, assetSupplyHeight, computeAssetSupply, lowerAssetSupplyHeight, readAssetSupply, undoAssetSupply,
 } from '../../srv/blockchain/asset-supply';
+import { computeUtxoSetLovelace } from '../../srv/blockchain/ledger-state';
 
 const { SELECT, INSERT, DELETE, UPSERT } = cds.ql;
 const HISTORY = 'odatano.cardano.AssetHistory';
 const SUPPLY = 'odatano.cardano.AssetSupply';
 const STATE = 'odatano.cardano.CardanoSyncState';
+const ADDRESSES = 'odatano.cardano.LedgerAddresses';
 const A = `${'a'.repeat(56)}746f6b656e`;
 const B = `${'b'.repeat(56)}74`;
 const hash = (n: number) => n.toString(16).padStart(64, '0');
@@ -39,7 +41,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
-  for (const e of [HISTORY, SUPPLY, STATE]) await cds.run(DELETE.from(e));
+  for (const e of [HISTORY, SUPPLY, STATE, ADDRESSES]) await cds.run(DELETE.from(e));
   await cds.run(INSERT.into(STATE).entries({ ID: 'SINGLETON', network: 'preview', lastSlot: 0, lastHeight: 0 }));
 });
 
@@ -127,5 +129,25 @@ describe('rollback', () => {
     expect(await assetSupplyHeight(db())).toBe(10);
     await lowerAssetSupplyHeight(db(), null);
     expect(await assetSupplyHeight(db())).toBeNull();
+  });
+});
+
+describe('computeUtxoSetLovelace', () => {
+  const total = async () => String((await cds.run(SELECT.one.from(STATE).columns('utxoSetLovelace')) as { utxoSetLovelace: unknown }).utxoSetLovelace);
+
+  it('sums LedgerAddresses in SQL and replaces a drifted total', async () => {
+    await cds.run(INSERT.into(ADDRESSES).entries([
+      { address: 'addr_test1a', totalLovelace: '5000000', utxoCount: 1 },
+      { address: 'addr_test1b', totalLovelace: '700', utxoCount: 1 },
+    ]));
+    expect(await computeUtxoSetLovelace(db())).toBe('5000700');
+    expect(await total()).toBe('5000700');
+
+    await cds.run(cds.ql.UPDATE.entity(STATE).set({ utxoSetLovelace: '5000699' }).where({ ID: 'SINGLETON' }));
+    expect(await computeUtxoSetLovelace(db())).toBe('5000700');
+  });
+
+  it('writes 0 for an empty set', async () => {
+    expect(await computeUtxoSetLovelace(db())).toBe('0');
   });
 });

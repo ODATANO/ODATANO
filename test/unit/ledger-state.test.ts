@@ -118,7 +118,7 @@ vi.mock('#cds-models/odatano/cardano', () => ({
   CardanoSyncState: 'CardanoSyncState',
 }));
 
-import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, computeUtxoSetLovelace, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
+import { applyBlockToLedger, undoLedgerForTransactions, recountLedgerAddresses, buildLedgerUtxoRows, backfillPaymentCredentials, readLedgerOutputs, ledgerRowAmount } from '../../srv/blockchain/ledger-state';
 import type { BlockData, Transaction } from '../../srv/utils/types';
 import { computeCip14Fingerprint } from '../../srv/utils/mappers';
 
@@ -367,16 +367,10 @@ describe('set total (CardanoSyncState.utxoSetLovelace)', () => {
     expect(state()!.utxoSetLovelace).toBe(openSum());
   });
 
-  it('stays null until computed, then is computed once from the address sums', async () => {
+  it('stays null until computed', async () => {
     seed(null);
     await applyBlockToLedger(fakeTx as never, block(100), [tx(T1, { outputs: [out(T1, 0, ADDR_A, '5000000'), out(T1, 1, ADDR_E, '700')] })]);
     expect(state()!.utxoSetLovelace).toBeNull();
-
-    expect(await computeUtxoSetLovelace(fakeTx as never)).toBe('5000700');
-    expect(state()!.utxoSetLovelace).toBe('5000700');
-    state()!.utxoSetLovelace = '1';
-    await computeUtxoSetLovelace(fakeTx as never);
-    expect(state()!.utxoSetLovelace).toBe('1'); // a computed total is never overwritten
   });
 
   it('a recount moves the total by the repaired difference', async () => {

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v2.0.0-rc.55] - stored sums without blocking the start
+
+No schema change.
+
+### Fixed
+
+- The crawler computes missing stored sums in the background before its first block. The server no
+  longer waits for them at start, so the API answers during the computation.
+- `CardanoSyncState.utxoSetLovelace` is summed in SQL. A sum read back through JavaScript lost
+  precision above 2^53 lovelace. The total is now recomputed at every crawler start, which also corrects
+  a drifted value.
+
 ## [v2.0.0-rc.54] - stored supply sums and a stricter read guard
 
 Additive schema change: new columns and the `AssetSupply` table.

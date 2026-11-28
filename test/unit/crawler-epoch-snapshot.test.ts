@@ -169,6 +169,29 @@ beforeEach(() => {
   CardanoCrawler.resetPoisonMemory();
 });
 
+describe('CardanoCrawler — sums computed at the first start', () => {
+  it('returns from start() before the sums are computed, and crawls once they are', async () => {
+    defaultDb();
+    const supply = await import('../../srv/blockchain/asset-supply');
+    vi.mocked(supply.assetSupplyHeight).mockResolvedValueOnce(null);
+    let finish: () => void = () => undefined;
+    vi.mocked(supply.computeAssetSupply).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const { indexer } = makeIndexer();
+    const { client, openChainSync } = chainSyncClient();
+    const crawler = makeCrawler(client, indexer);
+
+    await crawler.start(); // the served hook awaits this; it must not wait for the sums
+    await settle(() => false, 50);
+    expect(supply.computeAssetSupply).toHaveBeenCalledTimes(1);
+    expect(openChainSync).not.toHaveBeenCalled();
+
+    finish();
+    await settle(() => openChainSync.mock.calls.length > 0);
+    expect(openChainSync).toHaveBeenCalled();
+    await crawler.stop();
+  });
+});
+
 describe('CardanoCrawler — epoch snapshots', () => {
   it('snapshots once for the epoch and not again for its following blocks', async () => {
     defaultDb();
